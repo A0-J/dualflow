@@ -205,6 +205,22 @@ def apply_answer(p: Belief, ans: Answer) -> Belief:
     return normalize(kept)
 
 
+@dataclass(frozen=True)
+class Review:
+    """Slow 경로에서 Agent A 가 돌려주는 검토 결과.
+
+    approve  제시된 해석이 의도와 일치
+    correct  일치하지 않지만 A 가 교정해 줄 수 있음 (교정본 동봉)
+    unsure   A 자신도 특정하지 못하는 차원에서 어긋남 — 확정 불가
+    """
+    status: str
+    interpretation: Interpretation
+
+    @property
+    def approved(self) -> bool:
+        return self.status == "approve"
+
+
 class Principal:
     """Agent A 를 역질의 상대로 세운 오라클.
 
@@ -218,6 +234,7 @@ class Principal:
         self.refuses = set(refuses)
         self.transcript: list[tuple[str, str]] = []
 
+    # ---- Fast 경로: 차원 하나씩 되묻기 ---------------------------------
     def answer(self, q: Question) -> Answer:
         if q.dimension in self.refuses:
             self.transcript.append((q.text, "그건 상황에 맞게 판단해 주세요"))
@@ -225,3 +242,29 @@ class Principal:
         value = self.truth.value_of(q.dimension)
         self.transcript.append((q.text, f"{q.dimension} = {value}"))
         return Answer(q.dimension, value)
+
+    # ---- Slow 경로: 해석 전체를 제시하고 승인/교정받기 --------------------
+    def review(self, proposed: Interpretation) -> Review:
+        """B 가 정리한 해석 전체를 A 가 검토한다.
+
+        B 의 자기신고 불확실성(H)에 전혀 의존하지 않는 유일한 경로다.
+        후보 집합이 조작돼 H=0 이 되더라도 이 경로는 영향을 받지 않는다.
+        """
+        summary = f"제안: {proposed}"
+        if proposed == self.truth:
+            self.transcript.append((summary, "네, 그 해석이 맞습니다"))
+            return Review("approve", proposed)
+
+        diff = [d for d in DIMENSIONS
+                if proposed.value_of(d) != self.truth.value_of(d)]
+        fixable = [d for d in diff if d not in self.refuses]
+        patched = Interpretation(
+            **{**{d: getattr(self.truth if d in fixable else proposed, d)
+                  for d in DIMENSIONS},
+               "label": self.truth.label if set(diff) <= set(fixable) else proposed.label})
+
+        if patched == self.truth:
+            self.transcript.append((summary, f"아니요, 이렇게 해주세요: {self.truth}"))
+            return Review("correct", self.truth)
+        self.transcript.append((summary, "그 부분은 저도 확실하지 않습니다"))
+        return Review("unsure", proposed)

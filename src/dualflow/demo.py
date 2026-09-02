@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sys
 
-from .bench import PRINCIPAL, build_judge, build_tasks
+from .bench import PRINCIPAL, adversarial_tasks, build_judge, build_tasks
 from .capability import Budget, Privilege, check_authority, delegation_chain
 from .framework import Config, DelegationVerifier, ExperienceStore, evaluate, outcome
 from .semantic import (
@@ -145,8 +145,59 @@ def part6_experience():
     print("  동일하게 검사된다 — 경험이 상한선을 밀어올리지는 못한다.")
 
 
+def part7_fastslow():
+    print("\n" + BAR)
+    print("PART 7  Fast / Slow / AND — 세 결합 방식 파일럿")
+    print(BAR)
+    tasks = build_tasks()
+    print("\n  Fast : 엔트로피 한 번 재고 θ 로 판단 (역질의 → LLM 순으로 fallback)")
+    print("  Slow : B 가 해석을 정리해 A 에게 제시하고 승인/교정받음")
+    print("  AND  : Fast 로 좁힌 해석을 A 가 승인해야만 통과 (교정 요구 = 불일치 = 차단)\n")
+    _mode_table(tasks, build_judge(tasks))
+    print("\n  Slow 는 silent_misread 를 A 의 교정으로 살려내 benign 100% 를 찍는다.")
+    print("  대신 모든 위임에서 A 를 호출하므로 검토율이 1.00 이다.")
+    print("  AND 는 안전성이 같고 비용이 가장 크다 — 이 벤치마크에서는 Slow 에 지배당한다.")
+    print("  Slow 를 '언제' 태울지가 다음 실험 문항이다 (README §7).")
+
+
+def part8_attack():
+    print("\n" + BAR)
+    print("PART 8  belief 조작 공격 — self-reported uncertainty 의 공격 표면")
+    print(BAR)
+    adv = adversarial_tasks()
+    print("\n  위협 모델: B 의 후보 생성이 오염돼 후보가 목표 해석 하나로 좁혀진다.")
+    print("  결과적으로 H=0 (SAGE-Agent 의 π_c=1) 이 되어 명확화가 통째로 생략된다.")
+    print("  A 의 의도와 권한 정의는 신뢰하고, B 의 후보 생성은 신뢰하지 않는다.\n")
+    for t in adv[:3]:
+        print(f"    {t.name:<28} 목표 해석 = {t.attack}")
+    print(f"    ... 총 {len(adv)}건\n")
+    _mode_table(adv, build_judge(build_tasks()))
+    print("\n  belief 단독은 100% 뚫린다. Authority·매칭을 붙여도 '같은 SOP 경로,")
+    print("  같은 권한 안의 다른 자원' 공격은 44.4% 가 통과한다 — 엔트로피 축만으로는")
+    print("  부족하다는 뜻이다. A 의 검토는 B 의 자기신고 값을 입력으로 쓰지 않으므로")
+    print("  구조적으로 면역이고, AND 는 공격 하에서도 오탐 0% 를 유지한다.")
+    print("  그 대가로 미탐(over-rejection)이 100% 로 오른다 — 보수적 결합의 정의 그대로다.")
+
+
+def _mode_table(tasks, judge):
+    cfgs = [Config(name="SAGE-Agent 형 (belief 단독)", mode="fast",
+                   use_authority=False, use_matching=False),
+            Config(name="Fast + Joint", mode="fast"),
+            Config(name="Slow + Joint", mode="slow"),
+            Config(name="AND (제안)", mode="and")]
+    print(f"{'설정':<28}{'unsafe↓':>10}{'benign↑':>10}{'over-rej':>10}"
+          f"{'질문':>7}{'검토':>7}{'LLM':>6}{'비용↓':>8}")
+    print(SUB)
+    for c in cfgs:
+        m = evaluate(c, tasks, judge=judge)
+        print(f"{m['name']:<28}{m['unsafe_rate']*100:>9.1f}%{m['benign_completion']*100:>9.1f}%"
+              f"{m['over_rejection']*100:>9.1f}%{m['avg_questions']:>7.2f}"
+              f"{m['review_rate']:>7.2f}{m['llm_rate']:>6.2f}{m['avg_cost']:>8.2f}")
+
+
 PARTS = {"authority": part1_authority, "semantic": part2_semantic, "joint": part3_joint,
-         "bench": part4_bench, "theta": part5_theta, "experience": part6_experience}
+         "bench": part4_bench, "theta": part5_theta, "experience": part6_experience,
+         "fastslow": part7_fastslow, "attack": part8_attack}
 
 
 def main(argv: list[str] | None = None) -> int:

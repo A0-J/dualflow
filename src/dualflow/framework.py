@@ -44,7 +44,9 @@ class Config:
     tau: float = 0.999          # Sim_path 임계치
     experience_weight: float = 1.0
     cost_question: float = 1.0
+    cost_review: float = 3.0    # Slow 경로 1회 (역질의보다 무겁고 LLM보다 가볍다)
     cost_llm: float = 10.0
+    mode: str = "fast"          # fast | slow | and  ("and" 가 제안 구성)
     # ablation
     use_authority: bool = True
     use_semantic: bool = True
@@ -53,6 +55,19 @@ class Config:
     use_llm: bool = True
     always_llm: bool = False    # SAGE-Agent 식 상시 LLM 사용 프로파일
     name: str = "Full"
+
+
+@dataclass
+class SemanticOutcome:
+    """Semantic Flow 한 번의 결과. Fast/Slow/AND 가 공통으로 돌려준다."""
+    interpretation: Interpretation
+    confirmed: bool
+    route: str
+    h_initial: float = 0.0
+    h_final: float = 0.0
+    n_questions: int = 0
+    n_llm: int = 0
+    n_reviews: int = 0
 
 
 @dataclass
@@ -65,6 +80,7 @@ class Verdict:
     h_final: float = 0.0
     n_questions: int = 0
     n_llm: int = 0
+    n_reviews: int = 0
     authority_ok: bool = True
     semantic_ok: bool = True
     match: MatchResult | None = None
@@ -76,7 +92,9 @@ class Verdict:
         return self.decision == EXECUTE
 
     def cost(self, cfg: Config) -> float:
-        return self.n_questions * cfg.cost_question + self.n_llm * cfg.cost_llm
+        return (self.n_questions * cfg.cost_question
+                + self.n_reviews * cfg.cost_review
+                + self.n_llm * cfg.cost_llm)
 
 
 # --------------------------------------------------------------------------
@@ -93,6 +111,7 @@ class DelegationTask:
     sysvars: dict = field(default_factory=dict)
     refuses: tuple[str, ...] = ()                # A 도 특정 못 하는 차원
     experience_key: str = ""
+    attack: Interpretation | None = None         # belief 조작 공격의 목표 해석
 
     @property
     def key(self) -> str:
@@ -129,15 +148,14 @@ class DelegationVerifier:
         self.judge = judge or TopBeliefJudge()
         self.engine = engine or RuleEngine()
 
-    # ---- SEMANTIC FLOW ---------------------------------------------------
-    def _semantic(self, task: DelegationTask, log: list[str]):
+    # ---- SEMANTIC FLOW (Fast) — Experience → Entropy → Clarification → LLM
+    def _fast(self, task: DelegationTask, principal: Principal, log: list[str]):
         cfg = self.cfg
-        principal = Principal(task.truth, task.refuses)
 
         prior = self.experience.prior(task.key) if cfg.use_experience else {}
         belief = build_belief(task.candidates, prior, cfg.experience_weight)
         h0 = entropy(belief)
-        log.append(f"[semantic] |Ω|={len(belief)}  H={h0:.3f} bits "
+        log.append(f"[fast] |Ω|={len(belief)}  H={h0:.3f} bits "
                    f"(정규화 {normalized_entropy(belief):.2f})")
 
         # 1) Experience Score 게이트 — 충분하면 자율 판단
@@ -146,17 +164,17 @@ class DelegationVerifier:
             if s >= cfg.sigma:
                 best = self.experience.best(task.key)
                 if best is not None:
-                    log.append(f"[semantic] Experience Score={s:.2f} ≥ σ={cfg.sigma} "
+                    log.append(f"[fast] Experience Score={s:.2f} ≥ σ={cfg.sigma} "
                                f"→ 자율 판단: {best}")
-                    return best, "experience", h0, 0.0, 0, 0, principal
+                    return SemanticOutcome(best, True, "experience", h0, 0.0)
             elif s > 0:
-                log.append(f"[semantic] Experience Score={s:.2f} < σ={cfg.sigma} → 엔트로피 경로")
+                log.append(f"[fast] Experience Score={s:.2f} < σ={cfg.sigma} → 엔트로피 경로")
 
         # SAGE-Agent 식 프로파일: 게이팅 없이 항상 LLM
         if cfg.always_llm:
             interp = self.judge.judge(task.spec, belief, principal.transcript)
-            log.append(f"[semantic] (always-LLM) → {interp}")
-            return interp, "llm", h0, entropy(belief), 0, 1, principal
+            log.append(f"[fast] (always-LLM) → {interp}")
+            return SemanticOutcome(interp, True, "llm", h0, entropy(belief), n_llm=1)
 
         # 2) Entropy 게이트 + 3) Clarification 루프
         asked: Counter[str] = Counter()
@@ -167,31 +185,83 @@ class DelegationVerifier:
                 break
             q, scored = select_question(belief, asked, cfg.lam)
             for cand, ig, sc in scored[:3]:
-                log.append(f"           IG={ig:+.3f} score={sc:+.3f} | {cand.dimension}")
+                log.append(f"         IG={ig:+.3f} score={sc:+.3f} | {cand.dimension}")
             if q is None:
-                log.append("[semantic] 정보이득이 남은 질문이 없음 → 역질의 중단")
+                log.append("[fast] 정보이득이 남은 질문이 없음 → 역질의 중단")
                 break
             n_q += 1
             asked[q.dimension] += 1
             ans = principal.answer(q)
             belief = apply_answer(belief, ans)
             h = entropy(belief)
-            log.append(f"[semantic] 역질의 {n_q}회차 ({q.dimension}) → "
+            log.append(f"[fast] 역질의 {n_q}회차 ({q.dimension}) → "
                        f"{'무응답' if ans.value is None else ans.value}, H={h:.3f}")
 
         if h <= cfg.theta:
             interp = top(belief)
             route = "clarify" if n_q else "rule"
-            log.append(f"[semantic] H={h:.3f} ≤ θ={cfg.theta} → 확정: {interp}  (LLM 미호출)")
-            return interp, route, h0, h, n_q, 0, principal
+            log.append(f"[fast] H={h:.3f} ≤ θ={cfg.theta} → 확정: {interp}  (LLM 미호출)")
+            return SemanticOutcome(interp, True, route, h0, h, n_q)
 
         # 4) LLM fallback
         if not cfg.use_llm:
-            log.append(f"[semantic] H={h:.3f} > θ 이고 LLM 비활성 → 의미 판단 실패")
-            return top(belief), "unresolved", h0, h, n_q, 0, principal
+            log.append(f"[fast] H={h:.3f} > θ 이고 LLM 비활성 → 의미 판단 실패")
+            return SemanticOutcome(top(belief), False, "unresolved", h0, h, n_q)
         interp = self.judge.judge(task.spec, belief, principal.transcript)
-        log.append(f"[semantic] k={cfg.k} 소진, H={h:.3f} > θ → LLM 호출 → {interp}")
-        return interp, "llm", h0, h, n_q, 1, principal
+        log.append(f"[fast] k={cfg.k} 소진, H={h:.3f} > θ → LLM 호출 → {interp}")
+        return SemanticOutcome(interp, True, "llm", h0, h, n_q, n_llm=1)
+
+    # ---- SEMANTIC FLOW (Slow) — 해석 전체를 A 에게 제시하고 승인받기 ------
+    def _slow(self, task: DelegationTask, principal: Principal, log: list[str],
+              proposed: Interpretation | None = None, strict: bool = False):
+        """B 가 정리한 해석을 A 가 검토한다.
+
+        strict=True (AND 결합용) 이면 A 의 교정은 '불일치' 로 처리해 확정하지 않는다.
+        오탐을 0 으로 유지하는 대신 미탐을 감내하는 보수적 결합이다.
+        """
+        cfg = self.cfg
+        prior = self.experience.prior(task.key) if cfg.use_experience else {}
+        belief = build_belief(task.candidates, prior, cfg.experience_weight)
+        h0 = entropy(belief)
+        if proposed is None:
+            proposed = top(belief)
+        log.append(f"[slow] A 에게 해석 제시: {proposed}")
+
+        review = principal.review(proposed)
+        if review.approved:
+            log.append("[slow] A 승인")
+            return SemanticOutcome(proposed, True, "slow:approve", h0, h0, n_reviews=1)
+        if review.status == "correct":
+            if strict:
+                log.append(f"[slow] A 교정 요구({review.interpretation}) → AND 결합에서는 불일치 처리")
+                return SemanticOutcome(proposed, False, "slow:correct", h0, h0, n_reviews=1)
+            log.append(f"[slow] A 교정: {review.interpretation}")
+            return SemanticOutcome(review.interpretation, True, "slow:correct",
+                                   h0, h0, n_reviews=1)
+        log.append("[slow] A 도 확정하지 못함 → 의미 판단 실패")
+        return SemanticOutcome(proposed, False, "slow:unsure", h0, h0, n_reviews=1)
+
+    def _semantic(self, task: DelegationTask, log: list[str]):
+        cfg = self.cfg
+        principal = Principal(task.truth, task.refuses)
+
+        if cfg.mode == "fast":
+            return self._fast(task, principal, log), principal
+        if cfg.mode == "slow":
+            return self._slow(task, principal, log), principal
+
+        # AND 결합 — Fast 로 해석을 좁힌 뒤 그 결과를 A 에게 확인받는다.
+        fast = self._fast(task, principal, log)
+        slow = self._slow(task, principal, log, proposed=fast.interpretation, strict=True)
+        agreed = fast.confirmed and slow.confirmed
+        log.append(f"[and] Fast={'확정' if fast.confirmed else '미확정'} · "
+                   f"Slow={'승인' if slow.confirmed else '불일치'} → "
+                   f"{'통과' if agreed else '차단'}")
+        return SemanticOutcome(
+            fast.interpretation, agreed,
+            f"and({fast.route}+{slow.route.split(':')[-1]})",
+            fast.h_initial, fast.h_final,
+            fast.n_questions, fast.n_llm, slow.n_reviews), principal
 
     # ---- 전체 파이프라인 --------------------------------------------------
     def run(self, task: DelegationTask) -> Verdict:
@@ -205,8 +275,9 @@ class DelegationVerifier:
             log.append(f"[authority] hop{i} 유효 예산 = {b}")
 
         # SEMANTIC FLOW
-        interp, route, h0, h1, n_q, n_llm, principal = self._semantic(task, log)
-        semantic_ok = route != "unresolved"
+        sem, principal = self._semantic(task, log)
+        interp, route = sem.interpretation, sem.route
+        semantic_ok = sem.confirmed
 
         # JOINT VERIFICATION — E = Authority ∩ Semantic
         auth = check_authority(effective, interp.privilege())
@@ -224,7 +295,7 @@ class DelegationVerifier:
         if not authority_ok:
             decision, reason = REJECT, f"권한 위반 — {auth.reason}"
         elif not semantic_gate:
-            decision, reason = REJECT, "의미 확정 실패 — 해석이 수렴하지 않음"
+            decision, reason = REJECT, f"의미 확정 실패 — {route}"
         elif not matching_ok:
             decision, reason = REJECT, f"의도 불일치 — {m.reason}"
         else:
@@ -234,7 +305,8 @@ class DelegationVerifier:
         if cfg.use_experience:
             self.experience.record(task.key, interp, decision == EXECUTE)
 
-        return Verdict(decision, reason, route, interp, h0, h1, n_q, n_llm,
+        return Verdict(decision, reason, route, interp, sem.h_initial, sem.h_final,
+                       sem.n_questions, sem.n_llm, sem.n_reviews,
                        auth.allowed, semantic_ok, m, effective, log)
 
 
@@ -278,6 +350,7 @@ def evaluate(cfg: Config, tasks, judge=None, fresh_experience: bool = True) -> d
         "over_rejection": counts["over-rej"] / n_exec_ideal,
         "llm_rate": sum(r.n_llm for _, r, _ in rows) / n,
         "avg_questions": sum(r.n_questions for _, r, _ in rows) / n,
+        "review_rate": sum(r.n_reviews for _, r, _ in rows) / n,
         "avg_cost": cost / n,
         "counts": counts,
         "rows": rows,
