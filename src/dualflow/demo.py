@@ -12,8 +12,10 @@ import sys
 from .bench import PRINCIPAL, adversarial_tasks, build_judge, build_tasks
 from .capability import Budget, Privilege, check_authority, delegation_chain
 from .framework import Config, DelegationVerifier, ExperienceStore, evaluate, outcome
+from .sage_baseline import SageAgentBaseline
 from .semantic import (
-    Interpretation as I, build_belief, entropy, information_gain, candidate_questions,
+    Interpretation as I, Principal, build_belief, entropy, information_gain,
+    candidate_questions,
 )
 
 BAR = "=" * 78
@@ -171,8 +173,19 @@ def part8_attack():
     for t in adv[:3]:
         print(f"    {t.name:<28} 목표 해석 = {t.attack}")
     print(f"    ... 총 {len(adv)}건\n")
+
+    sage = SageAgentBaseline()
+    routes = [sage.run(t.candidates, Principal(t.truth, t.refuses)) for t in adv]
+    n_tau = sum(1 for r in routes if r.route == "sage:tau_exec")
+    n_evpi = sum(1 for r in routes if r.evpi_computed)
+    print(f"  SAGE-Agent 원 공식에서 무슨 일이 일어나는가:")
+    print(f"    · max π = 1.0 ≥ τ_exec 로 Step 1 에서 즉시 실행: {n_tau}/{len(adv)}건")
+    print(f"    · EVPI 가 한 번이라도 계산된 경우: {n_evpi}/{len(adv)}건")
+    print(f"    · 명확화 질문: {sum(r.n_questions for r in routes)}회\n")
     _mode_table(adv, build_judge(build_tasks()))
-    print("\n  belief 단독은 100% 뚫린다. Authority·매칭을 붙여도 '같은 SOP 경로,")
+    print("\n  SAGE-Agent 는 τ_exec 검사가 EVPI 보다 앞에 있어(§5.2 Step 1) 질문 생성도")
+    print("  EVPI 계산도 일어나지 않는다. 공격자는 확률을 조작할 필요 없이 빈칸만 채우면 된다.")
+    print("  Authority·매칭을 붙여도 '같은 SOP 경로,")
     print("  같은 권한 안의 다른 자원' 공격은 44.4% 가 통과한다 — 엔트로피 축만으로는")
     print("  부족하다는 뜻이다. A 의 검토는 B 의 자기신고 값을 입력으로 쓰지 않으므로")
     print("  구조적으로 면역이고, AND 는 공격 하에서도 오탐 0% 를 유지한다.")
@@ -180,8 +193,9 @@ def part8_attack():
 
 
 def _mode_table(tasks, judge):
-    cfgs = [Config(name="SAGE-Agent 형 (belief 단독)", mode="fast",
+    cfgs = [Config(name="SAGE-Agent (Eq.2+Def.4)", mode="sage",
                    use_authority=False, use_matching=False),
+            Config(name="SAGE + Joint", mode="sage"),
             Config(name="Fast + Joint", mode="fast"),
             Config(name="Slow + Joint", mode="slow"),
             Config(name="AND (제안)", mode="and")]

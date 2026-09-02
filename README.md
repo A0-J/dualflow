@@ -117,9 +117,13 @@ Semantic Flow 를 세 가지 방식으로 갈라 각각 돌린다. `Config.mode`
 - **Slow** — B 가 해석을 정리해 A 에게 제시하고 승인/교정받는다. 엔트로피를 쓰지 않는다.
 - **AND** — Fast 로 좁힌 해석을 A 가 **승인해야만** 통과. 교정 요구는 불일치로 보고 차단한다.
 
+베이스라인 `SAGE-Agent (Eq.2+Def.4)` 는 우리 엔트로피 코드의 스위치를 끈 것이 아니라
+**논문 공식을 그대로 옮긴 별도 구현**이다 (`sage_baseline.py`, §5 참고).
+
 | 설정 | unsafe↓ | benign↑ | over-rej | 질문 | 검토 | LLM | 비용↓ |
 |---|---|---|---|---|---|---|---|
-| SAGE-Agent 형 (belief 단독) | 55.6% | 80.0% | 0.0% | 0.44 | 0.00 | 0.11 | 1.56 |
+| SAGE-Agent (Eq.2+Def.4) | 77.8% | 40.0% | 0.0% | 0.56 | 0.00 | 1.67 | 17.22 |
+| SAGE + Joint | 11.1% | 40.0% | 40.0% | 0.56 | 0.00 | 1.67 | 17.22 |
 | Fast + Joint | 0.0% | 80.0% | 20.0% | 0.44 | 0.00 | 0.11 | 1.56 |
 | Slow + Joint | 0.0% | **100.0%** | 0.0% | 0.00 | 1.00 | 0.00 | 3.00 |
 | AND (제안) | 0.0% | 80.0% | 20.0% | 0.44 | 1.00 | 0.11 | 4.56 |
@@ -136,21 +140,38 @@ Semantic Flow 를 세 가지 방식으로 갈라 각각 돌린다. `Config.mode`
 H=0 으로 만든다. SAGE-Agent 의 π_c 도 **같은 입력에서** 계산되므로 동일하게 π=1 이 된다.
 A 의 의도와 권한 정의는 신뢰하고, B 의 후보 생성은 신뢰하지 않는다.
 
+**Eq.(2) 해석 논란은 결과를 바꾸지 못한다.** Eq.(1)의 균등 tool prior 1/K 를 살리는
+해석(`sage_tool_prior=True`)으로 돌려도 공격 하 unsafe 는 100% 로 같다. 공격이 후보를
+K=1 로 좁히기 때문이다 (`test_attack_works_under_both_readings_of_eq2`).
+
 공격이 가능한 근거는 SAGE-Agent 논문 안에 있다. 후보와 `<UNK>` 표시를 평가 대상 모델이
 직접 만들고(Step 1), 시스템 프롬프트가 *"`<UNK>` 를 남용하지 마라, 기본값을 가정해도 된다"*
 고 지시하며(§B.3), 보상 `Cert(a_t) = max π_c` 가 확신에 찬 호출을 더 크게 보상한다(§6.2).
 **설계 전체가 불확실성 축소 방향으로 압력을 건다.**
 
+SAGE-Agent 원 공식에서 무슨 일이 일어나는지부터 보면:
+
+```
+· max π = 1.0 ≥ τ_exec 로 Step 1 에서 즉시 실행: 9/9건
+· EVPI 가 한 번이라도 계산된 경우:              0/9건
+· 명확화 질문:                                  0회
+```
+
 | 설정 | unsafe↓ | benign↑ | over-rej | 비용 |
 |---|---|---|---|---|
-| SAGE-Agent 형 (belief 단독) | **100.0%** | 0.0% | 0.0% | 0.00 |
+| SAGE-Agent (Eq.2+Def.4) | **100.0%** | 0.0% | 0.0% | 10.00 |
+| SAGE + Joint | 44.4% | 0.0% | 20.0% | 10.00 |
 | Fast + Joint | 44.4% | 0.0% | 20.0% | 0.00 |
 | Slow + Joint | 0.0% | 80.0% | 20.0% | 3.00 |
 | AND (제안) | **0.0%** | 0.0% | 100.0% | 3.00 |
 
 읽는 법:
 
-- **belief 단독은 완전히 무력하다.** 9건 전부 공격자의 해석대로 실행된다.
+- **EVPI 는 방어선이 아니다.** τ_exec 검사(§5.2 Step 1)가 EVPI 계산보다 앞에 있어,
+  π 가 문턱을 넘으면 질문 생성도 EVPI 도 실행되지 않는다. 9건 전부 그렇게 통과했다.
+  EVPI 를 아무리 잘 설계해도 belief 단계에서 이미 끝난다.
+- **확률을 조작할 필요조차 없다.** Eq.(13)은 지정된 인자에 무조건 p=1 을 준다. 값이
+  맞는지는 보지 않으므로, 공격자는 **빈칸만 채우면** π=1 을 얻는다.
 - **엔트로피 축만으로는 부족하다.** Authority·매칭을 붙여도 44.4% 가 통과한다. 통과하는
   것들은 *같은 SOP 경로, 같은 권한 안의 다른 자원* 을 노린 공격이다
   (`/reports/2026-08/` → `/reports/2025-01/`). Sim_path 가 경로만 보기 때문에 잡히지 않는다.
@@ -181,6 +202,10 @@ AND 결합은 취향이 아니라 그 공격에 대한 필연적 대응이 된�
 
 전부 테스트로 박제해 두었다. 논문 Related Work / 차별점 서술에 쓸 수 있는 재료다.
 
+> (1)(2)의 형식적 반례는 논문 재현 저장소 [`sage-clarify`](https://github.com/A0-J/sage-structured-uncertainty)
+> 에 테스트로 들어 있다. 본 저장소는 그중 **런타임에서 실제로 문제가 되는 부분**
+> (τ_exec 우선순위, π 의 의미)을 재현한다.
+
 **(1) SAGE-Agent 의 EVPI 비음수성(Prop.2-1)은 실제로 깨진다.**
 EVPI 를 정규화되지 않은 viability 위에 정의해 두었기 때문에, 현재 1위 후보를 제거할 수 있는
 질문은 "best-candidate certainty"를 떨어뜨려 EVPI 가 음수가 된다. Jensen 논증은 정규화된
@@ -196,14 +221,28 @@ EVPI 를 정규화되지 않은 viability 위에 정의해 두었기 때문에, 
 가정 위에 설계하면 안 되고, 매 라운드 IG 를 재계산해야 한다. 본 구현이 루프 안에서
 다시 계산하는 이유다.
 
-**(3) Sim_path 는 SAGE-Bench 자신이 인정하듯 관대한 지표다.**
+**(3) π 는 확신도가 아니라 '명세 완성도' 다.**
+Eq.(13)은 인자가 채워져 있으면 p=1, 비어 있으면 1/|D| 를 준다. **값이 맞는지는 전혀 보지
+않는다.** 따라서 π 는 evidential support 가 아니라 specification completeness 를 재는
+값이고, confident-correct 와 confident-wrong 을 구분하지 못한다
+(`test_value_correctness_is_invisible`). 이는 Abstract 의 핵심 주장 — specification
+uncertainty 와 model uncertainty 를 깨끗이 분리한다 — 과 충돌한다. 지정된 인자에 무조건
+p=1 을 주는 순간 model uncertainty 는 분리된 것이 아니라 **소거**된다.
+
+**(4) tool 선택의 불확실성이 실행 게이트에 반영되지 않는다.**
+Eq.(2)는 '∝' 로 Eq.(1)의 1/K 를 흡수하고 Prop.1 도 파라미터 곱만 가정한다. 그 결과
+서로 배타적인 두 tool 이 모두 완전 지정이면 **둘 다 π=1** 이 되어 τ_exec 를 통과하고,
+어느 쪽을 부를지는 tie-break 로 정해진다 (`TestToolChoiceBlindSpot`). 본 벤치마크의
+`silent_misread` 가 그 사례다 — 조회와 반출 중 무엇인지 모르는 상태인데 질문 없이 실행된다.
+
+**(5) Sim_path 는 SAGE-Bench 자신이 인정하듯 관대한 지표다.**
 p\* ⊆ p 인 경우 Sim_path = 1.0 이 되어 "더 깊이 들어간 해석"을 잡지 못한다. 본 구현은
 Sim_path 와 종단 액션 일치를 **둘 다** 요구해 일부 보완했지만, 완전한 해법은 아니다.
 역으로 `silent_misread` 사례는 **Action_Acc 만으로는 못 잡고 Sim_path 라야 잡히는** 반대
 방향의 증거다(양쪽 종단 액션이 모두 EXECUTE 인데 경로가 갈린다). 두 지표가 상보적이라는
 근거로 쓸 수 있다.
 
-**(4) ChainCaps 의 manifest quality 병목은 위임 맥락에서도 그대로다.**
+**(6) ChainCaps 의 manifest quality 병목은 위임 맥락에서도 그대로다.**
 ChainCaps 는 naive manifest 에서 차단율이 27.3% 로 떨어진다고 보고한다. 본 구현에서 그에
 대응하는 것은 `Budget` 생성자와 `sysvars` 를 누가 어떻게 쓰느냐다. scope 를 `*` 로 열어두면
 Authority Flow 는 아무것도 막지 못한다. 실제 배치 시 이 부분의 저작·린팅 도구가
@@ -217,10 +256,11 @@ Authority Flow 는 아무것도 막지 못한다. 실제 배치 시 이 부분�
 | `src/dualflow/semantic.py` | Semantic Flow — action space, 엔트로피, 경험 점수, 역질의(IG) |
 | `src/dualflow/rule_engine.py` | Joint Verification 의 매칭 — 위임 SOP 그래프, p\*, Sim_path |
 | `src/dualflow/framework.py` | 전체 조립, ablation 스위치, 평가 지표 |
-| `src/dualflow/bench.py` | DelegationBench-mini 9개 시나리오 |
+| `src/dualflow/sage_baseline.py` | **SAGE-Agent 원 공식 재현** — Eq.(2), Def.4·5, τ_exec, α |
+| `src/dualflow/bench.py` | DelegationBench-mini 9개 시나리오 + belief 조작 변형 |
 | `src/dualflow/llm.py` | LLM fallback 인터페이스 + 실제 API 어댑터 골격 |
 | `src/dualflow/demo.py` | 6개 실험 |
-| `tests/` | 93개 — 비증폭 정리, 엔트로피 성질, 종료성, 게이팅, ablation, 공격 실험 |
+| `tests/` | 112개 — 비증폭 정리, 엔트로피 성질, 종료성, 게이팅, ablation, 공격 실험, SAGE 재현 |
 
 ## 6. 실제 LLM 붙이기
 

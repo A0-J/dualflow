@@ -25,6 +25,7 @@ from collections import Counter
 from .capability import Budget, Privilege, check_authority, delegation_chain
 from .llm import LLMJudge, TopBeliefJudge
 from .rule_engine import Fields, MatchResult, RuleEngine, classify, match_intent
+from .sage_baseline import SageAgentBaseline
 from .semantic import (
     Belief, ExperienceStore, Interpretation, Principal, apply_answer, build_belief,
     entropy, normalized_entropy, select_question, top,
@@ -43,10 +44,12 @@ class Config:
     lam: float = 0.1            # 중복 질문 패널티
     tau: float = 0.999          # Sim_path 임계치
     experience_weight: float = 1.0
+    epsilon_sage: float = 1e-4  # SAGE 베이스라인의 ε (논문 §7 값)
+    sage_tool_prior: bool = False  # Eq.(1)의 균등 tool prior 1/K 를 살릴지
     cost_question: float = 1.0
     cost_review: float = 3.0    # Slow 경로 1회 (역질의보다 무겁고 LLM보다 가볍다)
     cost_llm: float = 10.0
-    mode: str = "fast"          # fast | slow | and  ("and" 가 제안 구성)
+    mode: str = "fast"          # fast | slow | and | sage  ("and" 가 제안 구성)
     # ablation
     use_authority: bool = True
     use_semantic: bool = True
@@ -244,6 +247,16 @@ class DelegationVerifier:
     def _semantic(self, task: DelegationTask, log: list[str]):
         cfg = self.cfg
         principal = Principal(task.truth, task.refuses)
+
+        if cfg.mode == "sage":
+            # SAGE-Agent 원 공식 재현 (Eq.2 + Def.4 + τ_exec)
+            tr = SageAgentBaseline(epsilon=cfg.epsilon_sage,
+                                   use_tool_prior=cfg.sage_tool_prior
+                                   ).run(task.candidates, principal)
+            log.extend(tr.log)
+            return SemanticOutcome(tr.interpretation, True, tr.route,
+                                   tr.max_pi, tr.max_pi, tr.n_questions,
+                                   tr.n_llm), principal
 
         if cfg.mode == "fast":
             return self._fast(task, principal, log), principal

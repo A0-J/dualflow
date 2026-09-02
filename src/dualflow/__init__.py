@@ -17,6 +17,10 @@ from .rule_engine import (
     ESCALATE, EXECUTE as SOP_EXECUTE, Fields, MatchResult, REJECT as SOP_REJECT,
     RuleEngine, classify, match_intent, sim_path,
 )
+from .sage_baseline import (
+    SageAgentBaseline, SageCandidate, build_candidates as sage_build_candidates,
+    evpi as sage_evpi, pi as sage_pi,
+)
 from .llm import AnthropicJudge, LLMJudge, ScriptedJudge, TopBeliefJudge
 from .framework import (
     Config, DelegationTask, DelegationVerifier, EXECUTE, REJECT, Verdict,

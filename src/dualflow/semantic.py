@@ -38,7 +38,7 @@ class Interpretation:
     resource: str
     scope: str = "*"
     condition: frozenset[str] = frozenset()
-    label: str = ""
+    label: str = field(default="", compare=False)   # 표시용 — 동일성 비교에서 제외
 
     def __post_init__(self):
         if not isinstance(self.condition, frozenset):
