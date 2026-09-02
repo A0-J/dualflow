@@ -189,8 +189,56 @@ def fig_careless(outdir, dpi, trials=10, warmup=5, **_):
     plt.close(fig)
 
 
+def fig_consistency_sweep(outdir, dpi, trials=10, warmup=5, sweep_c=1.0, **_):
+    """Fig.6 — consistency_sigma 스윕. 0.6 이 우연히 잘 맞은 값인지 확인한다.
+
+    fig5 는 consistency_sigma=0.6 고정값 하나로 "AND + consistency 가 AND 보다
+    낮다"고 주장한다. 그 값 하나가 우연이 아니라면, 문턱을 0.4~0.9 로 바꿔도
+    AND + consistency 가 (consistency 없는) AND 아래에 계속 있어야 한다.
+    carelessness 는 fig5 에서 격차가 가장 컸던 최악값(기본 1.0)으로 고정한다.
+    """
+    normal, adv = build_tasks(), adversarial_tasks()
+    thresholds = [0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+    judge = build_judge()
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.4), sharey=True)
+    for ax, sigma, title in ((axes[0], 0.8, "σ = 0.80  (experience gate active)"),
+                             (axes[1], 0.95, "σ = 0.95  (gate closed)")):
+        and_only = warmup_then_attack(
+            Config(mode="and", carelessness=sweep_c, sigma=sigma),
+            normal, adv, judge=judge, warmup=warmup, trials=trials)
+        ys, es = [], []
+        for thr in thresholds:
+            cfg = Config(mode="and", carelessness=sweep_c, sigma=sigma,
+                         use_consistency_check=True, consistency_sigma=thr)
+            m = warmup_then_attack(cfg, normal, adv, judge=judge,
+                                   warmup=warmup, trials=trials)
+            ys.append(m["unsafe_rate"] * 100)
+            es.append(m["stderr"] * 100)
+        lo = [y - e for y, e in zip(ys, es)]
+        hi = [y + e for y, e in zip(ys, es)]
+        ax.fill_between(thresholds, lo, hi, color=PALETTE["cons"], alpha=0.15,
+                        linewidth=0)
+        ax.plot(thresholds, ys, marker="^", color=PALETTE["cons"],
+               label="AND + consistency")
+        ax.axhline(and_only["unsafe_rate"] * 100, ls="--", color=PALETTE["and"],
+                  label="AND (no consistency)")
+        ax.axvline(0.6, ls=":", color="grey", linewidth=1)
+        ax.set_xlabel("consistency_sigma threshold")
+        ax.set_title(title, fontsize=11)
+        ax.grid(alpha=0.25)
+        ax.legend(fontsize=8, loc="upper left")
+    axes[0].set_ylabel("Unsafe execution rate (%)")
+    fig.suptitle(f"consistency_sigma sweep at carelessness={sweep_c:.2f}  "
+                f"(mean ± s.e., {trials} trials)", fontsize=12)
+    fig.tight_layout()
+    fig.savefig(outdir / "fig6_consistency_sweep.png", dpi=dpi)
+    plt.close(fig)
+
+
 FIGURES = {"pilot": fig_pilot, "attack": fig_attack, "theta": fig_theta,
-           "experience": fig_experience, "careless": fig_careless}
+           "experience": fig_experience, "careless": fig_careless,
+           "consistency": fig_consistency_sweep}
 
 
 def main(argv=None) -> int:
