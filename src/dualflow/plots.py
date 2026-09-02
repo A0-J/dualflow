@@ -51,9 +51,9 @@ def _pilot_panel(ax, tasks, title):
     ax.set_xticks(list(x))
     ax.set_xticklabels([c.name for c in _configs()], fontsize=8)
     ax.set_ylabel("%")
-    ax.set_ylim(0, 115)
+    ax.set_ylim(0, 124)
     ax.set_title(title, fontsize=11)
-    ax.legend(fontsize=8, loc="upper right")
+    ax.legend(fontsize=8, loc="upper left", framealpha=0.9)
     ax.grid(axis="y", alpha=0.25)
     return rows
 
@@ -127,13 +127,14 @@ def fig_experience(outdir, dpi):
 
     ax2 = ax.twinx()
     ax2.plot(eps, sc, "^--", color=PALETTE["benign"], label="Experience score")
-    ax2.axhline(0.8, ls=":", color="grey")
+    ax2.axhline(0.8, ls=":", color="grey", label="_nolegend_")
     ax2.text(1.1, 0.82, "σ = 0.8", fontsize=8, color="grey")
     ax2.set_ylabel("experience score")
     ax2.set_ylim(0, 1.05)
 
-    lines = ax.get_lines() + ax2.get_lines()
-    ax.legend(lines, [l.get_label() for l in lines], fontsize=8, loc="center right")
+    lines = [l for l in ax.get_lines() + ax2.get_lines()
+             if not l.get_label().startswith("_")]
+    ax.legend(lines, [l.get_label() for l in lines], fontsize=8, loc="lower left")
     ax.set_title("Accumulated experience removes the clarification loop", fontsize=11)
     fig.tight_layout()
     fig.savefig(outdir / "fig4_experience.png", dpi=dpi)
