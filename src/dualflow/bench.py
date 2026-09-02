@@ -195,6 +195,7 @@ def adversarial_tasks(tasks=None) -> list[DelegationTask]:
         if t.attack is None:
             continue
         out.append(dataclasses.replace(
-            t, name=t.name + "@attack", candidates=[(t.attack, 1.0)],
-            experience_key=t.key + "@attack"))
+            t, name=t.name + "@attack", candidates=[(t.attack, 1.0)]))
+            # experience_key 는 그대로 둔다 — 정상 운영으로 경험이 쌓인 뒤
+            # 같은 유형의 위임에 공격이 들어오는 상황을 재현하기 위해서다.
     return out

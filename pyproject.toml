@@ -21,10 +21,12 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0"]
+dev = ["pytest>=7.0", "matplotlib>=3.6"]
+plot = ["matplotlib>=3.6"]
 
 [project.scripts]
 dualflow-demo = "dualflow.demo:main"
+dualflow-plots = "dualflow.plots:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/dualflow"]

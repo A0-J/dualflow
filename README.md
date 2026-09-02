@@ -9,8 +9,9 @@ LLM 호출 없이 결정론적으로 돌아가며, 실제 모델은 인터페이
 ```bash
 pip install -e ".[dev]"
 
-dualflow-demo                    # 8개 실험 전체
-python -m dualflow.demo fastslow attack   # Fast/Slow/AND 파일럿과 공격 실험
+dualflow-demo                    # 9개 실험 전체 (텍스트)
+python -m dualflow.demo fastslow attack careless   # 필요한 것만
+dualflow-plots                   # figures/ 에 그림 5장 저장
 python -m dualflow.demo joint    # 특정 파트만
 pytest -q                        # 80개 검증 테스트
 ```
@@ -184,6 +185,35 @@ SAGE-Agent 원 공식에서 무슨 일이 일어나는지부터 보면:
 **"자기신고 불확실성 단일 축에 실행 결정을 거는 구조는 뚫린다"** 이고,
 AND 결합은 취향이 아니라 그 공격에 대한 필연적 대응이 된다.
 
+### 실험 ③ — A 의 검토가 완벽하지 않을 때 (`fig5`)
+
+위 두 표는 A 가 **항상 옳게 교정하는 완벽한 검토자**라고 가정한다. 그 가정에서는
+Slow 단독이 AND 를 지배한다(안전성 동일, benign 100%, 비용 저렴). 현실의 검토자는
+그렇지 않으므로 `Config.carelessness` — A 가 제안을 대충 읽고 그냥 승인해 버릴 확률 —
+를 넣고 스윕한다.
+
+시나리오는 **정상 운영 5회로 경험을 쌓은 뒤 같은 유형에 belief 조작 공격 1회** 다.
+지표는 공격 시점의 unsafe 실행률이고, 확률적이므로 10회 평균이다.
+
+| carelessness | Slow only | AND | AND + 일관성검사 |
+|---|---|---|---|
+| 0.00 | 0.0% | 0.0% | 0.0% |
+| 0.25 | 15.6% | 8.9% | 8.9% |
+| 0.50 | 28.9% | 15.6% | 15.6% |
+| 0.75 | 35.6% | 22.2% | 22.2% |
+| 1.00 | 44.4% | **33.3%** | 33.3% |
+
+*(σ=0.80. 오른쪽 패널은 σ=0.95 로 경험 게이트를 닫은 경우 — 그때는 일관성 검사가
+있어야 44.4% → 33.3% 로 내려간다.)*
+
+**AND 가 존재해야 하는 이유가 여기서 처음으로 수치로 나온다.** c=0 에서는 세 방식이
+같지만, A 가 흔들리기 시작하면 갈라진다. 그리고 **갈라지게 만드는 것은 엔트로피가 아니라
+경험이다.** H 는 후보 집합만 오염시키면 0 으로 위조되지만, 누적 이력은 공격자가 손댈 수
+없다 (`test_experience_is_what_separates_them_not_entropy` — warmup=0 이면 이득이 사라진다).
+
+한계도 같이 보인다. 계속 거절돼 온 위임 유형은 성공 이력이 없어 경험이 쌓이지 않고,
+그런 유형에는 두 방식 모두 무력하다. 남은 33.3% 가 그것이다.
+
 ### Experience Score 누적 (`demo.py experience`)
 
 같은 유형의 위임을 반복하면:
@@ -259,8 +289,9 @@ Authority Flow 는 아무것도 막지 못한다. 실제 배치 시 이 부분�
 | `src/dualflow/sage_baseline.py` | **SAGE-Agent 원 공식 재현** — Eq.(2), Def.4·5, τ_exec, α |
 | `src/dualflow/bench.py` | DelegationBench-mini 9개 시나리오 + belief 조작 변형 |
 | `src/dualflow/llm.py` | LLM fallback 인터페이스 + 실제 API 어댑터 골격 |
-| `src/dualflow/demo.py` | 6개 실험 |
-| `tests/` | 112개 — 비증폭 정리, 엔트로피 성질, 종료성, 게이팅, ablation, 공격 실험, SAGE 재현 |
+| `src/dualflow/demo.py` | 9개 실험 (텍스트) |
+| `src/dualflow/plots.py` | 그림 5장 생성 (matplotlib) |
+| `tests/` | 117개 — 비증폭 정리, 엔트로피 성질, 종료성, 게이팅, ablation, 공격 실험, SAGE 재현 |
 
 ## 6. 실제 LLM 붙이기
 
@@ -277,6 +308,9 @@ LLM 을 붙일 때도 **자유 생성이 아니라 후보 중 택일**로 좁혀
 
 ## 7. 다음 단계 (미해결)
 
+0. **실험 ③ 의 후속.** carelessness 를 A 마다 다르게(에이전트별 신뢰도) 두거나,
+   검토 예산(하루 N건)을 제약으로 넣으면 "Slow 를 누구에게, 몇 건에 쓸 것인가" 가
+   최적화 문제가 된다. 지금 `warmup_then_attack` 이 그 실험의 골격이다.
 1. **Slow 를 언제 켤 것인가 — 가장 급한 문항.** 항상 켜면 A 의 검토율이 1.00 이 되어
    연구의 출발점(개입 최소화)과 충돌하고, 안 켜면 belief 조작에 44.4% 가 뚫린다.
    H 만으로는 위조 여부를 알 수 없다는 것이 실험의 결론이다. 유망한 신호 하나는

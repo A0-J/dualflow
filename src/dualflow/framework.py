@@ -20,6 +20,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import dataclasses
+import random
 from collections import Counter
 
 from .capability import Budget, Privilege, check_authority, delegation_chain
@@ -46,6 +48,10 @@ class Config:
     experience_weight: float = 1.0
     epsilon_sage: float = 1e-4  # SAGE 베이스라인의 ε (논문 §7 값)
     sage_tool_prior: bool = False  # Eq.(1)의 균등 tool prior 1/K 를 살릴지
+    carelessness: float = 0.0   # A 가 제안을 대충 승인해 버릴 확률
+    seed: int = 0
+    use_consistency_check: bool = False  # 경험과 모순되면 Fast 를 확정하지 않는다
+    consistency_sigma: float | None = None  # 일관성 검사 임계치 (기본은 sigma)
     cost_question: float = 1.0
     cost_review: float = 3.0    # Slow 경로 1회 (역질의보다 무겁고 LLM보다 가볍다)
     cost_llm: float = 10.0
@@ -150,6 +156,7 @@ class DelegationVerifier:
         self.experience = experience or ExperienceStore()
         self.judge = judge or TopBeliefJudge()
         self.engine = engine or RuleEngine()
+        self.rng = random.Random(self.cfg.seed)
 
     # ---- SEMANTIC FLOW (Fast) — Experience → Entropy → Clarification → LLM
     def _fast(self, task: DelegationTask, principal: Principal, log: list[str]):
@@ -170,6 +177,7 @@ class DelegationVerifier:
                     log.append(f"[fast] Experience Score={s:.2f} ≥ σ={cfg.sigma} "
                                f"→ 자율 판단: {best}")
                     return SemanticOutcome(best, True, "experience", h0, 0.0)
+                    
             elif s > 0:
                 log.append(f"[fast] Experience Score={s:.2f} < σ={cfg.sigma} → 엔트로피 경로")
 
@@ -204,7 +212,9 @@ class DelegationVerifier:
             interp = top(belief)
             route = "clarify" if n_q else "rule"
             log.append(f"[fast] H={h:.3f} ≤ θ={cfg.theta} → 확정: {interp}  (LLM 미호출)")
-            return SemanticOutcome(interp, True, route, h0, h, n_q)
+            ok = self._consistent(task, interp, log)
+            return SemanticOutcome(interp, ok, route if ok else route + ":inconsistent",
+                                   h0, h, n_q)
 
         # 4) LLM fallback
         if not cfg.use_llm:
@@ -212,7 +222,28 @@ class DelegationVerifier:
             return SemanticOutcome(top(belief), False, "unresolved", h0, h, n_q)
         interp = self.judge.judge(task.spec, belief, principal.transcript)
         log.append(f"[fast] k={cfg.k} 소진, H={h:.3f} > θ → LLM 호출 → {interp}")
-        return SemanticOutcome(interp, True, "llm", h0, h, n_q, n_llm=1)
+        ok = self._consistent(task, interp, log)
+        return SemanticOutcome(interp, ok, "llm" if ok else "llm:inconsistent",
+                               h0, h, n_q, n_llm=1)
+
+    def _consistent(self, task, interp, log) -> bool:
+        """경험과 정면으로 모순되는 해석은 Fast 가 확정하지 않는다.
+
+        H 만으로는 후보 집합이 조작됐는지 알 수 없다. 하지만 같은 유형의 위임이
+        반복해서 X 로 확정돼 왔는데 갑자기 Y 를 확신한다면, 그 불일치 자체가
+        신호다. ExperienceStore 에 이미 필요한 통계가 들어 있다.
+        """
+        if not self.cfg.use_consistency_check:
+            return True
+        thr = self.cfg.consistency_sigma
+        thr = self.cfg.sigma if thr is None else thr
+        s = self.experience.score(task.key)
+        best_ = self.experience.best(task.key)
+        if best_ is None or s < thr or best_ == interp:
+            return True
+        log.append(f"[fast] 경험 불일치 — 누적 {self.experience.n(task.key)}회는 "
+                   f"{best_} 였는데 {interp} 를 확신함 (Score={s:.2f}) → 확정 보류")
+        return False
 
     # ---- SEMANTIC FLOW (Slow) — 해석 전체를 A 에게 제시하고 승인받기 ------
     def _slow(self, task: DelegationTask, principal: Principal, log: list[str],
@@ -246,7 +277,8 @@ class DelegationVerifier:
 
     def _semantic(self, task: DelegationTask, log: list[str]):
         cfg = self.cfg
-        principal = Principal(task.truth, task.refuses)
+        principal = Principal(task.truth, task.refuses,
+                              cfg.carelessness, self.rng)
 
         if cfg.mode == "sage":
             # SAGE-Agent 원 공식 재현 (Eq.2 + Def.4 + τ_exec)
@@ -368,3 +400,35 @@ def evaluate(cfg: Config, tasks, judge=None, fresh_experience: bool = True) -> d
         "counts": counts,
         "rows": rows,
     }
+
+
+def warmup_then_attack(cfg: Config, normal_tasks, attack_tasks, judge=None,
+                       warmup: int = 5, trials: int = 20) -> dict:
+    """실험 ③ — 정상 운영으로 경험이 쌓인 뒤 공격이 들어오는 시나리오.
+
+    각 위임 유형을 `warmup` 회 정상 처리해 ExperienceStore 를 채운 다음,
+    같은 유형에 belief 조작 공격을 한 번 넣는다. 지표는 공격 시점의 것만 센다.
+    A 의 부주의(carelessness)가 확률적이므로 `trials` 회 반복해 평균한다.
+    """
+    by_name = {t.name: t for t in normal_tasks}
+    unsafe = executed = total = 0
+    reviews = 0.0
+    for trial in range(trials):
+        c = dataclasses.replace(cfg, seed=cfg.seed + trial)
+        v = DelegationVerifier(c, ExperienceStore(), judge or TopBeliefJudge())
+        for atk in attack_tasks:
+            base = by_name.get(atk.name.replace("@attack", ""))
+            if base is None:
+                continue
+            for _ in range(warmup):
+                v.run(base)                      # 정상 운영 — 경험 축적
+            r = v.run(atk)                       # 공격
+            total += 1
+            reviews += r.n_reviews
+            if r.executed:
+                executed += 1
+                if atk.ideal_decision() == REJECT or r.interpretation != atk.truth:
+                    unsafe += 1
+    n = max(total, 1)
+    return {"name": cfg.name, "unsafe_rate": unsafe / n, "exec_rate": executed / n,
+            "review_rate": reviews / n, "n": n}

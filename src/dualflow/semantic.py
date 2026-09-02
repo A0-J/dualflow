@@ -19,6 +19,7 @@ structured belief 를 가져오되, 불확실성 척도를 EVPI 가 아니라 Sh
 from __future__ import annotations
 
 import math
+import random
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Iterable, Sequence
@@ -229,9 +230,14 @@ class Principal:
       역질의를 반복해도 H 가 안 떨어지는 상황을 재현한다.
     """
 
-    def __init__(self, truth: Interpretation, refuses: Iterable[str] = ()):
+    def __init__(self, truth: Interpretation, refuses: Iterable[str] = (),
+                 carelessness: float = 0.0, rng=None):
         self.truth = truth
         self.refuses = set(refuses)
+        # A 가 제안을 제대로 안 읽고 그냥 승인해 버릴 확률. 현실의 검토자는
+        # 완벽하지 않으며, 이 값이 Slow 축의 신뢰도 상한선을 결정한다.
+        self.carelessness = carelessness
+        self.rng = rng or random.Random(0)
         self.transcript: list[tuple[str, str]] = []
 
     # ---- Fast 경로: 차원 하나씩 되묻기 ---------------------------------
@@ -251,6 +257,9 @@ class Principal:
         후보 집합이 조작돼 H=0 이 되더라도 이 경로는 영향을 받지 않는다.
         """
         summary = f"제안: {proposed}"
+        if proposed != self.truth and self.rng.random() < self.carelessness:
+            self.transcript.append((summary, "(대충 훑고) 네 그렇게 하세요"))
+            return Review("approve", proposed)      # 부주의한 승인
         if proposed == self.truth:
             self.transcript.append((summary, "네, 그 해석이 맞습니다"))
             return Review("approve", proposed)

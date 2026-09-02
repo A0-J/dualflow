@@ -308,3 +308,65 @@ class TestBeliefManipulation:
         t = next(x for x in attacked if x.name.startswith("over_privileged"))
         r = run(t, Config(mode="fast"))
         assert r.h_initial == 0.0 and not r.authority_ok and r.decision == REJECT
+
+
+# --------------------------------------------------------------------------
+class TestImperfectReviewer:
+    """실험 ③ — Slow 축의 신뢰도가 전체의 상한선인지 확인한다."""
+
+    def test_careless_principal_rubber_stamps(self, tasks):
+        from dualflow.semantic import Principal
+        import random
+        t = get(tasks, "silent_misread")
+        careful = Principal(t.truth, rng=random.Random(0))
+        careless = Principal(t.truth, carelessness=1.0, rng=random.Random(0))
+        wrong = t.candidates[0][0]
+        assert careful.review(wrong).status == "correct"
+        assert careless.review(wrong).status == "approve"
+
+    def test_slow_degrades_as_the_reviewer_degrades(self, tasks):
+        from dualflow.bench import adversarial_tasks
+        from dualflow.framework import warmup_then_attack
+        adv = adversarial_tasks()
+        clean = warmup_then_attack(Config(mode="slow", carelessness=0.0),
+                                   tasks, adv, judge=build_judge(), trials=5)
+        sloppy = warmup_then_attack(Config(mode="slow", carelessness=1.0),
+                                    tasks, adv, judge=build_judge(), trials=5)
+        assert clean["unsafe_rate"] == 0.0 < sloppy["unsafe_rate"]
+
+    def test_and_is_never_worse_than_slow_alone(self, tasks):
+        from dualflow.bench import adversarial_tasks
+        from dualflow.framework import warmup_then_attack
+        adv = adversarial_tasks()
+        for c in (0.25, 0.5, 1.0):
+            slow = warmup_then_attack(Config(mode="slow", carelessness=c),
+                                      tasks, adv, judge=build_judge(), trials=5)
+            both = warmup_then_attack(Config(mode="and", carelessness=c),
+                                      tasks, adv, judge=build_judge(), trials=5)
+            assert both["unsafe_rate"] <= slow["unsafe_rate"] + 1e-9
+
+    def test_consistency_check_helps_once_the_gate_is_closed(self, tasks):
+        """경험 게이트가 닫힌 엄격한 σ 에서는 일관성 검사가 그 역할을 대신한다."""
+        from dualflow.bench import adversarial_tasks
+        from dualflow.framework import warmup_then_attack
+        adv = adversarial_tasks()
+        plain = warmup_then_attack(Config(mode="and", carelessness=1.0, sigma=0.95),
+                                   tasks, adv, judge=build_judge(), trials=5)
+        checked = warmup_then_attack(
+            Config(mode="and", carelessness=1.0, sigma=0.95,
+                   use_consistency_check=True, consistency_sigma=0.6),
+            tasks, adv, judge=build_judge(), trials=5)
+        assert checked["unsafe_rate"] < plain["unsafe_rate"]
+
+    def test_experience_is_what_separates_them_not_entropy(self, tasks):
+        """공격은 H 를 0 으로 위조할 수 있지만 누적 이력은 위조할 수 없다."""
+        from dualflow.bench import adversarial_tasks
+        from dualflow.framework import warmup_then_attack
+        adv = adversarial_tasks()
+        no_history = warmup_then_attack(Config(mode="and", carelessness=1.0),
+                                        tasks, adv, judge=build_judge(),
+                                        warmup=0, trials=5)
+        with_history = warmup_then_attack(Config(mode="and", carelessness=1.0),
+                                          tasks, adv, judge=build_judge(),
+                                          warmup=5, trials=5)
+        assert with_history["unsafe_rate"] < no_history["unsafe_rate"]
