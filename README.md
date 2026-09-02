@@ -12,6 +12,7 @@ pip install -e ".[dev]"
 dualflow-demo                    # 9개 실험 전체 (텍스트)
 python -m dualflow.demo fastslow attack careless   # 필요한 것만
 dualflow-plots                   # figures/ 에 그림 5장 저장
+dualflow-plots careless --trials 50   # fig5 논문용 (기본 10회는 ±3%p 흔들린다)
 python -m dualflow.demo joint    # 특정 파트만
 pytest -q                        # 80개 검증 테스트
 ```
@@ -203,8 +204,13 @@ Slow 단독이 AND 를 지배한다(안전성 동일, benign 100%, 비용 저렴
 | 0.75 | 35.6% | 22.2% | 22.2% |
 | 1.00 | 44.4% | **33.3%** | 33.3% |
 
-*(σ=0.80. 오른쪽 패널은 σ=0.95 로 경험 게이트를 닫은 경우 — 그때는 일관성 검사가
-있어야 44.4% → 33.3% 로 내려간다.)*
+*(σ=0.80, 10회 평균. 오른쪽 패널은 σ=0.95 로 경험 게이트를 닫은 경우 — 그때는 일관성
+검사가 있어야 44.4% → 33.3% 로 내려간다.)*
+
+`carelessness > 0` 인 구간은 확률적이므로 `warmup_then_attack` 이 시행별 결과와
+표준오차를 함께 돌려주고, fig5 는 그것을 음영 밴드로 그린다. 기본 10회에서는 밴드가
+±3%p 정도이고, `--trials 50` 이면 ±1%p 안으로 좁아진다. `carelessness=0` 에서는
+난수가 개입하지 않아 분산이 정확히 0 이다.
 
 **AND 가 존재해야 하는 이유가 여기서 처음으로 수치로 나온다.** c=0 에서는 세 방식이
 같지만, A 가 흔들리기 시작하면 갈라진다. 그리고 **갈라지게 만드는 것은 엔트로피가 아니라
@@ -291,7 +297,7 @@ Authority Flow 는 아무것도 막지 못한다. 실제 배치 시 이 부분�
 | `src/dualflow/llm.py` | LLM fallback 인터페이스 + 실제 API 어댑터 골격 |
 | `src/dualflow/demo.py` | 9개 실험 (텍스트) |
 | `src/dualflow/plots.py` | 그림 5장 생성 (matplotlib) |
-| `tests/` | 117개 — 비증폭 정리, 엔트로피 성질, 종료성, 게이팅, ablation, 공격 실험, SAGE 재현 |
+| `tests/` | 119개 — 비증폭 정리, 엔트로피 성질, 종료성, 게이팅, ablation, 공격 실험, SAGE 재현 |
 
 ## 6. 실제 LLM 붙이기
 

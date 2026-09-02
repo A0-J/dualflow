@@ -370,3 +370,24 @@ class TestImperfectReviewer:
                                           tasks, adv, judge=build_judge(),
                                           warmup=5, trials=5)
         assert with_history["unsafe_rate"] < no_history["unsafe_rate"]
+
+    def test_variance_is_reported_and_shrinks_with_trials(self, tasks):
+        """fig5 는 확률적이므로 시행 간 표준오차를 같이 돌려준다."""
+        from dualflow.bench import adversarial_tasks
+        from dualflow.framework import warmup_then_attack
+        adv = adversarial_tasks()
+        few = warmup_then_attack(Config(mode="slow", carelessness=0.5),
+                                 tasks, adv, judge=build_judge(), trials=5)
+        many = warmup_then_attack(Config(mode="slow", carelessness=0.5),
+                                  tasks, adv, judge=build_judge(), trials=40)
+        assert len(few["per_trial"]) == 5 and len(many["per_trial"]) == 40
+        assert many["stderr"] < few["stderr"]
+        assert abs(many["unsafe_rate"] - few["unsafe_rate"]) < 0.2
+
+    def test_deterministic_when_the_reviewer_is_careful(self, tasks):
+        """carelessness=0 이면 난수가 개입하지 않아 분산이 0 이어야 한다."""
+        from dualflow.bench import adversarial_tasks
+        from dualflow.framework import warmup_then_attack
+        m = warmup_then_attack(Config(mode="and", carelessness=0.0), tasks,
+                               adversarial_tasks(), judge=build_judge(), trials=8)
+        assert m["std"] == 0.0
