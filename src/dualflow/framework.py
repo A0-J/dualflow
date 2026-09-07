@@ -48,7 +48,8 @@ class Config:
     experience_weight: float = 1.0
     epsilon_sage: float = 1e-4  # SAGE 베이스라인의 ε (논문 §7 값)
     sage_tool_prior: bool = False  # Eq.(1)의 균등 tool prior 1/K 를 살릴지
-    carelessness: float = 0.0   # A 가 제안을 대충 승인해 버릴 확률
+    carelessness: float = 0.0   # A 가 제안을 대충 승인해 버릴 확률 (안전성 손실)
+    reviewer_overcaution: float = 0.0  # A 가 맞는 제안도 괜히 반려할 확률 (유용성 손실)
     seed: int = 0
     use_consistency_check: bool = False  # 경험과 모순되면 Fast 를 확정하지 않는다
     consistency_sigma: float | None = None  # 일관성 검사 임계치 (기본은 sigma)
@@ -278,7 +279,7 @@ class DelegationVerifier:
     def _semantic(self, task: DelegationTask, log: list[str]):
         cfg = self.cfg
         principal = Principal(task.truth, task.refuses,
-                              cfg.carelessness, self.rng)
+                              cfg.carelessness, self.rng, cfg.reviewer_overcaution)
 
         if cfg.mode == "sage":
             # SAGE-Agent 원 공식 재현 (Eq.2 + Def.4 + τ_exec)

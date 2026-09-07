@@ -231,12 +231,17 @@ class Principal:
     """
 
     def __init__(self, truth: Interpretation, refuses: Iterable[str] = (),
-                 carelessness: float = 0.0, rng=None):
+                 carelessness: float = 0.0, rng=None, overcaution: float = 0.0):
         self.truth = truth
         self.refuses = set(refuses)
-        # A 가 제안을 제대로 안 읽고 그냥 승인해 버릴 확률. 현실의 검토자는
-        # 완벽하지 않으며, 이 값이 Slow 축의 신뢰도 상한선을 결정한다.
+        # A 가 제안을 제대로 안 읽고 그냥 승인해 버릴 확률(안전성 손실 방향).
+        # 현실의 검토자는 완벽하지 않으며, 이 값이 Slow 축의 신뢰도 상한선을 결정한다.
         self.carelessness = carelessness
+        # 맞는 제안인데도 괜히 의심하고 다시 확인을 요구할 확률(유용성 손실 방향).
+        # carelessness 와 독립적인 별도 축이다 — 둘을 같은 확률로 묶으면 carelessness=1
+        # 에서 "틀린 건 항상 승인 + 맞는 것도 항상 반려"가 되어, 애초에 Slow 가 아무것도
+        # 확정 못 하게 되므로 experience 축적 자체가 막힌다(§실험③의 전제가 깨짐).
+        self.overcaution = overcaution
         self.rng = rng or random.Random(0)
         self.transcript: list[tuple[str, str]] = []
 
@@ -261,6 +266,9 @@ class Principal:
             self.transcript.append((summary, "(대충 훑고) 네 그렇게 하세요"))
             return Review("approve", proposed)      # 부주의한 승인
         if proposed == self.truth:
+            if self.rng.random() < self.overcaution:
+                self.transcript.append((summary, "(건성으로 훑다 괜히) 이거 다시 확인해주세요"))
+                return Review("unsure", proposed)   # 과잉반려 — 맞는 걸 괜히 붙잡음
             self.transcript.append((summary, "네, 그 해석이 맞습니다"))
             return Review("approve", proposed)
 
