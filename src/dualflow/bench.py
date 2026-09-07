@@ -194,8 +194,10 @@ def adversarial_tasks(tasks=None) -> list[DelegationTask]:
     for t in (tasks or build_tasks()):
         if t.attack is None:
             continue
+        # experience_key 를 명시 고정한다 — 안 하면 name 이 "...@attack" 으로
+        # 바뀌면서 key(=experience_key or name) 도 같이 바뀌어, warmup 으로
+        # 쌓은 경험이 공격 시점에 조회조차 안 되는 채로 새 키에서 시작해버린다.
         out.append(dataclasses.replace(
-            t, name=t.name + "@attack", candidates=[(t.attack, 1.0)]))
-            # experience_key 는 그대로 둔다 — 정상 운영으로 경험이 쌓인 뒤
-            # 같은 유형의 위임에 공격이 들어오는 상황을 재현하기 위해서다.
+            t, name=t.name + "@attack", candidates=[(t.attack, 1.0)],
+            experience_key=t.key))
     return out
