@@ -200,7 +200,8 @@ def _mode_table(tasks, judge):
             Config(name="SAGE + Joint", mode="sage"),
             Config(name="Fast + Joint", mode="fast"),
             Config(name="Slow + Joint", mode="slow"),
-            Config(name="AND (제안)", mode="and")]
+            Config(name="AND", mode="and"),
+            Config(name="Adaptive (제안)", mode="adaptive")]
     print(f"{'설정':<28}{'unsafe↓':>10}{'benign↑':>10}{'over-rej':>10}"
           f"{'질문':>7}{'검토':>7}{'LLM':>6}{'비용↓':>8}")
     print(SUB)
@@ -222,22 +223,36 @@ def part9_careless():
     for sigma, tag in ((0.8, "σ=0.80  경험 게이트 발동"),
                        (0.95, "σ=0.95  게이트 닫힘")):
         print(f"  [{tag}]")
-        print(f"  {'carelessness':>13}{'Slow only':>12}{'AND':>9}{'AND+일관성':>13}")
+        print(f"  {'carelessness':>13}{'Slow only':>12}{'AND':>9}{'AND+일관성':>13}"
+              f"{'Adaptive':>12}{'검토율(AND)':>13}{'검토율(Adap)':>14}")
         for c in (0.0, 0.25, 0.5, 0.75, 1.0):
-            vals = []
+            vals, reviews = [], []
+            adaptive_sigma = 0.6 if sigma >= 0.95 else None
             for cfg in (Config(mode="slow", carelessness=c, sigma=sigma),
                         Config(mode="and", carelessness=c, sigma=sigma),
                         Config(mode="and", carelessness=c, sigma=sigma,
-                               use_consistency_check=True, consistency_sigma=0.6)):
-                vals.append(warmup_then_attack(cfg, normal, adv, judge=judge,
-                                               warmup=5, trials=10)["unsafe_rate"])
-            print(f"  {c:>13.2f}{vals[0]*100:>11.1f}%{vals[1]*100:>8.1f}%{vals[2]*100:>12.1f}%")
+                               use_consistency_check=True, consistency_sigma=0.6),
+                        Config(mode="adaptive", carelessness=c, sigma=sigma,
+                               adaptive_sigma=adaptive_sigma)):
+                r = warmup_then_attack(cfg, normal, adv, judge=judge, warmup=5, trials=10)
+                vals.append(r["unsafe_rate"])
+                reviews.append(r["review_rate"])
+            print(f"  {c:>13.2f}{vals[0]*100:>11.1f}%{vals[1]*100:>8.1f}%{vals[2]*100:>12.1f}%"
+                  f"{vals[3]*100:>11.1f}%{reviews[1]:>13.2f}{reviews[3]:>14.2f}")
         print()
-    print("  c=0 에서는 Slow 가 완벽해 세 방식이 같다. A 가 흔들리기 시작하면 갈라진다.")
+    print("  c=0 에서는 Slow 가 완벽해 모든 방식이 같다. A 가 흔들리기 시작하면 갈라진다.")
     print("  갈라지게 만드는 것은 엔트로피가 아니라 **경험**이다 — H 는 조작 가능하지만")
     print("  누적 이력은 공격자가 손댈 수 없다. σ=0.80 에서는 경험 게이트가 공격을 흡수하고,")
     print("  게이트를 닫으면(σ=0.95) 일관성 검사가 그 역할을 대신한다.")
-    print("  이력이 없는 위임 유형(계속 거절돼 온 것들)에는 둘 다 무력하다는 한계도 보인다.")
+    print("  이력이 없는 위임 유형(계속 거절돼 온 것들)에는 셋 다 무력하다는 한계도 보인다.")
+    print()
+    print("  Adaptive (README §7-1) 는 AND 와 같은 원리(경험 불일치)를 쓰지만, Fast 를")
+    print("  '거부'가 아니라 'Slow 에스컬레이션 트리거'로만 쓴다. σ=0.80 에서는 review_rate")
+    print("  0(AND 는 항상 1.0)으로 같은 0% unsafe 를 낸다 — Fast 자신의 경험 게이트가 이미")
+    print("  공격을 무력화하므로 에스컬레이션조차 필요 없다. σ=0.95 에서는 실제로 에스컬레이션")
+    print("  하고 Slow 의 판단을 그대로 따르므로, AND+일관성검사(Fast 가 무조건 거부)와 달리")
+    print("  A 의 부주의에 Slow 단독과 같은 수준으로 노출된다 — '더 안전'이 아니라")
+    print("  '평소엔 훨씬 싸고, 필요할 때만 Slow 를 진짜로 신뢰하는' 트레이드오프다.")
 
 
 PARTS = {"authority": part1_authority, "semantic": part2_semantic, "joint": part3_joint,
