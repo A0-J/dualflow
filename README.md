@@ -28,12 +28,12 @@ resource/scope 를 복원할 수 없다 — `task.truth` 와 직접 비교하면
 ```bash
 pip install -e ".[dev]"
 
-dualflow-demo                    # 10개 실험 전체 (텍스트)
-python -m dualflow.demo fastslow attack careless authfeedback   # 필요한 것만
+dualflow-demo                    # 11개 실험 전체 (텍스트)
+python -m dualflow.demo fastslow attack careless authfeedback adaptiveauth   # 필요한 것만
 dualflow-plots                   # figures/ 에 그림 5장 저장
 dualflow-plots careless --trials 50   # fig5 논문용 (기본 10회는 ±3%p 흔들린다)
 python -m dualflow.demo joint    # 특정 파트만
-pytest -q                        # 142개 검증 테스트
+pytest -q                        # 149개 검증 테스트
 ```
 
 ---
@@ -386,6 +386,63 @@ Feedback 은 Slow 축과 같은 이유로 belief 조작에 면역이다 — B �
 "협상이 실패해 안전하게 거절되는 경우가 늘어난다"(over-rejection) 는 것이다 —
 §실험③(부주의한 Slow 리뷰어)과 같은 결의 결과가 여기서도 나온다.
 
+**표현을 좁혀서 정확히 쓸 것.** "carelessness=1.0 에서도 unsafe 0%" 는
+"Principal 이 틀려도 DualFlow 가 모든 종류의 잘못된 intent 를 막는다" 는 뜻이
+아니다. 정확히는 **"scope negotiation 에서 reviewer error 가 privilege
+amplification 으로 이어지는 것을 non-amplification invariant 가 차단한다"**
+는 것이다 — 이미 권한 범위 안에 있는 자원 중에서 A 가 의도하지 않은 *다른*
+자원을 B 가 골랐다면(자원이 이미 권한 안에 있으므로 scope_exceeded 자체가
+발생하지 않는다), Authority Feedback Loop 는 관여하지 않는다. 그건 별개의
+intent confirmation 문제이고, 실제 LLM 평가에서 다시 나타날 가능성이 크다.
+
+### 실험 ⑥ — Adaptive Verification: 언제 A 에게 다시 물어볼 것인가 (§7-2 확장)
+
+실험 ⑤ 는 "왜 Authority Feedback Loop 가 필요한가" 를 보였을 뿐, 매번 A 를
+부르면 검토율이 1.00 이 된다(연구의 출발점인 개입 최소화와 충돌 — 실험④ 의
+Adaptive 와 같은 문제의식). `run_sequence()` 로 같은 위임 유형을 9라운드
+순서대로 실행해(`scope_negotiation_sequence()`, 같은 `VerifiedAuthorityStore`
+공유) 세 가지를 함께 본다: A) 반복이 Feedback 을 줄이는가, B) 위임 범위가 실제로
+바뀌면 Feedback 으로 되돌아가는가, C) 조작된 제안(H=0)이 auto-restrict 를 속일
+수 있는가.
+
+| # | 상황 | A 에게 물어봄 | auto-restrict | 이력 n | agreement | 확정된 scope |
+|---|---|---|---|---|---|---|
+| 0–2 | stable (8월 반복) | 예(매번) | 아니오 | 1→3 | 1.00 | `/reports/2026-08/` |
+| 3–4 | stable (이력 충분) | **아니오** | **예** | 3 | 1.00 | `/reports/2026-08/` |
+| 5 | **legitimate drift** (9월로 변경) | 예 | 아니오 | **1**(리셋) | 1.00 | `/reports/2026-09/` |
+| 6–7 | post-drift repeat | 예(재구축 중) | 아니오 | 2→3 | 1.00 | `/reports/2026-09/` |
+| 8 | **manipulated proposal** (H=0) | 아니오 | 예 | 3 | 1.00 | `/reports/2026-09/` (공격 목표 아님) |
+
+읽는 법:
+
+- **A. 반복 → Feedback 감소.** round 0-2 는 검증된 이력이 부족(`n<3`)해서 매번
+  실제로 물어본다. round 3 부터 `n_confirmed=3, agreement=1.0` 이 조건
+  (`n_min=3, σ=0.8`, 처음부터 복잡한 risk score 대신 해석 가능한 단순 규칙으로
+  시작했다)을 넘어 A 에게 묻지 않고 `C_adaptive = C_experience ∩
+  C_current_budget` 를 먼저 시도한 뒤 재검증만으로 확정한다 — feedback률이
+  100% 에서 0% 로 떨어지면서도 같은 scope(`/reports/2026-08/`)로 안전하게
+  실행된다.
+- **B. drift → Feedback 재활성화, 그리고 리셋.** round 5 에서 위임 범위가 실제로
+  8월에서 9월로 바뀌면, 낡은 8월 이력(3회)과 새로 제시된 상한(9월)이 전혀
+  안 겹쳐(`Privilege.meet` 실패) 자동 재사용이 무산되고 곧바로 Feedback 으로
+  돌아간다. 이때 `VerifiedAuthorityStore.record()` 가 **낡은 이력을 리셋**한다
+  (`n` 이 3→1) — 리셋이 없으면 8월 이력(3표)이 9월 확인(1표)을 계속 압도해서
+  `agreement_ratio` 가 오래도록 0.8 을 못 넘는다(직접 확인:
+  `test_a_differing_confirmation_resets_stale_history`). round 6-7 에서 9월
+  확인이 다시 3회 쌓여 이력이 재구축된다.
+- **C. 조작 → auto-restrict 도 안 속는다.** round 8 은 B 의 후보 집합이 목표
+  해석 하나로 좁혀져 H=0 이 되는, 다른 실험들과 같은 유형의 공격이다. 그런데도
+  auto-restrict 는 A 에게 묻지 않고 **정답**(`/reports/2026-09/`)으로 실행된다
+  — B 의(조작된) 후보를 아예 입력으로 쓰지 않기 때문이다. 재사용 후보는
+  `VerifiedAuthorityStore`(A 가 과거에 실제로 확인해준 값)와 `auth.suggested`
+  (위임 예산에서 계산된 현재 상한)의 교집합일 뿐이고, 둘 다 B 의 자기신고 확신과
+  무관하다.
+
+`use_verified_experience=False` 로 끄면 매 라운드 실제로 물어본다 —
+adaptive 는 opt-in 이며 Authority Feedback Loop 자체의 안전성(non-amplification)
+과는 독립이다. `tests/test_authority_feedback.py::TestAdaptiveVerification`,
+`TestVerifiedAuthorityStore` 참고.
+
 ## 4. 구현하며 확인한 선행연구의 빈틈
 
 전부 테스트로 박제해 두었다. 논문 Related Work / 차별점 서술에 쓸 수 있는 재료다.
@@ -443,14 +500,14 @@ Authority Flow 는 아무것도 막지 못한다. 실제 배치 시 이 부분�
 | `src/dualflow/capability.py` | Authority Flow — privilege 순서관계, budget meet, 위임 체인 감쇠, 실패 분류(no_grant/condition_missing/scope_exceeded) |
 | `src/dualflow/semantic.py` | Semantic Flow — action space, 엔트로피, 경험 점수, 역질의(IG), Principal(A 시뮬레이션) |
 | `src/dualflow/rule_engine.py` | Joint Verification 의 매칭 — 위임 SOP 그래프, p\*, Sim_path, exact-field 진단(§7-2) |
-| `src/dualflow/authority_feedback.py` | **Authority Feedback Loop** — scope 협상(§7-2), bounded negotiation, non-amplification |
-| `src/dualflow/framework.py` | 전체 조립, ablation 스위치, 평가 지표 |
+| `src/dualflow/authority_feedback.py` | **Authority Feedback Loop** — scope 협상(§7-2), bounded negotiation, non-amplification, `VerifiedAuthorityStore`(adaptive, §7-2 확장) |
+| `src/dualflow/framework.py` | 전체 조립, ablation 스위치, 평가 지표, `run_sequence`(순차 실험) |
 | `src/dualflow/sage_baseline.py` | **SAGE-Agent 원 공식 재현** — Eq.(2), Def.4·5, τ_exec, α |
-| `src/dualflow/bench.py` | DelegationBench-mini 9개 시나리오 + belief 조작 변형 + scope 협상 mini-set |
+| `src/dualflow/bench.py` | DelegationBench-mini 9개 시나리오 + belief 조작 변형 + scope 협상 mini-set + 순차 시나리오 |
 | `src/dualflow/llm.py` | LLM fallback 인터페이스 + 실제 API 어댑터 골격 |
-| `src/dualflow/demo.py` | 10개 실험 (텍스트) |
+| `src/dualflow/demo.py` | 11개 실험 (텍스트) |
 | `src/dualflow/plots.py` | 그림 5장 생성 (matplotlib) |
-| `tests/` | 142개 — 비증폭 정리, 엔트로피 성질, 종료성, 게이팅, ablation, 공격 실험, SAGE 재현, Authority Feedback |
+| `tests/` | 149개 — 비증폭 정리, 엔트로피 성질, 종료성, 게이팅, ablation, 공격 실험, SAGE 재현, Authority Feedback, Adaptive Verification |
 
 ## 6. 실제 LLM 붙이기
 
@@ -504,6 +561,16 @@ LLM 을 붙일 때도 **자유 생성이 아니라 후보 중 택일**로 좁혀
    정식으로 만든 것이다 — `task.truth` 는 `Principal` 안에서만 쓰이고,
    `run_feedback()`/`framework.py` 는 `Principal.review_authority()` 의 응답
    (`ConfirmedAuthority`)만 본다(`test_run_feedback_only_needs_the_review_authority_method`).
+
+   **Adaptive 확장도 1차 구현 완료 — §3 실험 ⑥.** "Authority 검사를 할지" 가
+   아니라 **"Principal 에게 실제로 물어볼지"** 만 adaptive 하게 만들었다
+   (no_grant/condition_missing 은 여전히 무조건 하드 리젝트, `valid` 는 여전히
+   무조건 통과 — 바뀌는 건 `scope_exceeded` 분기뿐이다). `VerifiedAuthorityStore`
+   가 A 가 **실제로** 확인해주고 재검증까지 통과해 EXECUTE 로 이어진 scope 만
+   쌓고(`Verified Experience` — 아무 실행 결과나 담는 `ExperienceStore` 와 구분),
+   충분하면(`n_confirmed≥3`, `agreement_ratio≥0.8`, 둘 다 해석 가능한 단순 규칙 —
+   risk score 를 새로 만들지 않았다) A 에게 묻지 않고 `C_adaptive = C_experience ∩
+   C_current_budget` 를 먼저 시도한 뒤 다시 top 의 `check_authority` 로 재검증한다.
 3. **엔트로피를 LLM 에게 물어보는 안 (피드백 ④) 은 권장하지 않는다.** 차별점 표의
    첫 줄이 "저엔트로피 구간은 LLM 호출 자체를 원천 배제" 인데, H 를 LLM 으로 구하면
    모든 위임이 최소 1회 호출하게 되어 LLM률이 11.1% → 100% 로 오른다. 상시 LLM

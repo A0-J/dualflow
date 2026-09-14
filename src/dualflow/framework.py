@@ -24,7 +24,7 @@ import dataclasses
 import random
 from collections import Counter
 
-from .authority_feedback import run_feedback
+from .authority_feedback import VerifiedAuthorityStore, run_feedback
 from .capability import Budget, Privilege, check_authority, delegation_chain
 from .llm import LLMJudge, TopBeliefJudge
 from .rule_engine import Fields, MatchResult, RuleEngine, classify, match_intent
@@ -62,6 +62,9 @@ class Config:
     adaptive_sigma: float | None = None  # adaptive 의 경험 불일치 임계치 (기본은 sigma)
     use_authority_feedback: bool = True  # scope_exceeded 를 협상으로 살릴지 (§7-2)
     authority_feedback_max_rounds: int = 2  # bounded negotiation
+    use_verified_experience: bool = True  # 검증된 이력으로 Feedback 을 건너뛸지 (§7-4)
+    verified_experience_n_min: int = 3    # 재사용에 필요한 최소 확인 횟수
+    verified_experience_sigma: float = 0.8  # 재사용에 필요한 최소 agreement_ratio
     # ablation
     use_authority: bool = True
     use_semantic: bool = True
@@ -105,8 +108,9 @@ class Verdict:
     semantic_ok: bool = True
     match: MatchResult | None = None
     effective_budget: Budget | None = None
-    n_authority_feedback: int = 0       # Authority Feedback Loop 라운드 수
-    authority_negotiated: bool = False  # scope_exceeded 가 협상으로 살아났는가
+    n_authority_feedback: int = 0       # Authority Feedback Loop 에서 A 에게 실제로 물어본 횟수
+    authority_negotiated: bool = False  # scope_exceeded 가 협상(자동 포함)으로 살아났는가
+    authority_auto_restricted: bool = False  # A 에게 묻지 않고 검증된 이력으로 풀렸는가
     log: list[str] = field(default_factory=list)
 
     @property
@@ -165,11 +169,13 @@ class DelegationVerifier:
     def __init__(self, cfg: Config | None = None,
                  experience: ExperienceStore | None = None,
                  judge: LLMJudge | None = None,
-                 engine: RuleEngine | None = None):
+                 engine: RuleEngine | None = None,
+                 verified_authority: VerifiedAuthorityStore | None = None):
         self.cfg = cfg or Config()
         self.experience = experience or ExperienceStore()
         self.judge = judge or TopBeliefJudge()
         self.engine = engine or RuleEngine()
+        self.verified_authority = verified_authority or VerifiedAuthorityStore()
         self.rng = random.Random(self.cfg.seed)
 
     # ---- SEMANTIC FLOW (Fast) — Experience → Entropy → Clarification → LLM
@@ -398,17 +404,24 @@ class DelegationVerifier:
 
         # AUTHORITY FEEDBACK LOOP — scope_exceeded 는 하드 리젝트가 아니라 협상 대상.
         # task.truth 는 여기서 전혀 보지 않는다 — principal.review_authority 의
-        # 응답(ConfirmedAuthority)만 본다.
+        # 응답(ConfirmedAuthority)만 본다. use_verified_experience 가 켜져 있으면
+        # 검증된 이력으로 A 에게 묻지 않고 풀 수도 있다(§7-4, adaptive).
         n_authority_feedback = 0
         authority_negotiated = False
+        authority_auto_restricted = False
         if (cfg.use_authority and not auth.allowed and auth.failure_kind == "scope_exceeded"
                 and cfg.use_authority_feedback):
             neg = run_feedback(interp, effective, principal,
-                               cfg.authority_feedback_max_rounds, log)
+                               cfg.authority_feedback_max_rounds, log,
+                               verified=self.verified_authority if cfg.use_verified_experience else None,
+                               key=task.key,
+                               verified_n_min=cfg.verified_experience_n_min,
+                               verified_sigma=cfg.verified_experience_sigma)
             n_authority_feedback = neg.rounds
             if neg.resolved and neg.confirmed is not None:
                 interp = neg.confirmed.interpretation
                 authority_negotiated = True
+                authority_auto_restricted = neg.auto_restricted
                 auth = check_authority(effective, interp.privilege())
                 log.append(f"[joint] Authority(재검사): {'통과' if auth.allowed else '차단'} — "
                            f"{auth.reason}")
@@ -436,10 +449,19 @@ class DelegationVerifier:
         if cfg.use_experience:
             self.experience.record(task.key, interp, decision == EXECUTE)
 
+        # A 가 실제로(자동 재사용이 아니라) 확인해줬고 끝까지 EXECUTE 로 이어진
+        # scope 만 VerifiedAuthorityStore 에 쌓는다 — auto-restrict 로 재사용된
+        # 결과를 다시 저장하면 캐시가 스스로를 강화하는 순환이 생긴다.
+        if (cfg.use_verified_experience and decision == EXECUTE
+                and authority_negotiated and n_authority_feedback > 0
+                and not authority_auto_restricted):
+            self.verified_authority.record(task.key, interp)
+
         return Verdict(decision, reason, route, interp, sem.h_initial, sem.h_final,
                        sem.n_questions, sem.n_llm, sem.n_reviews,
                        auth.allowed, semantic_ok, m, effective,
-                       n_authority_feedback, authority_negotiated, log)
+                       n_authority_feedback, authority_negotiated,
+                       authority_auto_restricted, log)
 
 
 # --------------------------------------------------------------------------
@@ -484,6 +506,8 @@ def evaluate(cfg: Config, tasks, judge=None, fresh_experience: bool = True) -> d
         "avg_questions": sum(r.n_questions for _, r, _ in rows) / n,
         "review_rate": sum(r.n_reviews for _, r, _ in rows) / n,
         "authority_feedback_rate": sum(r.n_authority_feedback for _, r, _ in rows) / n,
+        "authority_auto_restrict_rate": sum(1 for _, r, _ in rows
+                                            if r.authority_auto_restricted) / n,
         "avg_cost": cost / n,
         "counts": counts,
         "rows": rows,
@@ -529,3 +553,36 @@ def warmup_then_attack(cfg: Config, normal_tasks, attack_tasks, judge=None,
             "review_rate": reviews / n, "n": n, "trials": trials,
             "per_trial": per_trial, "std": var ** 0.5,
             "stderr": (var / len(per_trial)) ** 0.5 if per_trial else 0.0}
+
+
+# --------------------------------------------------------------------------
+@dataclass
+class SequentialRound:
+    """§7-4 실험(Adaptive Verification) 의 라운드별 관측치."""
+    index: int
+    task_name: str
+    decision: str
+    interpretation: Interpretation | None
+    authority_negotiated: bool
+    authority_auto_restricted: bool
+    n_authority_feedback: int
+    verified_n: int
+    verified_agreement: float
+
+
+def run_sequence(cfg: Config, tasks: list[DelegationTask], judge=None) -> list[SequentialRound]:
+    """같은 `DelegationVerifier`(같은 `VerifiedAuthorityStore`)로 tasks 를 순서대로
+    실행하며 라운드별 결과를 기록한다. `evaluate()` 는 매 과제마다 독립적으로
+    평가하지만(경험이 안 쌓인다), 여기서는 반대로 **이력이 쌓이는 것 자체**가
+    관찰 대상이다 — stable repetition 에서 feedback 률이 떨어지는지, drift 에서
+    다시 올라가는지, 조작된 제안이 auto-restrict 를 속이지 못하는지(§7-4).
+    """
+    v = DelegationVerifier(cfg, ExperienceStore(), judge or TopBeliefJudge())
+    out = []
+    for i, t in enumerate(tasks):
+        r = v.run(t)
+        out.append(SequentialRound(
+            i, t.name, r.decision, r.interpretation, r.authority_negotiated,
+            r.authority_auto_restricted, r.n_authority_feedback,
+            v.verified_authority.n_confirmed(t.key), v.verified_authority.agreement_ratio(t.key)))
+    return out

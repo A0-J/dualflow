@@ -36,6 +36,7 @@ A 에게 확인/축소받아 재실행할 수 있다:
 
 from __future__ import annotations
 
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Protocol
@@ -80,48 +81,129 @@ class ConfirmedAuthority:
 class NegotiationResult:
     resolved: bool
     confirmed: ConfirmedAuthority | None
-    rounds: int
+    rounds: int                          # A 에게 실제로 물어본 횟수 (§ run_feedback 참고)
     decision: FeedbackDecision
     log: list[str] = field(default_factory=list)
+    auto_restricted: bool = False        # A 에게 묻지 않고 VerifiedAuthorityStore 로 해결됐는가
+
+
+# --------------------------------------------------------------------------
+# ADAPTIVE VERIFICATION — "언제 A 에게 다시 물어볼 것인가"
+# --------------------------------------------------------------------------
+@dataclass
+class VerifiedAuthorityStore:
+    """Principal.review_authority 로 A 가 실제로 확인해주고, 재검증까지 통과해
+    최종 EXECUTE 로 이어진 scope 만 저장한다.
+
+    무슨 실행이든 담는 `semantic.ExperienceStore` 와 달리, 여기 들어가는 값은
+    전부 "A 가 이 범위를 직접 확인해줬다" 는 근거가 있는 것뿐이다 — auto-restrict
+    로 재사용된 결과는 기록하지 않는다(그러면 캐시가 스스로를 강화하는 순환이
+    생긴다). `framework.DelegationVerifier` 가 EXECUTE 확정 후에만 record 한다.
+    """
+    _counts: dict[str, Counter] = field(default_factory=lambda: defaultdict(Counter))
+    _index: dict[str, dict[str, Interpretation]] = field(default_factory=lambda: defaultdict(dict))
+
+    def record(self, key: str, interp: Interpretation) -> None:
+        """A 가 실제로 확인해준 값을 쌓는다.
+
+        새로 확인된 값이 지금까지의 이력과 다르면(=A 가 이번엔 다른 scope 를
+        확인해줬다) 낡은 이력을 버리고 새로 시작한다. 이게 없으면 위임 범위가
+        영구히 바뀐 뒤에도(intent drift) 예전 값의 개수가 새 값을 계속 압도해서
+        agreement_ratio 가 오래도록 회복되지 않는다 — reset 은 "복잡한 risk
+        score" 대신 쓸 수 있는 가장 단순한 해석 가능한 규칙이다.
+        """
+        ik = str(interp.privilege())
+        counts = self._counts[key]
+        if counts and ik not in counts:
+            counts.clear()
+            self._index[key].clear()
+        counts[ik] += 1
+        self._index[key][ik] = interp
+
+    def n_confirmed(self, key: str) -> int:
+        return sum(self._counts.get(key, Counter()).values())
+
+    def agreement_ratio(self, key: str) -> float:
+        """가장 많이 확인된 scope 가 전체 확인 이력에서 차지하는 비율."""
+        c = self._counts.get(key)
+        if not c:
+            return 0.0
+        return max(c.values()) / sum(c.values())
+
+    def best(self, key: str) -> Interpretation | None:
+        c = self._counts.get(key)
+        if not c:
+            return None
+        ik = max(c, key=lambda k: (c[k], k))
+        return self._index[key][ik]
 
 
 def run_feedback(proposal: Interpretation, effective: Budget, principal: AuthorityPrincipal,
-                 max_rounds: int = 2, log: list[str] | None = None) -> NegotiationResult:
-    """Bounded authority negotiation — 최대 `max_rounds` 회. 매 라운드:
+                 max_rounds: int = 2, log: list[str] | None = None,
+                 verified: VerifiedAuthorityStore | None = None, key: str | None = None,
+                 verified_n_min: int = 3, verified_sigma: float = 0.8) -> NegotiationResult:
+    """Bounded authority negotiation. scope 초과를 만날 때마다:
 
-    1. 현재 제안이 이미 유효 예산 안이면 즉시 확정.
-    2. 아니고 유무/조건 실패(협상 불가)면 즉시 거부.
-    3. scope 초과면 `principal.review_authority` 로 A 에게 확인받고, 응답을
-       반영한 다음 제안으로 다시 1 로 돌아간다.
+    1. `verified`/`key` 가 주어졌고(adaptive 모드) 아직 시도 안 했으면, 검증된
+       이력이 충분한지(n_confirmed≥verified_n_min, agreement≥verified_sigma) 본다.
+       충분하면 그 값과 **현재** 허용 상한(auth.suggested)의 교집합
+       (`Privilege.meet` — 절대 그대로 신뢰하지 않고 항상 현재 예산과 다시
+       교집합한다: C_adaptive = C_experience ∩ C_current_budget)을 시도하고,
+       그 결과를 A 에게 묻지 않고 곧장 재검증한다. 겹치지 않으면(오래된 경험이
+       지금 상황과 안 맞음 — 위임 범위가 바뀐 drift) 그냥 실제 Feedback 으로
+       넘어간다. 이 자동 재사용은 협상당 최대 1회만 시도한다.
+    2. 그래도 안 풀리면(또는 애초에 이력이 부족하면) `principal.review_authority`
+       로 A 에게 실제로 물어본다 — 최대 `max_rounds` 회.
 
-    non-amplification 불변식(§6): 어떤 결정이든 확정 결과는 반드시
-    `effective` 예산 안에 있어야 한다. A 가 부주의해서 범위 밖 제안을 그대로
-    승인(APPROVE)해도 이 검사가 걸러낸다 — Principal 의 응답이 최종 권한이
-    아니라 위임 예산이 최종 상한이라는 뜻이다.
+    매 확정 전에는 항상 top 의 `check_authority` 로 다시 검증한다 — A 의 응답도,
+    재사용한 경험도 그 자체로는 최종 권한이 아니고 위임 예산이 최종 상한이라는
+    뜻이다(non-amplification, §6). 이게 auto-restrict 를 켜도 안전한 이유다:
+    경험은 "무엇을 시도해볼지" 를 줄여줄 뿐 "허용되는지" 를 대신 판단하지 않는다.
 
-    `NegotiationResult.rounds` 는 루프를 몇 바퀴 돌았는지가 아니라 **A 에게
-    실제로 몇 번 물어봤는지**다(비용은 실제 상호작용에만 매긴다) — 애초에
-    협상 불가(no_grant/condition_missing/suggested 없음)로 즉시 거부된
-    경우는 A 를 부르지 않았으므로 0 이다.
+    `NegotiationResult.rounds` 는 A 에게 **실제로** 물어본 횟수다 — auto-restrict
+    로 풀리면 0, 애초에 협상 불가로 즉시 거부돼도 0 이다.
     """
     log = log if log is not None else []
     current = proposal
     last_decision = FeedbackDecision.APPROVE
     asked = 0
+    tried_auto = False
+    auto_restricted = False
 
-    for round_no in range(1, max_rounds + 1):
-        # 매 라운드 top 에서 다시 권한 검사한다 — A 의 응답을 그대로 승인하지
-        # 않고 예산에 대고 재확인하는 것 자체가 non-amplification 검사다. A 가
-        # 부주의해서 범위 밖 값을 승인해도, 다음 라운드에서 여전히 막힌다.
+    for _ in range(max_rounds + 2):   # 실제 문의는 asked<max_rounds 로 따로 제한한다
         auth = check_authority(effective, current.privilege())
         if auth.allowed:
-            log.append(f"[authority-feedback] 확정({asked}회 문의): {current}")
+            tag = "auto-restrict" if auto_restricted else f"{asked}회 문의"
+            log.append(f"[authority-feedback] 확정({tag}): {current}")
             return NegotiationResult(True, ConfirmedAuthority(current, asked, last_decision),
-                                     asked, last_decision, log)
+                                     asked, last_decision, log, auto_restricted)
 
         if auth.failure_kind != "scope_exceeded" or auth.suggested is None:
             log.append(f"[authority-feedback] 협상 불가({auth.failure_kind}) — A 에게 묻지 않고 거부: "
                        f"{auth.reason}")
+            return NegotiationResult(False, None, asked, FeedbackDecision.REJECT, log)
+
+        if verified is not None and key is not None and not tried_auto:
+            tried_auto = True
+            cand = verified.best(key)
+            n, agree = verified.n_confirmed(key), verified.agreement_ratio(key)
+            if (cand is not None and n >= verified_n_min and agree >= verified_sigma
+                    and cand.action == auth.suggested.action
+                    and cand.resource == auth.suggested.resource):
+                intersected = cand.privilege().meet(auth.suggested)
+                if intersected is not None:
+                    current = Interpretation(intersected.action, intersected.resource,
+                                             intersected.scope, intersected.condition)
+                    auto_restricted = True
+                    log.append(f"[authority-feedback] 검증된 이력 재사용(n={n}, "
+                               f"agreement={agree:.2f}) ∩ 현재 상한 → {current} "
+                               f"(A 에게 묻지 않음)")
+                    continue
+                log.append(f"[authority-feedback] 검증된 이력({cand})이 현재 허용 상한과 "
+                           f"안 겹침(drift) → Feedback 으로 진행")
+
+        if asked >= max_rounds:
+            log.append(f"[authority-feedback] {max_rounds}회 문의 소진 → 미해결")
             return NegotiationResult(False, None, asked, FeedbackDecision.REJECT, log)
 
         # label 은 일부러 비워 둔다 — current(원래 넓은 제안)의 label 을 물려받으면
@@ -140,7 +222,8 @@ def run_feedback(proposal: Interpretation, effective: Budget, principal: Authori
             return NegotiationResult(False, None, asked, FeedbackDecision.REJECT, log)
 
         current = fb.confirmed
-        # 다음 라운드로 — top 의 check_authority 가 current 를 다시 검증한다.
+        auto_restricted = False   # 실제 Feedback 이 일어났으니 다음 확정은 auto 가 아니다
+        # 다음 반복으로 — top 의 check_authority 가 current 를 다시 검증한다.
 
-    log.append(f"[authority-feedback] {max_rounds}회 문의 소진 → 미해결")
+    log.append(f"[authority-feedback] 반복 한도 소진 → 미해결")
     return NegotiationResult(False, None, asked, FeedbackDecision.REJECT, log)

@@ -10,11 +10,13 @@ from __future__ import annotations
 import sys
 
 from .bench import (
-    PRINCIPAL, adversarial_tasks, build_judge, build_tasks, scope_negotiation_tasks,
+    PRINCIPAL, adversarial_tasks, build_judge, build_tasks, scope_negotiation_sequence,
+    scope_negotiation_tasks,
 )
 from .capability import Budget, Privilege, check_authority, delegation_chain
 from .framework import (
-    Config, DelegationVerifier, ExperienceStore, evaluate, outcome, warmup_then_attack,
+    Config, DelegationVerifier, ExperienceStore, evaluate, outcome, run_sequence,
+    warmup_then_attack,
 )
 from .sage_baseline import SageAgentBaseline
 from .semantic import (
@@ -297,10 +299,47 @@ def part10_authority_feedback():
     print("  가 아니라 '협상이 실패해 안전하게 거절되는 경우가 늘어난다' 는 것이다.")
 
 
+def part11_adaptive_verification():
+    print("\n" + BAR)
+    print("PART 11  Adaptive Verification — 언제 A 에게 다시 물어볼 것인가 (§7-4)")
+    print(BAR)
+    print("\n  같은 위임 유형을 9라운드 순서대로 실행한다(같은 VerifiedAuthorityStore).")
+    print("  round 0-4  stable repetition    같은 위임 반복 (8월)")
+    print("  round 5    legitimate drift     A 가 실제로 범위를 바꿈 (8월 -> 9월)")
+    print("  round 6-7  post-drift repeat    바뀐 범위(9월)가 다시 반복")
+    print("  round 8    manipulated proposal B 의 후보가 조작돼 H=0 (여전히 9월이 정답)\n")
+
+    tasks = scope_negotiation_sequence()
+    judge = build_judge(tasks)
+    rounds = run_sequence(Config(mode="fast", use_experience=False), tasks, judge)
+
+    print(f"{'#':>3}{'decision':>10}{'물어봄':>8}{'auto':>7}{'이력n':>6}{'agree':>8}  확정된 scope")
+    print(SUB)
+    for r in rounds:
+        print(f"{r.index:>3}{r.decision:>10}{r.n_authority_feedback:>8}"
+              f"{'예' if r.authority_auto_restricted else '아니오':>7}{r.verified_n:>6}"
+              f"{r.verified_agreement:>8.2f}  {r.interpretation.scope}")
+
+    print("\n  round 0-2: 검증된 이력이 부족(<3)해서 매번 실제로 A 에게 물어본다.")
+    print("  round 3-4: 이력 3회·agreement 1.0 이 되자 A 에게 묻지 않고 auto-restrict —")
+    print("             feedback률이 100% 에서 0% 로 떨어진다(항상 물어보는 것과 같은")
+    print("             안전성을 유지하면서).")
+    print("  round 5(drift): 위임 범위가 실제로 바뀌자 낡은 8월 이력(3회)이 새 값과")
+    print("             안 겹쳐(scope_meet 실패) 곧바로 Feedback 으로 되돌아간다 —")
+    print("             VerifiedAuthorityStore 가 이력을 리셋해서, 오래된 확인이")
+    print("             새 확인을 영구히 압도하지 않는다.")
+    print("  round 6-7: 바뀐 범위(9월)가 다시 확인되며 이력이 재구축된다.")
+    print("  round 8(조작): B 의 후보가 H=0 으로 조작돼도 auto-restrict 는 B 의 후보를")
+    print("             전혀 보지 않는다 — (A 가 실제로 확인해준) 검증된 이력과")
+    print("             (위임 예산에서 나온) 현재 허용 상한의 교집합만 본다. 그래서")
+    print("             A 에게 묻지도 않고 안전하게 정답(9월)으로 실행된다.")
+
+
 PARTS = {"authority": part1_authority, "semantic": part2_semantic, "joint": part3_joint,
          "bench": part4_bench, "theta": part5_theta, "experience": part6_experience,
          "fastslow": part7_fastslow, "attack": part8_attack,
-         "careless": part9_careless, "authfeedback": part10_authority_feedback}
+         "careless": part9_careless, "authfeedback": part10_authority_feedback,
+         "adaptiveauth": part11_adaptive_verification}
 
 
 def main(argv: list[str] | None = None) -> int:
