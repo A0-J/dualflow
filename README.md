@@ -30,7 +30,7 @@ pip install -e ".[dev]"
 
 dualflow-demo                    # 11개 실험 전체 (텍스트)
 python -m dualflow.demo fastslow attack careless authfeedback adaptiveauth   # 필요한 것만
-dualflow-plots                   # figures/ 에 그림 5장 저장
+dualflow-plots                   # figures/ 에 그림 8장 저장
 dualflow-plots careless --trials 50   # fig5 논문용 (기본 10회는 ±3%p 흔들린다)
 python -m dualflow.demo joint    # 특정 파트만
 pytest -q                        # 149개 검증 테스트
@@ -415,7 +415,7 @@ Slow 를 부르는 의미가 없어진다(오탐이 아니라 결정을 이미 �
 `test_authority_beats_confidence` 가 경험을 10회 강제 주입해도 권한 위반은 여전히
 차단됨을 확인한다.
 
-### 실험 ⑤ — Authority Feedback Loop: scope 협상 (§7-2 구현)
+### 실험 ⑤ — Authority Feedback Loop: scope 협상 (§7-2 구현, `fig7`)
 
 DelegationBench-mini 9개와는 별도의 mini-set 이다(`scope_negotiation_tasks()`) —
 섞으면 분모가 10개로 바뀌어 기존 표의 모든 퍼센트(예: 44.4%=4/9)가 흔들리기
@@ -462,7 +462,7 @@ amplification 으로 이어지는 것을 non-amplification invariant 가 차단�
 발생하지 않는다), Authority Feedback Loop 는 관여하지 않는다. 그건 별개의
 intent confirmation 문제이고, 실제 LLM 평가에서 다시 나타날 가능성이 크다.
 
-### 실험 ⑥ — Adaptive Verification: 언제 A 에게 다시 물어볼 것인가 (§7-2 확장)
+### 실험 ⑥ — Adaptive Verification: 언제 A 에게 다시 물어볼 것인가 (§7-2 확장, `fig8`)
 
 실험 ⑤ 는 "왜 Authority Feedback Loop 가 필요한가" 를 보였을 뿐, 매번 A 를
 부르면 검토율이 1.00 이 된다(연구의 출발점인 개입 최소화와 충돌 — 실험④ 의
@@ -594,7 +594,7 @@ Authority Flow 는 아무것도 막지 못한다. 실제 배치 시 이 부분�
 | `src/dualflow/bench.py` | DelegationBench-mini 9개 시나리오 + belief 조작 변형 + scope 협상 mini-set + 순차 시나리오 |
 | `src/dualflow/llm.py` | LLM fallback 인터페이스 + 실제 API 어댑터 골격 |
 | `src/dualflow/demo.py` | 11개 실험 (텍스트) |
-| `src/dualflow/plots.py` | 그림 5장 생성 (matplotlib) |
+| `src/dualflow/plots.py` | 그림 8장 생성 (matplotlib) |
 | `tests/` | 149개 — 비증폭 정리, 엔트로피 성질, 종료성, 게이팅, ablation, 공격 실험, SAGE 재현, Authority Feedback, Adaptive Verification |
 
 ## 6. 실제 LLM 붙이기
