@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import random
 
-from dualflow.authority_feedback import AuthorityFeedback, FeedbackDecision, run_feedback
+from dualflow.authority_feedback import (
+    AuthorityFeedback, FeedbackDecision, VerifiedAuthorityStore, run_feedback,
+)
 from dualflow.capability import Budget, Privilege, check_authority
 from dualflow.framework import Config, DelegationTask, DelegationVerifier, EXECUTE, REJECT
 from dualflow.llm import ScriptedJudge
@@ -216,3 +218,104 @@ class TestPipelineIntegration:
         v = DelegationVerifier(cfg, ExperienceStore(), ScriptedJudge({task.spec: truth}))
         r = v.run(task)
         assert r.cost(cfg) == r.n_authority_feedback * cfg.cost_authority_feedback
+
+
+# --------------------------------------------------------------------------
+class TestVerifiedAuthorityStore:
+    """§7-4 — "언제 A 에게 다시 물어볼 것인가" 의 상태."""
+
+    def test_agreement_ratio_of_a_single_repeated_value_is_one(self):
+        s = VerifiedAuthorityStore()
+        v = I("read", "file", "/reports/2026-08/")
+        for _ in range(3):
+            s.record("k", v)
+        assert s.n_confirmed("k") == 3 and s.agreement_ratio("k") == 1.0 and s.best("k") == v
+
+    def test_a_differing_confirmation_resets_stale_history(self):
+        """드리프트 감지 — 이력과 다른 값이 새로 확인되면 낡은 이력을 버린다.
+        그래야 오래된 값의 개수가 새 값을 영구히 압도하지 않는다."""
+        s = VerifiedAuthorityStore()
+        old = I("read", "file", "/reports/2026-08/")
+        new = I("read", "file", "/reports/2026-09/")
+        for _ in range(5):
+            s.record("k", old)
+        s.record("k", new)
+        assert s.n_confirmed("k") == 1 and s.best("k") == new  # 5개가 아니라 리셋된 1개
+
+    def test_verified_history_alone_can_never_widen_authority(self):
+        """Verified Experience 는 권한을 만들어내는 source 가 아니라 현재 권한을
+        좁히는 hint 일 뿐이다. 이력에 지금 예산보다 넓은 값이 들어 있어도(예:
+        예산이 좁아지기 전에 쌓인 기록), auto-restrict 결과는 항상
+        `C_adaptive = C_experience ∩ C_current_budget` 로 현재 예산 안에
+        재교집합된다 — 이력이 그대로 새는 경로가 없다."""
+        eff = Budget.of(Privilege("read", "file", "/reports/2026-08/"))
+        verified = VerifiedAuthorityStore()
+        wide_history = I("read", "file", "/reports/")   # 지금 예산보다 넓은 낡은 이력
+        for _ in range(5):
+            verified.record("k", wide_history)
+        proposal = I("read", "file", "/reports/")
+        principal = mk_principal(I("read", "file", "/reports/2026-08/"))
+        r = run_feedback(proposal, eff, principal, verified=verified, key="k")
+        assert r.resolved and r.confirmed.interpretation.privilege() in eff
+        assert r.confirmed.interpretation.scope == "/reports/2026-08/"  # 넓은 이력이 아니라 현재 예산으로 좁혀짐
+        assert r.auto_restricted                                        # A 에게 묻지 않고도 안전
+
+
+# --------------------------------------------------------------------------
+class TestAdaptiveVerification:
+    """§7-4 실험 ⑥ — run_sequence() 로 A(반복)/B(drift)/C(조작) 세 시나리오를
+    한 번에 확인한다. Adaptive 는 "Authority 검사를 할지" 가 아니라 "Principal
+    에게 실제로 물어볼지" 만 결정한다 — no_grant/condition_missing 은 여전히
+    하드 리젝트고, scope_exceeded 일 때만 검증된 이력을 먼저 본다."""
+
+    def _rounds(self, **cfg_kw):
+        from dualflow.bench import build_judge, scope_negotiation_sequence
+        from dualflow.framework import run_sequence
+        tasks = scope_negotiation_sequence()
+        # use_experience=False — 일반 Semantic ExperienceStore(entropy 쪽)가
+        # 끼어들면 Fast 가 clarification 만으로 먼저 풀려버려서, Authority
+        # 축의 adaptive gate 를 독립적으로 관찰할 수 없다.
+        cfg = Config(mode="fast", use_experience=False, **cfg_kw)
+        return run_sequence(cfg, tasks, build_judge(tasks))
+
+    def test_a_stable_repetition_reduces_feedback_after_enough_confirmations(self):
+        rounds = self._rounds()
+        early, late = rounds[:3], rounds[3:5]     # round 0-2 vs 3-4 (같은 위임 반복)
+        assert all(r.n_authority_feedback == 1 for r in early)     # 매번 실제로 물어봄
+        assert all(r.n_authority_feedback == 0 for r in late)      # 이후엔 안 물어봄
+        assert all(r.authority_auto_restricted for r in late)
+        assert all(r.decision == EXECUTE and r.interpretation.scope == "/reports/2026-08/"
+                  for r in early + late)
+
+    def test_b_legitimate_drift_reactivates_feedback(self):
+        rounds = self._rounds()
+        drift = rounds[5]                          # round 5 — A 가 실제로 범위를 바꿈
+        assert drift.n_authority_feedback == 1 and not drift.authority_auto_restricted
+        assert drift.decision == EXECUTE and drift.interpretation.scope == "/reports/2026-09/"
+        # 낡은 이력(8월, 3회)이 새 값을 압도하지 않는다 — 리셋되고 새로 1부터 센다.
+        assert rounds[4].verified_n == 3            # drift 직전까지의 8월 이력
+        assert drift.verified_n == 1                # drift 직후 리셋됨
+
+    def test_b_reconverges_after_repeated_confirmation_of_the_new_scope(self):
+        rounds = self._rounds()
+        post_drift = rounds[6:8]                    # round 6-7 — 바뀐 범위가 다시 반복
+        assert all(r.n_authority_feedback == 1 for r in post_drift)   # 아직 재확립 중
+        assert rounds[7].verified_n == 3 and rounds[7].verified_agreement == 1.0
+
+    def test_c_manipulated_proposal_cannot_fool_auto_restrict(self):
+        """공격이 B 의 후보를 H=0 으로 조작해도(§ belief 조작과 같은 패턴),
+        auto-restrict 는 B 의 후보가 아니라 (A 가 실제로 확인해준) 검증된
+        이력과 (위임 예산에서 나온) 현재 상한의 교집합만 본다 — 조작된 값은
+        아예 입력으로 쓰이지 않는다."""
+        rounds = self._rounds()
+        manipulated = rounds[8]                     # round 8 — candidates=[(overbroad,1.0)]
+        assert manipulated.decision == EXECUTE
+        assert manipulated.interpretation.scope == "/reports/2026-09/"   # 공격 목표(전체)가 아니라 진짜 값
+        assert manipulated.authority_auto_restricted                     # A 에게 묻지도 않고 막아냄
+
+    def test_disabling_verified_experience_removes_the_adaptive_gate(self):
+        """use_verified_experience=False 면 매번 실제로 물어본다 — adaptive 는
+        opt-in 이지 Authority Feedback Loop 자체의 필수 조건이 아니다."""
+        rounds = self._rounds(use_verified_experience=False)
+        assert all(r.n_authority_feedback == 1 for r in rounds)
+        assert all(not r.authority_auto_restricted for r in rounds)

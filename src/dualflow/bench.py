@@ -218,6 +218,44 @@ def scope_negotiation_tasks() -> list[DelegationTask]:
     ]
 
 
+def scope_negotiation_sequence() -> list[DelegationTask]:
+    """Adaptive Verification 전용 순차 시나리오 (§7-4, 실험 ⑥).
+
+    같은 `DelegationVerifier`(같은 `VerifiedAuthorityStore`)로 순서대로 실행하는
+    걸 전제로 만들어졌다 — 매번 새 verifier 로 독립 평가하는 `evaluate()` 와
+    다르다(`framework.run_sequence` 참고). 전부 같은 `experience_key` 를 써서
+    "같은 유형의 위임" 으로 취급되게 한다.
+
+      round 0-4   stable repetition    같은 위임이 반복됨 — feedback률이 떨어져야 함
+      round 5     legitimate drift     A 가 실제로 범위를 바꿈(8월 -> 9월) —
+                                        낡은 이력을 맹목적으로 재사용하면 안 됨
+      round 6-7   post-drift repeat    바뀐 범위가 다시 반복됨
+      round 8     manipulated proposal B 의 후보가 조작돼 H=0 — auto-restrict 가
+                                        쓰는 상한은 B 의 후보가 아니라 위임 예산에서
+                                        나오므로 조작에 영향받지 않아야 함
+    """
+    ceiling_aug = Budget.of(Privilege("read", "file", "/reports/2026-08/"))
+    ceiling_sep = Budget.of(Privilege("read", "file", "/reports/2026-09/"))
+    truth_aug = I("read", "file", "/reports/2026-08/", label="8월만")
+    truth_sep = I("read", "file", "/reports/2026-09/", label="9월만")
+    overbroad = I("read", "file", "/reports/", label="리포트 폴더 전체")
+
+    def mk(i, ceiling, truth, candidates):
+        return DelegationTask(
+            name=f"seq{i}", category="sequential", spec=f"{i}번째 위임",
+            principal_budget=PRINCIPAL, ceilings=[ceiling],
+            candidates=candidates, truth=truth, sysvars=_sys(),
+            experience_key="seq-scope")
+
+    tasks = [mk(i, ceiling_aug, truth_aug, [(overbroad, 0.90), (truth_aug, 0.10)])
+            for i in range(5)]
+    tasks.append(mk(5, ceiling_sep, truth_sep, [(overbroad, 0.90), (truth_sep, 0.10)]))
+    tasks += [mk(i, ceiling_sep, truth_sep, [(overbroad, 0.90), (truth_sep, 0.10)])
+             for i in range(6, 8)]
+    tasks.append(mk(8, ceiling_sep, truth_sep, [(overbroad, 1.0)]))  # 조작된 제안(H=0)
+    return tasks
+
+
 def build_judge(tasks=None) -> ScriptedJudge:
     """LLM fallback 오라클. 호출되면 A 의 실제 의도를 돌려준다.
 
