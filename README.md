@@ -14,7 +14,7 @@ python -m dualflow.demo fastslow attack careless   # 필요한 것만
 dualflow-plots                   # figures/ 에 그림 5장 저장
 dualflow-plots careless --trials 50   # fig5 논문용 (기본 10회는 ±3%p 흔들린다)
 python -m dualflow.demo joint    # 특정 파트만
-pytest -q                        # 80개 검증 테스트
+pytest -q                        # 119개 검증 테스트
 ```
 
 ---
