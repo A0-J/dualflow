@@ -71,7 +71,74 @@ JOINT VERIFICATION   E = Authority ∩ Semantic  +  매칭 검증 → Execute / 
 | Clarification | `select_question`, `information_gain` | SAGE-Agent Def.4를 IG로 재정의 |
 | LLM 의미 판단 | `llm.LLMJudge` (fallback) | SAGE-Agent(상시) → fallback 으로 격하 |
 | 매칭 검증 | `rule_engine.match_intent`, `sim_path` | SAGE-Bench Eq.(6) |
+| Verified Authority Store / Adaptive Gate | `authority_feedback.VerifiedAuthorityStore` | 신규 (§7-2 확장) |
 | Execute / Reject | `framework.DelegationVerifier.run` | — |
+
+### Core Mechanism vs Optimization Layer
+
+4단계까지 끝낸 지금, 전체 구조를 두 층으로 고정한다. **Core 만으로도 안전하게
+동작해야 한다** — Verified Experience 가 하나도 없어도(cold-start) correctness
+가 무너지면 안 된다는 게 이 구분의 존재 이유다.
+
+```
+Core Mechanism ── 안전성을 만드는 부분 (Experience 없이도 항상 동작)
+  1. Semantic Flow           semantic uncertainty / clarification
+  2. Authority Flow          capability / scope / condition validation
+  3. Authority Feedback Loop APPROVE / CORRECT / RESTRICT / REJECT
+  4. Joint Verification      confirmed authority 안에서 최종 실행 검증
+
+Optimization Layer ── 개입 "비용" 을 줄이는 부분 (있으면 싸지고, 없어도 안전함은 그대로)
+  Verified Authority Store → Adaptive Feedback Gate → 필요할 때만 Principal Feedback
+```
+
+Optimization Layer 의 목적은 **새로운 권한을 만들어내는 게 아니라, 이미
+Principal 이 검증한 결과를 안전하게 재사용해 반복적인 feedback 비용을 줄이는
+것**이다. 그래서 이 층을 완전히 꺼도(`use_verified_experience=False`) Core
+만으로 동일한 안전성을 낸다 — 단지 매번 A 를 부를 뿐이다.
+
+**Verified Authority Experience 는 일반 Semantic Experience 와 다른 것이다.**
+`semantic.ExperienceStore` 는 "이 요청을 과거엔 어떻게 해석했는가" — 실행된
+아무 해석이나 담는다. `authority_feedback.VerifiedAuthorityStore` 는
+
+$$ E_v = \{\, \text{authority state Principal 이 확인해주고, 시스템이 현재
+예산에 대해 재검증한 것} \,\} $$
+
+만 담는다. **admission 조건**(둘 중 하나라도 빠지면 저장 안 함):
+
+```
+B Proposal → Principal Feedback(Correct/Restrict/Approve)
+           → Authority 재검증 → Joint Verification → EXECUTE
+           → VerifiedAuthorityStore.record()
+```
+
+즉 "Principal confirmation + authority revalidation + successful execution
+을 모두 거친 기록만" 이다 — auto-restrict 로 재사용된 결과는 다시 기록하지
+않는다(그러면 캐시가 스스로를 강화하는 순환이 생긴다, `framework.py` 참고).
+
+**Adaptive Gate** 는 일부러 단순하다 — risk score 없이 두 조건뿐이다:
+
+$$ n_{\text{confirmed}} \ge 3 \quad\text{and}\quad \text{agreement\_ratio} \ge 0.8
+\;\Rightarrow\; \text{Feedback 생략 가능} $$
+
+그렇지 않으면(cold-start, 이력 부족, agreement 낮음, drift 감지) Principal
+Feedback 으로 간다.
+
+**가장 중요한 안전 invariant** — Optimization Layer 가 켜져 있어도 이 부등식은
+절대 깨지지 않는다:
+
+$$ C_{\text{adaptive}} = C_{\text{experience}} \cap C_{\text{current budget}}
+\;\subseteq\; C_{\text{current budget}} \;\subseteq\; C_A $$
+
+과거 Experience 가 무엇을 기억하고 있든 **현재 위임된 권한보다 넓어질 수
+없다** — Verified Experience 는 권한을 부여하는 source 가 아니라 **현재
+권한을 좁히는 hint** 일 뿐이다(`test_verified_history_alone_can_never_widen_authority`
+가 이력에 지금 예산보다 넓은 값이 들어 있어도 결과가 항상 현재 예산 안으로
+재교집합됨을 확인한다).
+
+**Verified history 는 재사용 가능하지만 영구하지 않다.** 위임 범위가 실제로
+바뀌면(intent drift) 새로 확인된 값이 낡은 이력과 다르므로, `record()` 가
+낡은 이력을 리셋하고 새 이력을 처음부터 다시 쌓는다 — 그래서 Verified
+Experience 는 "낡아버린 정책/캐시" 처럼 보이지 않는다(§3 실험⑥).
 
 ## 2. RQ 대응
 
@@ -405,6 +472,20 @@ Adaptive 와 같은 문제의식). `run_sequence()` 로 같은 위임 유형을 
 바뀌면 Feedback 으로 되돌아가는가, C) 조작된 제안(H=0)이 auto-restrict 를 속일
 수 있는가.
 
+```
+Principal
+Feedback     ●   ●   ●           ●   ●   ●
+             │   │   │           │   │   │
+Round        0   1   2   3   4   5   6   7   8
+                         ↑       ↑           ↑
+                   adaptive    drift      manipulated
+                    reuse    (재활성화)    (auto-restrict)
+
+confirmed   ────────────────────┼───────────────────
+scope        2026-08 (×3, 재사용×2)  │  2026-09 (×3, 재사용×1)
+                                 └─ 낡은 이력 리셋
+```
+
 | # | 상황 | A 에게 물어봄 | auto-restrict | 이력 n | agreement | 확정된 scope |
 |---|---|---|---|---|---|---|
 | 0–2 | stable (8월 반복) | 예(매번) | 아니오 | 1→3 | 1.00 | `/reports/2026-08/` |
@@ -430,13 +511,20 @@ Adaptive 와 같은 문제의식). `run_sequence()` 로 같은 위임 유형을 
   `agreement_ratio` 가 오래도록 0.8 을 못 넘는다(직접 확인:
   `test_a_differing_confirmation_resets_stale_history`). round 6-7 에서 9월
   확인이 다시 3회 쌓여 이력이 재구축된다.
-- **C. 조작 → auto-restrict 도 안 속는다.** round 8 은 B 의 후보 집합이 목표
-  해석 하나로 좁혀져 H=0 이 되는, 다른 실험들과 같은 유형의 공격이다. 그런데도
-  auto-restrict 는 A 에게 묻지 않고 **정답**(`/reports/2026-09/`)으로 실행된다
-  — B 의(조작된) 후보를 아예 입력으로 쓰지 않기 때문이다. 재사용 후보는
+- **C. 조작 → auto-restrict 도 안 속는다(단, 범위를 정확히 좁혀서 말할 것).**
+  round 8 은 B 의 후보 집합이 목표 해석 하나로 좁혀져 H=0 이 되는, 다른
+  실험들과 같은 유형의 공격이다. 그런데도 auto-restrict 는 A 에게 묻지 않고
+  **정답**(`/reports/2026-09/`)으로 실행된다 — 재사용 후보가
   `VerifiedAuthorityStore`(A 가 과거에 실제로 확인해준 값)와 `auth.suggested`
-  (위임 예산에서 계산된 현재 상한)의 교집합일 뿐이고, 둘 다 B 의 자기신고 확신과
-  무관하다.
+  (위임 예산에서 계산된 현재 상한)의 교집합일 뿐이고, 둘 다 B 의(조작된) 후보를
+  입력으로 쓰지 않기 때문이다. 다만 "belief 조작에 구조적으로 면역" 이라고
+  넓게 쓰면 과장이다 — **정확히는**: semantic candidate/probability 가
+  조작되더라도, adaptive authority restriction 은 그 candidate 를 입력으로
+  쓰지 않으므로 **현재 위임 예산과 `VerifiedAuthorityStore` 자체가 신뢰
+  가능한 한** 영향을 받지 않는다("immune to semantic-proposal manipulation
+  under trusted authority state"). 공격자가 위임 예산이나
+  `VerifiedAuthorityStore`(즉 experience_key, Principal 의 과거 확인 기록)
+  자체를 조작할 수 있다면 이는 별개의 문제다.
 
 `use_verified_experience=False` 로 끄면 매 라운드 실제로 물어본다 —
 adaptive 는 opt-in 이며 Authority Feedback Loop 자체의 안전성(non-amplification)

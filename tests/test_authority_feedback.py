@@ -242,6 +242,24 @@ class TestVerifiedAuthorityStore:
         s.record("k", new)
         assert s.n_confirmed("k") == 1 and s.best("k") == new  # 5개가 아니라 리셋된 1개
 
+    def test_verified_history_alone_can_never_widen_authority(self):
+        """Verified Experience 는 권한을 만들어내는 source 가 아니라 현재 권한을
+        좁히는 hint 일 뿐이다. 이력에 지금 예산보다 넓은 값이 들어 있어도(예:
+        예산이 좁아지기 전에 쌓인 기록), auto-restrict 결과는 항상
+        `C_adaptive = C_experience ∩ C_current_budget` 로 현재 예산 안에
+        재교집합된다 — 이력이 그대로 새는 경로가 없다."""
+        eff = Budget.of(Privilege("read", "file", "/reports/2026-08/"))
+        verified = VerifiedAuthorityStore()
+        wide_history = I("read", "file", "/reports/")   # 지금 예산보다 넓은 낡은 이력
+        for _ in range(5):
+            verified.record("k", wide_history)
+        proposal = I("read", "file", "/reports/")
+        principal = mk_principal(I("read", "file", "/reports/2026-08/"))
+        r = run_feedback(proposal, eff, principal, verified=verified, key="k")
+        assert r.resolved and r.confirmed.interpretation.privilege() in eff
+        assert r.confirmed.interpretation.scope == "/reports/2026-08/"  # 넓은 이력이 아니라 현재 예산으로 좁혀짐
+        assert r.auto_restricted                                        # A 에게 묻지 않고도 안전
+
 
 # --------------------------------------------------------------------------
 class TestAdaptiveVerification:
