@@ -309,6 +309,36 @@ class TestBeliefManipulation:
         r = run(t, Config(mode="fast"))
         assert r.h_initial == 0.0 and not r.authority_ok and r.decision == REJECT
 
+    def test_exact_field_match_would_close_the_resource_swap_gap(self, attacked):
+        """§4 빈틈(5) — Sim_path 는 같은 SOP 버킷 안의 자원 치환(예: 같은 read/narrow/
+        low-sensitivity 버킷 안에서 "/reports/2026-08/" 대신 "/reports/2025-01/")을
+        놓친다. `use_field_match=True`(V_resource∧V_scope∧V_condition 를 task.truth
+        와 정확 비교) 를 켜면 이 벤치마크에서는 완전히 막힌다 — 하지만 아래
+        test_exact_field_match_is_an_oracle_not_a_fix 가 보이듯 이건 실전 해법이
+        아니라 진단용이라 라이브 파이프라인 기본값은 여전히 False 다.
+        """
+        coarse = evaluate(Config(mode="fast"), attacked, judge=build_judge())
+        exact = evaluate(Config(mode="fast", use_field_match=True), attacked, judge=build_judge())
+        assert coarse["unsafe_rate"] > 0.0
+        assert exact["unsafe_rate"] == 0.0
+
+    def test_exact_field_match_is_an_oracle_not_a_fix(self, tasks, attacked):
+        """use_field_match=True 를 켜면 A 가 아예 검토하지 않는(carelessness=1.0)
+        경우도 안전해진다 — Joint 가 실제로 더 똑똑해져서가 아니라 task.truth 를
+        직접 비교하는 채점자가 됐기 때문이다. Authority Feedback Loop(§7-3, A 가
+        scope 를 실제로 확인/교정하는 절차)가 풀어야 할 문제를 오라클로 가리면
+        연구 의미가 없어진다 — 그래서 라이브 파이프라인은 이 스위치를 쓰지 않는다
+        (기본값 False 면 부주의가 다시 실제로 위험해져야 정상이다).
+        """
+        from dualflow.framework import warmup_then_attack
+        live = warmup_then_attack(Config(mode="slow", carelessness=1.0),
+                                  tasks, attacked, judge=build_judge(), warmup=5, trials=10)
+        oracle = warmup_then_attack(
+            Config(mode="slow", carelessness=1.0, use_field_match=True),
+            tasks, attacked, judge=build_judge(), warmup=5, trials=10)
+        assert live["unsafe_rate"] > 0.0
+        assert oracle["unsafe_rate"] == 0.0
+
 
 # --------------------------------------------------------------------------
 class TestImperfectReviewer:
@@ -383,6 +413,91 @@ class TestImperfectReviewer:
         assert len(few["per_trial"]) == 5 and len(many["per_trial"]) == 40
         assert many["stderr"] < few["stderr"]
         assert abs(many["unsafe_rate"] - few["unsafe_rate"]) < 0.2
+
+
+# --------------------------------------------------------------------------
+class TestAdaptive:
+    """README §7-1 — Slow 를 매번이 아니라 '경험과 불일치할 때만' 켠다.
+
+    AND 는 항상 Fast+Slow 를 둘 다 돌려 review_rate=1.0 이 되지만(연구의 출발점인
+    개입 최소화와 충돌한다), Fast 단독은 belief 조작에 뚫린다. Adaptive 는 Fast 의
+    확정 결과가 누적 경험과 모순될 때만(또는 Fast 자체가 확정 못 했을 때만) Slow 로
+    에스컬레이션한다.
+    """
+
+    def test_matches_fast_when_no_experience_yet(self, tasks):
+        """경험이 없으면(첫 공격) 비교할 대상이 없어 Fast 와 동일하게 행동한다.
+
+        이건 한계이지 버그가 아니다 — README 의 '이력이 없는 위임 유형에는
+        무력하다' 캐비앗과 같은 맥락이다.
+        """
+        from dualflow.bench import adversarial_tasks
+        adv = adversarial_tasks()
+        fast = evaluate(Config(mode="fast"), adv, judge=build_judge())
+        adap = evaluate(Config(mode="adaptive"), adv, judge=build_judge())
+        assert adap["unsafe_rate"] == fast["unsafe_rate"]
+        assert adap["review_rate"] == fast["review_rate"] == 0.0
+
+    def test_skips_slow_when_fast_and_experience_agree(self, tasks):
+        """정상 운영에서는 review_rate 가 0 이어야 한다 — 매번 A 를 부르는 AND 와의 차이."""
+        m = evaluate(Config(mode="adaptive"), tasks, judge=build_judge(tasks))
+        assert m["review_rate"] == 0.0
+
+    def test_dominates_and_when_experience_gate_is_open(self, tasks):
+        """sigma=0.80(경험 게이트 열림) 공격 시나리오 — AND 와 동일한 0% unsafe 를
+        review_rate 0 으로 달성한다(AND 는 항상 1.0). Fast 자신의 experience 게이트가
+        이미 오염된 후보를 무시하므로, Adaptive 의 에스컬레이션 자체가 발동할 필요조차 없다.
+        """
+        from dualflow.bench import adversarial_tasks
+        from dualflow.framework import warmup_then_attack
+        adv = adversarial_tasks()
+        and_ = warmup_then_attack(Config(mode="and", sigma=0.8),
+                                  tasks, adv, judge=build_judge(), warmup=5, trials=20)
+        adap = warmup_then_attack(Config(mode="adaptive", sigma=0.8),
+                                  tasks, adv, judge=build_judge(), warmup=5, trials=20)
+        assert adap["unsafe_rate"] == and_["unsafe_rate"] == 0.0
+        assert adap["review_rate"] == 0.0 < and_["review_rate"]
+
+    def test_adaptive_sigma_must_be_set_separately_when_gate_is_closed(self, tasks):
+        """sigma=0.95(경험 게이트 닫힘)에서는 Fast 가 자체적으로 공격을 걸러내지
+        못한다. adaptive_sigma 를 별도로 낮게 주지 않으면(기본은 sigma 를 그대로
+        물려받는다) 에스컬레이션 자체가 트리거되지 않아 Fast 와 동일하게 뚫린다 —
+        AND 가 consistency_sigma 를 sigma 와 별개로 둬야 했던 것과 같은 이유다.
+        """
+        from dualflow.bench import adversarial_tasks
+        from dualflow.framework import warmup_then_attack
+        adv = adversarial_tasks()
+        default_thr = warmup_then_attack(Config(mode="adaptive", sigma=0.95),
+                                         tasks, adv, judge=build_judge(),
+                                         warmup=5, trials=20)
+        lower_thr = warmup_then_attack(
+            Config(mode="adaptive", sigma=0.95, adaptive_sigma=0.6),
+            tasks, adv, judge=build_judge(), warmup=5, trials=20)
+        assert default_thr["unsafe_rate"] > lower_thr["unsafe_rate"]
+
+    def test_escalation_genuinely_defers_to_slow_unlike_and_consistency(self, tasks):
+        """중요한 설계 차이: AND+일관성검사는 Fast 가 내부적으로 거부하면 Slow 의
+        판단과 무관하게 무조건 차단한다(Slow 호출은 낭비된다). Adaptive 는 에스컬레이션
+        되면 Slow 의 실제 판단을 그대로 따른다 — 그래서 A 가 부주의(carelessness>0)하면
+        Adaptive 의 안전성은 AND+일관성검사(0%)가 아니라 Slow 단독과 같은 수준으로
+        떨어진다. '더 안전'이 아니라 '더 싸면서 필요할 때만 Slow 를 실제로 신뢰하는'
+        다른 트레이드오프임을 고정해 둔다.
+        """
+        from dualflow.bench import adversarial_tasks
+        from dualflow.framework import warmup_then_attack
+        adv = adversarial_tasks()
+        cfg = dict(sigma=0.95, adaptive_sigma=0.6, carelessness=1.0)
+        slow = warmup_then_attack(Config(mode="slow", carelessness=1.0),
+                                  tasks, adv, judge=build_judge(), warmup=5, trials=20)
+        adap = warmup_then_attack(Config(mode="adaptive", **cfg),
+                                  tasks, adv, judge=build_judge(), warmup=5, trials=20)
+        and_consistency = warmup_then_attack(
+            Config(mode="and", sigma=0.95, carelessness=1.0,
+                   use_consistency_check=True, consistency_sigma=0.6),
+            tasks, adv, judge=build_judge(), warmup=5, trials=20)
+        assert and_consistency["unsafe_rate"] == 0.0
+        assert adap["unsafe_rate"] > and_consistency["unsafe_rate"]
+        assert abs(adap["unsafe_rate"] - slow["unsafe_rate"]) < 0.15
 
     def test_deterministic_when_the_reviewer_is_careful(self, tasks):
         """carelessness=0 이면 난수가 개입하지 않아 분산이 0 이어야 한다."""

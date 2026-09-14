@@ -24,7 +24,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Iterable, Sequence
 
-from .capability import Privilege
+from .capability import Privilege, scope_leq
 
 DIMENSIONS = ("action", "resource", "scope", "condition")
 
@@ -285,3 +285,43 @@ class Principal:
             return Review("correct", self.truth)
         self.transcript.append((summary, "그 부분은 저도 확실하지 않습니다"))
         return Review("unsure", proposed)
+
+    # ---- Authority Feedback Loop: 권한 범위 협상 --------------------------
+    def review_authority(self, proposed: Interpretation, suggested: Interpretation):
+        """B 가 권한 상한을 넘겨 제안했을 때 A 가 범위를 확인/축소해준다.
+
+        `review()` 와 묻는 것이 다르다 — "의미가 맞는지" 가 아니라 "이 범위로
+        좁혀도 내가 원하는 걸 할 수 있는지" 다. carelessness/overcaution 을
+        review() 와 같은 의미로 재사용한다: 부주의하면 범위 밖 제안을 확인 없이
+        그대로 승인해버리고(그 결과 non-amplification 검사가 이후 단계에서
+        따로 걸러내야 한다), 과잉신중하면 이미 충분한 제안도 괜히 반려한다.
+        """
+        from .authority_feedback import AuthorityFeedback, FeedbackDecision  # 순환 참조 방지
+
+        summary = f"제안: {proposed} 는 권한 밖 — 최대 {suggested} 까지 가능"
+
+        if self.rng.random() < self.carelessness:
+            self.transcript.append((summary, "(확인 안 하고) 네 그걸로 하세요"))
+            return AuthorityFeedback(FeedbackDecision.APPROVE, proposed)
+
+        truth = self.truth
+        same_target = truth.action == suggested.action and truth.resource == suggested.resource
+        fits = same_target and scope_leq(truth.scope, suggested.scope)
+
+        if not fits:
+            self.transcript.append((summary, "그 범위로는 제가 원하는 걸 할 수 없습니다"))
+            return AuthorityFeedback(FeedbackDecision.REJECT, None)
+
+        if truth.scope == suggested.scope and truth.condition <= suggested.condition:
+            if self.rng.random() < self.overcaution:
+                self.transcript.append((summary, "(괜히) 그 범위도 다시 확인해주세요"))
+                return AuthorityFeedback(FeedbackDecision.REJECT, None)
+            self.transcript.append((summary, f"네, {suggested} 까지만 하면 됩니다"))
+            return AuthorityFeedback(FeedbackDecision.RESTRICT, suggested)
+
+        if "scope" in self.refuses:
+            self.transcript.append((summary, f"정확히는 모르겠지만 {suggested} 까지면 안전합니다"))
+            return AuthorityFeedback(FeedbackDecision.RESTRICT, suggested)
+
+        self.transcript.append((summary, f"아니요, 정확히는: {truth}"))
+        return AuthorityFeedback(FeedbackDecision.CORRECT, truth)

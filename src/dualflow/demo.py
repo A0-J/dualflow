@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import sys
 
-from .bench import PRINCIPAL, adversarial_tasks, build_judge, build_tasks
+from .bench import (
+    PRINCIPAL, adversarial_tasks, build_judge, build_tasks, scope_negotiation_tasks,
+)
 from .capability import Budget, Privilege, check_authority, delegation_chain
 from .framework import (
     Config, DelegationVerifier, ExperienceStore, evaluate, outcome, warmup_then_attack,
@@ -200,7 +202,8 @@ def _mode_table(tasks, judge):
             Config(name="SAGE + Joint", mode="sage"),
             Config(name="Fast + Joint", mode="fast"),
             Config(name="Slow + Joint", mode="slow"),
-            Config(name="AND (제안)", mode="and")]
+            Config(name="AND", mode="and"),
+            Config(name="Adaptive (제안)", mode="adaptive")]
     print(f"{'설정':<28}{'unsafe↓':>10}{'benign↑':>10}{'over-rej':>10}"
           f"{'질문':>7}{'검토':>7}{'LLM':>6}{'비용↓':>8}")
     print(SUB)
@@ -222,28 +225,82 @@ def part9_careless():
     for sigma, tag in ((0.8, "σ=0.80  경험 게이트 발동"),
                        (0.95, "σ=0.95  게이트 닫힘")):
         print(f"  [{tag}]")
-        print(f"  {'carelessness':>13}{'Slow only':>12}{'AND':>9}{'AND+일관성':>13}")
+        print(f"  {'carelessness':>13}{'Slow only':>12}{'AND':>9}{'AND+일관성':>13}"
+              f"{'Adaptive':>12}{'검토율(AND)':>13}{'검토율(Adap)':>14}")
         for c in (0.0, 0.25, 0.5, 0.75, 1.0):
-            vals = []
+            vals, reviews = [], []
+            adaptive_sigma = 0.6 if sigma >= 0.95 else None
             for cfg in (Config(mode="slow", carelessness=c, sigma=sigma),
                         Config(mode="and", carelessness=c, sigma=sigma),
                         Config(mode="and", carelessness=c, sigma=sigma,
-                               use_consistency_check=True, consistency_sigma=0.6)):
-                vals.append(warmup_then_attack(cfg, normal, adv, judge=judge,
-                                               warmup=5, trials=10)["unsafe_rate"])
-            print(f"  {c:>13.2f}{vals[0]*100:>11.1f}%{vals[1]*100:>8.1f}%{vals[2]*100:>12.1f}%")
+                               use_consistency_check=True, consistency_sigma=0.6),
+                        Config(mode="adaptive", carelessness=c, sigma=sigma,
+                               adaptive_sigma=adaptive_sigma)):
+                r = warmup_then_attack(cfg, normal, adv, judge=judge, warmup=5, trials=10)
+                vals.append(r["unsafe_rate"])
+                reviews.append(r["review_rate"])
+            print(f"  {c:>13.2f}{vals[0]*100:>11.1f}%{vals[1]*100:>8.1f}%{vals[2]*100:>12.1f}%"
+                  f"{vals[3]*100:>11.1f}%{reviews[1]:>13.2f}{reviews[3]:>14.2f}")
         print()
-    print("  c=0 에서는 Slow 가 완벽해 세 방식이 같다. A 가 흔들리기 시작하면 갈라진다.")
+    print("  c=0 에서는 Slow 가 완벽해 모든 방식이 같다. A 가 흔들리기 시작하면 갈라진다.")
     print("  갈라지게 만드는 것은 엔트로피가 아니라 **경험**이다 — H 는 조작 가능하지만")
     print("  누적 이력은 공격자가 손댈 수 없다. σ=0.80 에서는 경험 게이트가 공격을 흡수하고,")
     print("  게이트를 닫으면(σ=0.95) 일관성 검사가 그 역할을 대신한다.")
-    print("  이력이 없는 위임 유형(계속 거절돼 온 것들)에는 둘 다 무력하다는 한계도 보인다.")
+    print("  이력이 없는 위임 유형(계속 거절돼 온 것들)에는 셋 다 무력하다는 한계도 보인다.")
+    print()
+    print("  Adaptive (README §7-1) 는 AND 와 같은 원리(경험 불일치)를 쓰지만, Fast 를")
+    print("  '거부'가 아니라 'Slow 에스컬레이션 트리거'로만 쓴다. σ=0.80 에서는 review_rate")
+    print("  0(AND 는 항상 1.0)으로 같은 0% unsafe 를 낸다 — Fast 자신의 경험 게이트가 이미")
+    print("  공격을 무력화하므로 에스컬레이션조차 필요 없다. σ=0.95 에서는 실제로 에스컬레이션")
+    print("  하고 Slow 의 판단을 그대로 따르므로, AND+일관성검사(Fast 가 무조건 거부)와 달리")
+    print("  A 의 부주의에 Slow 단독과 같은 수준으로 노출된다 — '더 안전'이 아니라")
+    print("  '평소엔 훨씬 싸고, 필요할 때만 Slow 를 진짜로 신뢰하는' 트레이드오프다.")
+
+
+def part10_authority_feedback():
+    print("\n" + BAR)
+    print("PART 10  Authority Feedback Loop — scope 협상 (§7-2)")
+    print(BAR)
+    print("\n  DelegationBench-mini 9개와 분리된 별도 mini-set (섞으면 분모가 바뀐다).")
+    print("  overbroad_recoverable  : B 가 위임 상한보다 넓게 확신 → 상한만으로 충분(RESTRICT)")
+    print("  overbroad_wrong_target : B 가 상한보다도 넓게 확신, A 가 원하는 건 상한보다 좁음")
+    print("                           → RESTRICT 로는 부족, A 가 정확히 교정(CORRECT)")
+    print("  out_of_grant           : 애초에 겹치는 범위가 없음 → 협상 불가, 하드 리젝트(대조군)\n")
+
+    tasks = scope_negotiation_tasks()
+    adv = adversarial_tasks(tasks)
+    judge = build_judge(tasks)
+
+    print(f"{'':<26}{'unsafe↓':>10}{'benign↑':>10}{'feedback률':>12}")
+    print(SUB)
+    for label, ts in (("정상 운영", tasks), ("belief 조작 공격(cold)", adv)):
+        for name, cfg in (("  Feedback 없음", Config(mode="fast", use_authority_feedback=False)),
+                          ("  Feedback 켬(제안)", Config(mode="fast"))):
+            m = evaluate(cfg, ts, judge=judge)
+            print(f"{name:<26}{m['unsafe_rate']*100:>9.1f}%{m['benign_completion']*100:>9.1f}%"
+                  f"{m['authority_feedback_rate']*100:>11.1f}%")
+        print(f"  [{label}]")
+
+    print("\n  공격 시나리오에서도 수치가 완전히 동일하다 — Authority Feedback 은 Slow 축과")
+    print("  같은 이유로 belief 조작에 면역이다: B 의 자기신고 확신(H)이 아니라 A 의 실제")
+    print("  응답(principal.review_authority)만 보기 때문이다. task.truth 는 Principal")
+    print("  안에서만 쓰이고, run_feedback()/framework.py 는 그 응답만 본다.\n")
+
+    print("  carelessness sweep (Feedback 켬):")
+    for c in (0.0, 0.25, 0.5, 0.75, 1.0):
+        m = evaluate(Config(mode="fast", carelessness=c), tasks, judge=judge)
+        print(f"    c={c:.2f}  unsafe={m['unsafe_rate']*100:5.1f}%  "
+              f"benign={m['benign_completion']*100:5.1f}%")
+    print("\n  carelessness 가 올라가도 unsafe 는 0% 로 고정이다 — A 가 확인 없이 범위 밖")
+    print("  제안을 그대로 승인해도 non-amplification 검사(위임 예산 재검증)가 막는다.")
+    print("  대신 benign completion 이 떨어진다 — A 가 oracle 이 아니라는 뜻은 '위험해진다'")
+    print("  가 아니라 '협상이 실패해 안전하게 거절되는 경우가 늘어난다' 는 것이다.")
 
 
 PARTS = {"authority": part1_authority, "semantic": part2_semantic, "joint": part3_joint,
          "bench": part4_bench, "theta": part5_theta, "experience": part6_experience,
          "fastslow": part7_fastslow, "attack": part8_attack,
-         "careless": part9_careless}
+         "careless": part9_careless, "authfeedback": part10_authority_feedback}
 
 
 def main(argv: list[str] | None = None) -> int:

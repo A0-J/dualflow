@@ -6,15 +6,34 @@
 가져온 부분이 실제로 의도한 대로 작동하는지 실험으로 확인할 수 있게 만들었다.
 LLM 호출 없이 결정론적으로 돌아가며, 실제 모델은 인터페이스 하나만 맞추면 붙는다.
 
+**"Dual" 은 Semantic Flow × Authority Flow 를 말한다 — Fast/Slow 가 아니다.**
+아래 §3 에 Fast/Slow/AND/Adaptive 비교가 많이 나오는데, 이건 Semantic Flow *안에서*
+"B 의 해석을 어떻게 확정할까" 를 고르는 전략일 뿐이다. 이 프레임워크가 실제로 풀려는
+두 문제는 서로 다르다:
+
+- **Semantic uncertainty** — B 가 A 의 요청을 제대로 이해했는가? ("지난달 보고서"
+  가 어느 파일인지 애매함) → entropy/information gain 으로 잰다(§2 RQ1).
+- **Authority consistency** — 해석이 명확해도 실제로 허용된 범위인가? B 가 자기
+  해석에 100% 확신해도(H=0), 위임 상한선 안의 *다른* 자원을 가리킬 수 있다
+  ("/reports/2026-08/" 대신 "/reports/2025-01/") → `low uncertainty ⇏ valid
+  delegation`, 이게 `silent_misread`/belief 조작 실험이 실측으로 보여주는 것이다.
+
+둘 다 확인해야 안전하다(Joint Verification). Fast/Slow/AND/Adaptive 는 그 확인을
+**얼마나 싸게** 할지에 관한 최적화이지, 확인 자체를 대체하지 않는다. §7-2 에서
+확인했듯 현재 verifier 가 가진 정책·권한 정보만으로는 A 가 실제로 의도한 정확한
+resource/scope 를 복원할 수 없다 — `task.truth` 와 직접 비교하면 채점 오라클이
+될 뿐이다. 추가 신뢰 소스가 없다면 A 에게 직접 확인받아야 하고, 그게
+**Authority Feedback Loop**(`authority_feedback.py`, §7-2)다.
+
 ```bash
 pip install -e ".[dev]"
 
-dualflow-demo                    # 9개 실험 전체 (텍스트)
-python -m dualflow.demo fastslow attack careless   # 필요한 것만
+dualflow-demo                    # 10개 실험 전체 (텍스트)
+python -m dualflow.demo fastslow attack careless authfeedback   # 필요한 것만
 dualflow-plots                   # figures/ 에 그림 5장 저장
 dualflow-plots careless --trials 50   # fig5 논문용 (기본 10회는 ±3%p 흔들린다)
 python -m dualflow.demo joint    # 특정 파트만
-pytest -q                        # 119개 검증 테스트
+pytest -q                        # 142개 검증 테스트
 ```
 
 ---
@@ -25,7 +44,10 @@ pytest -q                        # 119개 검증 테스트
 Agent A --위임--> Agent B
   │
   ├─ AUTHORITY FLOW   허용 범위 A 검사 (action·resource·scope·condition)
-  │                   위반 시 즉시 차단 — 하드 제약
+  │                     ├ no_grant / condition_missing → 즉시 차단(하드 제약)
+  │                     └ scope_exceeded → AUTHORITY FEEDBACK LOOP (§7-2)
+  │                                          B 제안 → A 확인/축소(bounded, ≤k회)
+  │                                          → 재검증 → 통과 or 차단
   │
   └─ SEMANTIC FLOW    Experience Score
                        ├ 충분(≥σ) → 자율 판단 ──────────────┐
@@ -41,6 +63,7 @@ JOINT VERIFICATION   E = Authority ∩ Semantic  +  매칭 검증 → Execute / 
 |---|---|---|
 | 허용 범위 A 검사 | `capability.Budget`, `check_authority` | ChainCaps §3.2–3.3 |
 | 위임 체인 감쇠 | `delegation_chain`, `Budget.meet` | ChainCaps Eq.(2), Thm 3.1 |
+| Authority Feedback Loop | `authority_feedback.run_feedback` | 신규 (§7-2) |
 | Action Space·확률분포 | `semantic.Interpretation`, `build_belief` | SAGE-Agent Def.2–3 |
 | Entropy H | `semantic.entropy` | (EVPI → H 로 교체) |
 | 임계치 θ | `Config.theta` | 신규 |
@@ -118,6 +141,8 @@ Semantic Flow 를 세 가지 방식으로 갈라 각각 돌린다. `Config.mode`
 - **Fast** — 엔트로피를 한 번 재고 θ 로 판단. 넘으면 역질의(k회) → LLM fallback.
 - **Slow** — B 가 해석을 정리해 A 에게 제시하고 승인/교정받는다. 엔트로피를 쓰지 않는다.
 - **AND** — Fast 로 좁힌 해석을 A 가 **승인해야만** 통과. 교정 요구는 불일치로 보고 차단한다.
+- **Adaptive** — 평소엔 Fast 만. Fast 가 확정 못 했거나 **누적 경험과 모순될 때만** Slow 로
+  에스컬레이션한다 (`mode="adaptive"`, §3 실험 ④ 참고 — 아래 "Slow 를 언제 켤지" 에 대한 답).
 
 베이스라인 `SAGE-Agent (Eq.2+Def.4)` 는 우리 엔트로피 코드의 스위치를 끈 것이 아니라
 **논문 공식을 그대로 옮긴 별도 구현**이다 (`sage_baseline.py`, §5 참고).
@@ -128,12 +153,17 @@ Semantic Flow 를 세 가지 방식으로 갈라 각각 돌린다. `Config.mode`
 | SAGE + Joint | 11.1% | 40.0% | 40.0% | 0.56 | 0.00 | 1.67 | 17.22 |
 | Fast + Joint | 0.0% | 80.0% | 20.0% | 0.44 | 0.00 | 0.11 | 1.56 |
 | Slow + Joint | 0.0% | **100.0%** | 0.0% | 0.00 | 1.00 | 0.00 | 3.00 |
-| AND (제안) | 0.0% | 80.0% | 20.0% | 0.44 | 1.00 | 0.11 | 4.56 |
+| AND | 0.0% | 80.0% | 20.0% | 0.44 | 1.00 | 0.11 | 4.56 |
+| Adaptive (제안) | 0.0% | 80.0% | 20.0% | 0.44 | **0.00** | 0.11 | **1.56** |
 
 **정상 상황에서는 Slow 가 AND 를 지배한다.** 안전성이 같고, A 의 교정이 `silent_misread`
 를 살려내 benign 100% 를 찍으며, 비용도 더 싸다. 대신 **모든 위임에서 A 를 호출**한다
 (검토율 1.00). 연구의 출발점이 "사람/LLM 개입 최소화" 였으므로 이 결과는
-"Slow 를 켤지 말지" 가 아니라 **"Slow 를 언제 켤지"** 가 진짜 문제라는 뜻이다.
+"Slow 를 켤지 말지" 가 아니라 **"Slow 를 언제 켤지"** 가 진짜 문제였다.
+
+이 파일럿(경험 없는 신선한 `ExperienceStore`)에서는 애초에 경험과 모순될 일이 없으므로
+Adaptive 는 그냥 Fast 와 같다 — 비용·검토율이 Fast 와 동일(1.56, 0.00)하고 AND 보다 싸다.
+Adaptive 가 실제로 갈리는 지점은 경험이 쌓인 뒤 공격이 들어오는 §3 실험 ④ 다.
 
 ### belief 조작 공격 (피드백 ⑥ — "belief 는 공격에 취약")
 
@@ -165,7 +195,13 @@ SAGE-Agent 원 공식에서 무슨 일이 일어나는지부터 보면:
 | SAGE + Joint | 44.4% | 0.0% | 20.0% | 10.00 |
 | Fast + Joint | 44.4% | 0.0% | 20.0% | 0.00 |
 | Slow + Joint | 0.0% | 80.0% | 20.0% | 3.00 |
-| AND (제안) | **0.0%** | 0.0% | 100.0% | 3.00 |
+| AND | **0.0%** | 0.0% | 100.0% | 3.00 |
+| Adaptive (제안) | 44.4% | 0.0% | 20.0% | 0.00 |
+
+Adaptive 가 여기서는 Fast 와 똑같이 뚫린다 — **이건 한계이지 버그가 아니다.** 비교할
+경험 이력이 아직 하나도 없는 "첫 공격" 상황이라, 경험 불일치 신호 자체가 존재하지 않는다.
+이 방어는 "정상 운영으로 이력이 쌓인 뒤 공격이 온다" 는 실험 ③/④ 의 전제 위에서만 작동한다
+— 아래 실험 ④ 참고.
 
 읽는 법:
 
@@ -234,6 +270,70 @@ A 가 흔들리기 시작하면 갈라진다. 그리고 **갈라지게 만드는
 수 없는 과제 유형 — 예: 정의상 항상 반려되는 위임 — 에서는 이 방어가 여전히 무력할
 것으로 예상되지만, 현재 벤치마크에는 그런 과제가 없어 실측하지는 못했다.)
 
+### 실험 ④ — Adaptive DualFlow: Slow 를 언제 켤 것인가 (§7-1 구현)
+
+실험 ③ 은 "AND 가 왜 필요한가" 를 보였을 뿐, §7 이 다음 단계로 지목한 진짜 문항 —
+**"매번 켤지 필요할 때만 켤지"** — 은 그대로 남겨뒀었다. `Config.mode="adaptive"`
+가 그 구현이다: 평소엔 Fast 만 돌리고, Fast 가 확정 못 했거나 **확정 결과가 누적
+경험과 정면으로 모순될 때만** Slow 로 에스컬레이션한다 (`_experience_conflict`,
+`framework.py`). AND 처럼 무조건 승인을 요구하는 대신, 에스컬레이션되면 Slow 의
+판단을 그대로 신뢰한다는 점이 설계의 핵심 차이다.
+
+같은 warmup 5회 → 공격 1회 시나리오, 50회 평균:
+
+**σ=0.80 (경험 게이트 열림)**
+
+| carelessness | Slow only | AND (검토율) | AND+일관성 (검토율) | Adaptive (검토율) |
+|---|---|---|---|---|
+| 0.00 | 0.0% | 0.0% (1.00) | 0.0% (1.00) | 0.0% (**0.00**) |
+| 0.25 | 10.4% | 0.0% (1.00) | 0.0% (1.00) | 0.0% (**0.00**) |
+| 0.50 | 21.1% | 0.0% (1.00) | 0.0% (1.00) | 0.0% (**0.00**) |
+| 0.75 | 32.2% | 0.0% (1.00) | 0.0% (1.00) | 0.0% (**0.00**) |
+| 1.00 | 44.4% | 0.0% (1.00) | 0.0% (1.00) | 0.0% (**0.00**) |
+
+**Adaptive 가 AND 를 그대로 지배한다** — 동일한 0% unsafe 를 검토율 0 으로 낸다.
+이유는 Adaptive 의 에스컬레이션 로직이 아니라 **Fast 자신의 experience 게이트**다.
+σ=0.80 에서는 경험 점수(warmup 5회 → 0.83)가 이미 σ 를 넘어서, Fast 가 오염된
+후보 집합(공격)을 아예 쳐다보지도 않고 경험값을 직접 돌려준다. 에스컬레이션 조건
+("Fast 결과가 경험과 모순") 자체가 성립하지 않으므로 Slow 를 부를 필요가 없다.
+
+**σ=0.95 (게이트 닫힘, `adaptive_sigma=0.6` 로 별도 지정)**
+
+| carelessness | Slow only | AND (검토율) | AND+일관성 (검토율) | Adaptive (검토율) |
+|---|---|---|---|---|
+| 0.00 | 0.0% | 0.0% (1.00) | 0.0% (1.00) | 0.0% (0.44) |
+| 0.25 | 10.4% | 10.4% (1.00) | 0.0% (1.00) | 11.6% (0.44) |
+| 0.50 | 21.1% | 21.1% (1.00) | 0.0% (1.00) | 22.4% (0.44) |
+| 0.75 | 32.2% | 32.2% (1.00) | 0.0% (1.00) | 33.6% (0.44) |
+| 1.00 | 44.4% | 44.4% (1.00) | 0.0% (1.00) | 44.4% (0.44) |
+
+여기서는 경험 게이트가 닫혀 있어 Fast 가 매번 오염된 후보로 판단하므로, 공격 인스턴스의
+44% 정도(warmup 으로 쌓인 경험과 공격 목표가 실제로 다른 과제 비율)에서 에스컬레이션이
+발동한다(검토율 0.44, AND 는 1.00). 그런데 `adaptive_sigma` 를 `sigma` 와 별개로
+낮게 주지 않으면 — 기본값은 `sigma` 를 그대로 물려받는다 — 임계치가 0.95 가 되어 경험
+점수 0.83 이 못 미치고, 에스컬레이션 자체가 트리거되지 않아 Fast 와 동일하게 뚫린다.
+`AND` 가 `consistency_sigma` 를 `sigma` 와 분리해야 했던 것과 같은 이유다.
+
+**여기서 AND+일관성검사(0%)와 Adaptive 가 갈리는 이유가 흥미롭다.** AND+일관성검사는
+Fast 내부에서 경험과 모순되면 `_consistent()` 가 그 자리에서 확정을 거부하고, AND 의
+`agreed = fast.confirmed and slow.confirmed` 조건상 Fast 가 거부한 순간 Slow 의
+실제 판단과 무관하게 무조건 차단된다 — Slow 호출은 일어나지만 그 결과는 버려진다.
+Adaptive 는 반대로 에스컬레이션을 "진짜 질문" 으로 쓴다: Slow 가 승인하면 그대로
+통과시킨다. 그래서 A 가 부주의(carelessness>0)하면 Adaptive 의 안전성은
+AND+일관성검사(0%) 가 아니라 **Slow 단독과 같은 수준**까지 떨어진다(위 표에서
+Adaptive ≈ Slow only, 오차범위 내). 이건 버그가 아니라 설계상 트레이드오프다 —
+"에스컬레이션된 요청은 Slow 의 진짜 판단을 신뢰한다" 와 "경험과 모순되면 Slow 판단과
+무관하게 무조건 막는다" 는 서로 다른 정책이고, 후자가 더 안전한 대신 그 분기에서는
+Slow 를 부르는 의미가 없어진다(오탐이 아니라 결정을 이미 내려놓고 형식적으로만 묻는
+것과 같다).
+
+**요약.** Adaptive 는 review_rate 를 AND 의 1.00 에서 실질적으로 0(σ 게이트가 열려
+있을 때) 또는 그 발동 비율만큼(게이트가 닫혀 있을 때, 0.44)으로 낮추면서, 경험 게이트가
+포착하는 공격에 대해서는 AND 와 동일한 안전성을 낸다. 다만 (1) 경험 이력이 아직 없는
+"첫 공격" 에는 무력하고(위 §3 cold-attack 표), (2) 에스컬레이션된 뒤에는 Slow 자체의
+신뢰도(carelessness)가 그대로 상한선이 된다 — AND+일관성검사처럼 그 상한선 자체를
+없애지는 못한다. `mode="adaptive"`, `tests/test_framework.py::TestAdaptive` 참고.
+
 ### Experience Score 누적 (`demo.py experience`)
 
 같은 유형의 위임을 반복하면:
@@ -247,6 +347,44 @@ A 가 흔들리기 시작하면 갈라진다. 그리고 **갈라지게 만드는
 자율 판단한다. 그래도 Authority Flow 는 매번 동일하게 검사된다 —
 `test_authority_beats_confidence` 가 경험을 10회 강제 주입해도 권한 위반은 여전히
 차단됨을 확인한다.
+
+### 실험 ⑤ — Authority Feedback Loop: scope 협상 (§7-2 구현)
+
+DelegationBench-mini 9개와는 별도의 mini-set 이다(`scope_negotiation_tasks()`) —
+섞으면 분모가 10개로 바뀌어 기존 표의 모든 퍼센트(예: 44.4%=4/9)가 흔들리기
+때문이다. 여기서는 `scope_exceeded` 가 실제로 트리거되는 상황만 모아 Authority
+Feedback Loop 자체를 본다.
+
+| 과제 | 상황 | 협상 결과 |
+|---|---|---|
+| `overbroad_recoverable` | B 가 위임 상한보다 넓게 확신 | 상한 그대로(RESTRICT)면 충분 |
+| `overbroad_wrong_target` | B 가 상한보다도 넓게 확신, A 가 원하는 건 상한보다 좁음 | RESTRICT 로는 부족 — A 가 정확히 교정(CORRECT) |
+| `out_of_grant` | 애초에 겹치는 범위가 없음(대조군) | 협상 불가 — 하드 리젝트 |
+
+| 설정 | unsafe↓ | benign↑ | feedback률 |
+|---|---|---|---|
+| Feedback 없음 | 0.0% | 0.0% | 0.0% |
+| **Feedback 켬(제안)** | 0.0% | **100.0%** | 66.7% |
+
+**공격(belief 조작, cold) 시나리오에서도 수치가 완전히 동일하다.** Authority
+Feedback 은 Slow 축과 같은 이유로 belief 조작에 면역이다 — B 의 자기신고
+확신(H)이 아니라 A 의 실제 응답만 보기 때문이다.
+
+| carelessness | unsafe↓ | benign↑ |
+|---|---|---|
+| 0.00 | 0.0% | 100.0% |
+| 0.25 | 0.0% | 100.0% |
+| 0.50 | 0.0% | 50.0% |
+| 0.75 | 0.0% | 50.0% |
+| 1.00 | 0.0% | 0.0% |
+
+**carelessness 가 올라가도 unsafe 는 0% 로 고정이다.** A 가 확인 없이 범위 밖
+제안을 그대로 승인해도(`AuthorityFeedback(APPROVE, proposed)`) non-amplification
+검사(매 라운드 top 에서 위임 예산 재검증)가 막는다 — Authority Feedback 이 만든
+안전성은 "A 가 항상 옳다" 는 가정에 기대지 않는다. 대신 benign completion 이
+떨어진다: A 가 oracle 이 아니라는 것의 실제 의미는 "위험해진다" 가 아니라
+"협상이 실패해 안전하게 거절되는 경우가 늘어난다"(over-rejection) 는 것이다 —
+§실험③(부주의한 Slow 리뷰어)과 같은 결의 결과가 여기서도 나온다.
 
 ## 4. 구현하며 확인한 선행연구의 빈틈
 
@@ -302,16 +440,17 @@ Authority Flow 는 아무것도 막지 못한다. 실제 배치 시 이 부분�
 
 | 파일 | 역할 |
 |---|---|
-| `src/dualflow/capability.py` | Authority Flow — privilege 순서관계, budget meet, 위임 체인 감쇠 |
-| `src/dualflow/semantic.py` | Semantic Flow — action space, 엔트로피, 경험 점수, 역질의(IG) |
-| `src/dualflow/rule_engine.py` | Joint Verification 의 매칭 — 위임 SOP 그래프, p\*, Sim_path |
+| `src/dualflow/capability.py` | Authority Flow — privilege 순서관계, budget meet, 위임 체인 감쇠, 실패 분류(no_grant/condition_missing/scope_exceeded) |
+| `src/dualflow/semantic.py` | Semantic Flow — action space, 엔트로피, 경험 점수, 역질의(IG), Principal(A 시뮬레이션) |
+| `src/dualflow/rule_engine.py` | Joint Verification 의 매칭 — 위임 SOP 그래프, p\*, Sim_path, exact-field 진단(§7-2) |
+| `src/dualflow/authority_feedback.py` | **Authority Feedback Loop** — scope 협상(§7-2), bounded negotiation, non-amplification |
 | `src/dualflow/framework.py` | 전체 조립, ablation 스위치, 평가 지표 |
 | `src/dualflow/sage_baseline.py` | **SAGE-Agent 원 공식 재현** — Eq.(2), Def.4·5, τ_exec, α |
-| `src/dualflow/bench.py` | DelegationBench-mini 9개 시나리오 + belief 조작 변형 |
+| `src/dualflow/bench.py` | DelegationBench-mini 9개 시나리오 + belief 조작 변형 + scope 협상 mini-set |
 | `src/dualflow/llm.py` | LLM fallback 인터페이스 + 실제 API 어댑터 골격 |
-| `src/dualflow/demo.py` | 9개 실험 (텍스트) |
+| `src/dualflow/demo.py` | 10개 실험 (텍스트) |
 | `src/dualflow/plots.py` | 그림 5장 생성 (matplotlib) |
-| `tests/` | 119개 — 비증폭 정리, 엔트로피 성질, 종료성, 게이팅, ablation, 공격 실험, SAGE 재현 |
+| `tests/` | 142개 — 비증폭 정리, 엔트로피 성질, 종료성, 게이팅, ablation, 공격 실험, SAGE 재현, Authority Feedback |
 
 ## 6. 실제 LLM 붙이기
 
@@ -331,17 +470,40 @@ LLM 을 붙일 때도 **자유 생성이 아니라 후보 중 택일**로 좁혀
 0. **실험 ③ 의 후속.** carelessness 를 A 마다 다르게(에이전트별 신뢰도) 두거나,
    검토 예산(하루 N건)을 제약으로 넣으면 "Slow 를 누구에게, 몇 건에 쓸 것인가" 가
    최적화 문제가 된다. 지금 `warmup_then_attack` 이 그 실험의 골격이다.
-1. **Slow 를 언제 켤 것인가 — 가장 급한 문항.** 항상 켜면 A 의 검토율이 1.00 이 되어
-   연구의 출발점(개입 최소화)과 충돌하고, 안 켜면 belief 조작에 44.4% 가 뚫린다.
-   H 만으로는 위조 여부를 알 수 없다는 것이 실험의 결론이다. 유망한 신호 하나는
-   **경험과의 불일치**다 — `/reports/` 로 4회 확정된 이력이 있는데 갑자기
-   `/finance/` 를 H=0 으로 확신한다면 그 자체가 이상 신호다. `ExperienceStore` 에
-   이미 필요한 통계가 다 들어 있어 트리거로 만들 수 있다.
-2. **권한의 "범위" 와 "유무" 분리 (피드백 ③).** 아직 미구현. `check_authority` 가 둘을
-   한 번에 판정하고 reason 문자열로만 구분한다. 쪼개면 처리 방법이 갈린다 —
-   *유무* 실패(`delete` 권한 자체가 없음)는 재협상 불가한 하드 리젝트지만,
-   *범위* 실패(권한은 있는데 요청이 넓음)는 **역질의로 살릴 수 있다**
-   ("`/reports/` 까지만이면 되나요?"). over-rejection 을 줄이는 실질적 수단이기도 하다.
+1. **Slow 를 언제 켤 것인가 — 1차 구현 완료, §3 실험 ④.** `mode="adaptive"` 가
+   "경험과의 불일치" 를 트리거로 써서 Slow 를 선별 호출한다. 경험 게이트가 열려
+   있으면(σ=0.80) AND 와 동일한 0% unsafe 를 검토율 0 으로 낸다. 다만 두 가지는
+   아직 미해결이다 — (a) 경험 이력이 없는 첫 공격에는 무력하다(콜드스타트), (b)
+   게이트가 닫혀 있을 때(σ=0.95) 에스컬레이션된 요청은 Slow 자체의 신뢰도가 그대로
+   상한선이라 AND+일관성검사(무조건 차단)만큼 안전하지는 않다 — "얼마나 자주 켤까"
+   보다 **"에스컬레이션 이후 Slow 의 판단을 얼마나 신뢰할까"** 가 남은 질문이 됐다.
+   실험 ③ 후속(항목 0)의 에이전트별 신뢰도가 이 신뢰 폭을 정하는 데 바로 쓰일 수 있다.
+2. **Authority Feedback Loop — 1차 구현 완료, §3 실험 ⑤.** 권한의 "범위" 와
+   "유무" 를 분리했다. `check_authority` 가 실패를 `no_grant`(action/resource 자체가
+   없음 — 재협상 불가, 하드 리젝트) / `condition_missing`(조건은 B 가 채울 수 없는
+   값 — 역시 협상 대상 아님) / `scope_exceeded`(action·resource·condition 은 맞는데
+   범위만 넘음 — 협상 가능)로 나누고, `scope_exceeded` 일 때만 위임 예산에서 계산한
+   `suggested`(실제 허용되는 상한)를 제공한다. `authority_feedback.py` 의
+   `run_feedback()` 이 그 위에서 **B 제안 → A 확인/축소(`Principal.review_authority`,
+   APPROVE/CORRECT/RESTRICT/REJECT) → 재검증** 을 bounded(`authority_feedback_max_rounds`,
+   기본 2)로 협상한다. non-amplification 은 매 라운드 top 에서 예산에 대고 다시
+   검증하는 것 자체로 보장된다 — A 가 부주의(`carelessness`)해서 범위 밖 제안을
+   그대로 승인해도 다음 검증이 막는다(그 결과 unsafe 가 아니라 협상 실패로 이어진다).
+
+   **왜 지름길(exact-field 매칭)로는 안 풀리는지 실측으로 먼저 확인했다.** Joint
+   Verification 에 `V_action∧V_resource∧V_scope∧V_condition` 형태로 원본 값을
+   `task.truth` 와 직접 비교하는 exact-field 매칭을 시도해봤다
+   (`match_intent(..., require_fields=True)`, `Config.use_field_match`, 기본 False).
+   벤치마크상으로는 자원 치환 공격을 완전히 막지만, A 가 검토를 아예 안 해도
+   (`carelessness=1.0`) 여전히 unsafe=0% 가 나온다
+   (`test_exact_field_match_is_an_oracle_not_a_fix`). 이건 Joint 가 안전해진 게
+   아니다 — 정확히는, **현재 verifier 가 가진 정책·권한 정보만으로는 A 가 의도한
+   정확한 resource/scope 를 복원할 수 없고, 이를 `task.truth` 와 비교하면 평가
+   오라클이 된다**는 뜻이다. 추가 신뢰 소스(A 의 실제 확인) 없이는 이 문제를 풀 수
+   없다는 게 이 진단 실험의 결론이고, Authority Feedback Loop 는 그 신뢰 소스를
+   정식으로 만든 것이다 — `task.truth` 는 `Principal` 안에서만 쓰이고,
+   `run_feedback()`/`framework.py` 는 `Principal.review_authority()` 의 응답
+   (`ConfirmedAuthority`)만 본다(`test_run_feedback_only_needs_the_review_authority_method`).
 3. **엔트로피를 LLM 에게 물어보는 안 (피드백 ④) 은 권장하지 않는다.** 차별점 표의
    첫 줄이 "저엔트로피 구간은 LLM 호출 자체를 원천 배제" 인데, H 를 LLM 으로 구하면
    모든 위임이 최소 1회 호출하게 되어 LLM률이 11.1% → 100% 로 오른다. 상시 LLM
