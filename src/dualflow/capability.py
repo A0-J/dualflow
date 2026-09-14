@@ -173,27 +173,58 @@ class AuthorityResult:
     effective_budget: Budget
     requested: Privilege
     reason: str
+    # 실패를 재협상 가능 여부로 나눈다 (Authority Feedback Loop 용).
+    #   None            — allowed=True
+    #   "no_grant"      — action/resource 자체가 없음. 하드 리젝트, 협상 불가.
+    #   "condition_missing" — scope 는 맞는데 필수 조건이 빠짐. 협상 불가(조건은
+    #                     B 가 스스로 채울 수 있는 값이 아니라 시스템 요구사항이다).
+    #   "scope_exceeded" — action/resource/condition 은 맞는데 범위만 넘음.
+    #                     협상 가능 — suggested 가 실제 허용되는 상한을 제시한다.
+    failure_kind: str | None = None
+    suggested: "Privilege | None" = None
 
     def __bool__(self) -> bool:
         return self.allowed
 
 
 def check_authority(effective: Budget, requested: Privilege) -> AuthorityResult:
-    """Sink rule — ChainCaps Eq.(3). 위반 시 즉시 차단(하드 제약)."""
-    ok = requested in effective
-    if ok:
-        reason = "요청 권한이 유효 예산 안에 있음"
-    elif effective.is_empty:
-        reason = "위임 체인에서 유효 예산이 소진됨"
-    else:
-        same = [g for g in effective.generators
-                if g.action == requested.action and g.resource == requested.resource]
-        if not same:
-            reason = f"허용되지 않은 action/resource: {requested.action}:{requested.resource}"
-        elif any(not requested.condition >= g.condition for g in same):
-            missing = set().union(*(g.condition for g in same)) - requested.condition
-            reason = f"필수 조건 미충족: {sorted(missing)}"
-        else:
-            reason = f"scope 위반: {requested.scope} ⊄ " + \
-                     "/".join(sorted(g.scope for g in same))
-    return AuthorityResult(ok, effective, requested, reason)
+    """Sink rule — ChainCaps Eq.(3). 위반 시 즉시 차단(하드 제약).
+
+    scope_exceeded 로 분류될 때만 `suggested` 를 채운다 — 요청 scope 와 (조건을
+    만족하는) 유효 예산 generator 의 scope 의 meet(교집합)이다. 이게 Authority
+    Feedback Loop 가 A 에게 제시할 "이 범위까지는 됩니다" 의 근거가 된다. 위임
+    예산 자체에서 계산되므로 task.truth 를 전혀 보지 않는다 — 오라클이 아니다.
+    """
+    if requested in effective:
+        return AuthorityResult(True, effective, requested, "요청 권한이 유효 예산 안에 있음")
+
+    if effective.is_empty:
+        return AuthorityResult(False, effective, requested,
+                               "위임 체인에서 유효 예산이 소진됨", "no_grant")
+
+    same = [g for g in effective.generators
+            if g.action == requested.action and g.resource == requested.resource]
+    if not same:
+        return AuthorityResult(False, effective, requested,
+            f"허용되지 않은 action/resource: {requested.action}:{requested.resource}", "no_grant")
+
+    scope_compatible = [g for g in same if scope_leq(requested.scope, g.scope)]
+    if scope_compatible:
+        # scope 는 이미 허용 범위 안 — 조건이 문제. 이건 B 가 임의로 채울 수 없는
+        # 값(예: 비식별화 여부)이라 협상 대상이 아니다.
+        missing = set().union(*(g.condition for g in scope_compatible)) - requested.condition
+        return AuthorityResult(False, effective, requested,
+            f"필수 조건 미충족: {sorted(missing)}", "condition_missing")
+
+    # scope 자체가 안 맞음 — 조건을 만족하는 generator 중에서 좁힐 수 있는 최대
+    # 범위를 계산해 제안한다.
+    cond_ok = [g for g in same if requested.condition >= g.condition]
+    best_scope = None
+    for g in cond_ok:
+        m = scope_meet(requested.scope, g.scope)
+        if m is not None and (best_scope is None or scope_leq(best_scope, m)):
+            best_scope = m
+    suggested = (Privilege(requested.action, requested.resource, best_scope, requested.condition)
+                if best_scope else None)
+    reason = f"scope 위반: {requested.scope} ⊄ " + "/".join(sorted(g.scope for g in same))
+    return AuthorityResult(False, effective, requested, reason, "scope_exceeded", suggested)

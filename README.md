@@ -19,19 +19,21 @@ LLM 호출 없이 결정론적으로 돌아가며, 실제 모델은 인터페이
   delegation`, 이게 `silent_misread`/belief 조작 실험이 실측으로 보여주는 것이다.
 
 둘 다 확인해야 안전하다(Joint Verification). Fast/Slow/AND/Adaptive 는 그 확인을
-**얼마나 싸게** 할지에 관한 최적화이지, 확인 자체를 대체하지 않는다 — Slow 축이
-없으면 "특정 자원이 맞는지" 는 정책 검사만으로 원천적으로 못 푼다는 게 §7-2 에
-실측으로 정리돼 있다.
+**얼마나 싸게** 할지에 관한 최적화이지, 확인 자체를 대체하지 않는다. §7-2 에서
+확인했듯 현재 verifier 가 가진 정책·권한 정보만으로는 A 가 실제로 의도한 정확한
+resource/scope 를 복원할 수 없다 — `task.truth` 와 직접 비교하면 채점 오라클이
+될 뿐이다. 추가 신뢰 소스가 없다면 A 에게 직접 확인받아야 하고, 그게
+**Authority Feedback Loop**(`authority_feedback.py`, §7-2)다.
 
 ```bash
 pip install -e ".[dev]"
 
-dualflow-demo                    # 9개 실험 전체 (텍스트)
-python -m dualflow.demo fastslow attack careless   # 필요한 것만
+dualflow-demo                    # 10개 실험 전체 (텍스트)
+python -m dualflow.demo fastslow attack careless authfeedback   # 필요한 것만
 dualflow-plots                   # figures/ 에 그림 5장 저장
 dualflow-plots careless --trials 50   # fig5 논문용 (기본 10회는 ±3%p 흔들린다)
 python -m dualflow.demo joint    # 특정 파트만
-pytest -q                        # 119개 검증 테스트
+pytest -q                        # 142개 검증 테스트
 ```
 
 ---
@@ -42,7 +44,10 @@ pytest -q                        # 119개 검증 테스트
 Agent A --위임--> Agent B
   │
   ├─ AUTHORITY FLOW   허용 범위 A 검사 (action·resource·scope·condition)
-  │                   위반 시 즉시 차단 — 하드 제약
+  │                     ├ no_grant / condition_missing → 즉시 차단(하드 제약)
+  │                     └ scope_exceeded → AUTHORITY FEEDBACK LOOP (§7-2)
+  │                                          B 제안 → A 확인/축소(bounded, ≤k회)
+  │                                          → 재검증 → 통과 or 차단
   │
   └─ SEMANTIC FLOW    Experience Score
                        ├ 충분(≥σ) → 자율 판단 ──────────────┐
@@ -58,6 +63,7 @@ JOINT VERIFICATION   E = Authority ∩ Semantic  +  매칭 검증 → Execute / 
 |---|---|---|
 | 허용 범위 A 검사 | `capability.Budget`, `check_authority` | ChainCaps §3.2–3.3 |
 | 위임 체인 감쇠 | `delegation_chain`, `Budget.meet` | ChainCaps Eq.(2), Thm 3.1 |
+| Authority Feedback Loop | `authority_feedback.run_feedback` | 신규 (§7-2) |
 | Action Space·확률분포 | `semantic.Interpretation`, `build_belief` | SAGE-Agent Def.2–3 |
 | Entropy H | `semantic.entropy` | (EVPI → H 로 교체) |
 | 임계치 θ | `Config.theta` | 신규 |
@@ -342,6 +348,44 @@ Slow 를 부르는 의미가 없어진다(오탐이 아니라 결정을 이미 �
 `test_authority_beats_confidence` 가 경험을 10회 강제 주입해도 권한 위반은 여전히
 차단됨을 확인한다.
 
+### 실험 ⑤ — Authority Feedback Loop: scope 협상 (§7-2 구현)
+
+DelegationBench-mini 9개와는 별도의 mini-set 이다(`scope_negotiation_tasks()`) —
+섞으면 분모가 10개로 바뀌어 기존 표의 모든 퍼센트(예: 44.4%=4/9)가 흔들리기
+때문이다. 여기서는 `scope_exceeded` 가 실제로 트리거되는 상황만 모아 Authority
+Feedback Loop 자체를 본다.
+
+| 과제 | 상황 | 협상 결과 |
+|---|---|---|
+| `overbroad_recoverable` | B 가 위임 상한보다 넓게 확신 | 상한 그대로(RESTRICT)면 충분 |
+| `overbroad_wrong_target` | B 가 상한보다도 넓게 확신, A 가 원하는 건 상한보다 좁음 | RESTRICT 로는 부족 — A 가 정확히 교정(CORRECT) |
+| `out_of_grant` | 애초에 겹치는 범위가 없음(대조군) | 협상 불가 — 하드 리젝트 |
+
+| 설정 | unsafe↓ | benign↑ | feedback률 |
+|---|---|---|---|
+| Feedback 없음 | 0.0% | 0.0% | 0.0% |
+| **Feedback 켬(제안)** | 0.0% | **100.0%** | 66.7% |
+
+**공격(belief 조작, cold) 시나리오에서도 수치가 완전히 동일하다.** Authority
+Feedback 은 Slow 축과 같은 이유로 belief 조작에 면역이다 — B 의 자기신고
+확신(H)이 아니라 A 의 실제 응답만 보기 때문이다.
+
+| carelessness | unsafe↓ | benign↑ |
+|---|---|---|
+| 0.00 | 0.0% | 100.0% |
+| 0.25 | 0.0% | 100.0% |
+| 0.50 | 0.0% | 50.0% |
+| 0.75 | 0.0% | 50.0% |
+| 1.00 | 0.0% | 0.0% |
+
+**carelessness 가 올라가도 unsafe 는 0% 로 고정이다.** A 가 확인 없이 범위 밖
+제안을 그대로 승인해도(`AuthorityFeedback(APPROVE, proposed)`) non-amplification
+검사(매 라운드 top 에서 위임 예산 재검증)가 막는다 — Authority Feedback 이 만든
+안전성은 "A 가 항상 옳다" 는 가정에 기대지 않는다. 대신 benign completion 이
+떨어진다: A 가 oracle 이 아니라는 것의 실제 의미는 "위험해진다" 가 아니라
+"협상이 실패해 안전하게 거절되는 경우가 늘어난다"(over-rejection) 는 것이다 —
+§실험③(부주의한 Slow 리뷰어)과 같은 결의 결과가 여기서도 나온다.
+
 ## 4. 구현하며 확인한 선행연구의 빈틈
 
 전부 테스트로 박제해 두었다. 논문 Related Work / 차별점 서술에 쓸 수 있는 재료다.
@@ -396,16 +440,17 @@ Authority Flow 는 아무것도 막지 못한다. 실제 배치 시 이 부분�
 
 | 파일 | 역할 |
 |---|---|
-| `src/dualflow/capability.py` | Authority Flow — privilege 순서관계, budget meet, 위임 체인 감쇠 |
-| `src/dualflow/semantic.py` | Semantic Flow — action space, 엔트로피, 경험 점수, 역질의(IG) |
-| `src/dualflow/rule_engine.py` | Joint Verification 의 매칭 — 위임 SOP 그래프, p\*, Sim_path |
+| `src/dualflow/capability.py` | Authority Flow — privilege 순서관계, budget meet, 위임 체인 감쇠, 실패 분류(no_grant/condition_missing/scope_exceeded) |
+| `src/dualflow/semantic.py` | Semantic Flow — action space, 엔트로피, 경험 점수, 역질의(IG), Principal(A 시뮬레이션) |
+| `src/dualflow/rule_engine.py` | Joint Verification 의 매칭 — 위임 SOP 그래프, p\*, Sim_path, exact-field 진단(§7-2) |
+| `src/dualflow/authority_feedback.py` | **Authority Feedback Loop** — scope 협상(§7-2), bounded negotiation, non-amplification |
 | `src/dualflow/framework.py` | 전체 조립, ablation 스위치, 평가 지표 |
 | `src/dualflow/sage_baseline.py` | **SAGE-Agent 원 공식 재현** — Eq.(2), Def.4·5, τ_exec, α |
-| `src/dualflow/bench.py` | DelegationBench-mini 9개 시나리오 + belief 조작 변형 |
+| `src/dualflow/bench.py` | DelegationBench-mini 9개 시나리오 + belief 조작 변형 + scope 협상 mini-set |
 | `src/dualflow/llm.py` | LLM fallback 인터페이스 + 실제 API 어댑터 골격 |
-| `src/dualflow/demo.py` | 9개 실험 (텍스트) |
+| `src/dualflow/demo.py` | 10개 실험 (텍스트) |
 | `src/dualflow/plots.py` | 그림 5장 생성 (matplotlib) |
-| `tests/` | 119개 — 비증폭 정리, 엔트로피 성질, 종료성, 게이팅, ablation, 공격 실험, SAGE 재현 |
+| `tests/` | 142개 — 비증폭 정리, 엔트로피 성질, 종료성, 게이팅, ablation, 공격 실험, SAGE 재현, Authority Feedback |
 
 ## 6. 실제 LLM 붙이기
 
@@ -433,29 +478,32 @@ LLM 을 붙일 때도 **자유 생성이 아니라 후보 중 택일**로 좁혀
    상한선이라 AND+일관성검사(무조건 차단)만큼 안전하지는 않다 — "얼마나 자주 켤까"
    보다 **"에스컬레이션 이후 Slow 의 판단을 얼마나 신뢰할까"** 가 남은 질문이 됐다.
    실험 ③ 후속(항목 0)의 에이전트별 신뢰도가 이 신뢰 폭을 정하는 데 바로 쓰일 수 있다.
-2. **Authority Feedback Loop (피드백 ③, 다음으로 가장 급함).** 권한의 "범위" 와
-   "유무" 를 분리해야 한다. 지금 `check_authority` 는 둘을 한 번에 판정하고 reason
-   문자열로만 구분한다. *유무* 실패(`delete` 권한 자체가 없음)는 재협상 불가한
-   하드 리젝트지만, *범위* 실패(권한은 있는데 요청이 넓거나 특정 자원이 모호함)는
-   **B 가 제안 →  A 가 범위 확인/축소 → B 가 축소된 범위로 재실행** 형태의 협상으로
-   살릴 수 있다("`/reports/` 까지만이면 되나요?" → "8월 것만요" → 재실행). 지금의
-   Slow(`principal.review`)는 해석 전체를 approve/correct/unsure 로만 다뤄서, "의미
-   해석이 틀림" 과 "범위가 너무 넓음" 을 구분하지 않는다. 이 둘을 별개 필드로 쪼개는
-   게 이 항목의 핵심이다.
+2. **Authority Feedback Loop — 1차 구현 완료, §3 실험 ⑤.** 권한의 "범위" 와
+   "유무" 를 분리했다. `check_authority` 가 실패를 `no_grant`(action/resource 자체가
+   없음 — 재협상 불가, 하드 리젝트) / `condition_missing`(조건은 B 가 채울 수 없는
+   값 — 역시 협상 대상 아님) / `scope_exceeded`(action·resource·condition 은 맞는데
+   범위만 넘음 — 협상 가능)로 나누고, `scope_exceeded` 일 때만 위임 예산에서 계산한
+   `suggested`(실제 허용되는 상한)를 제공한다. `authority_feedback.py` 의
+   `run_feedback()` 이 그 위에서 **B 제안 → A 확인/축소(`Principal.review_authority`,
+   APPROVE/CORRECT/RESTRICT/REJECT) → 재검증** 을 bounded(`authority_feedback_max_rounds`,
+   기본 2)로 협상한다. non-amplification 은 매 라운드 top 에서 예산에 대고 다시
+   검증하는 것 자체로 보장된다 — A 가 부주의(`carelessness`)해서 범위 밖 제안을
+   그대로 승인해도 다음 검증이 막는다(그 결과 unsafe 가 아니라 협상 실패로 이어진다).
 
-   **왜 이게 지름길로 안 풀리는지 실측으로 확인했다.** Joint Verification 에
-   `V_action∧V_resource∧V_scope∧V_condition` 형태로 원본 값을 `task.truth` 와 직접
-   비교하는 exact-field 매칭을 시도해봤다(`match_intent(..., require_fields=True)`,
-   `Config.use_field_match`). 벤치마크상으로는 `clear_read` 류의 자원 치환 공격을
-   완전히 막는다(`test_exact_field_match_would_close_the_resource_swap_gap`). 그런데
-   A 가 검토를 아예 안 해도(`carelessness=1.0`) 여전히 unsafe=0% 가 나온다
-   (`test_exact_field_match_is_an_oracle_not_a_fix`) — Joint 가 안전해진 게 아니라
-   **정답(`task.truth`)을 직접 채점하는 오라클**이 됐기 때문이다. 이러면 A 의 확인이
-   왜 필요한지가 사라진다. 그래서 이 스위치는 라이브 파이프라인 기본값을 꺼두고
-   (`use_field_match=False`) 진단/ablation 용으로만 남겼다. **결론**: "특정 자원이
-   맞는지" 는 정책 검사로 대신할 수 없고, A 에게 실제로 확인받는 것(Authority
-   Feedback Loop) 외에는 답이 없다 — over-rejection 을 줄이는 부가 효과가 아니라
-   이 자체가 없으면 못 푸는 문제다.
+   **왜 지름길(exact-field 매칭)로는 안 풀리는지 실측으로 먼저 확인했다.** Joint
+   Verification 에 `V_action∧V_resource∧V_scope∧V_condition` 형태로 원본 값을
+   `task.truth` 와 직접 비교하는 exact-field 매칭을 시도해봤다
+   (`match_intent(..., require_fields=True)`, `Config.use_field_match`, 기본 False).
+   벤치마크상으로는 자원 치환 공격을 완전히 막지만, A 가 검토를 아예 안 해도
+   (`carelessness=1.0`) 여전히 unsafe=0% 가 나온다
+   (`test_exact_field_match_is_an_oracle_not_a_fix`). 이건 Joint 가 안전해진 게
+   아니다 — 정확히는, **현재 verifier 가 가진 정책·권한 정보만으로는 A 가 의도한
+   정확한 resource/scope 를 복원할 수 없고, 이를 `task.truth` 와 비교하면 평가
+   오라클이 된다**는 뜻이다. 추가 신뢰 소스(A 의 실제 확인) 없이는 이 문제를 풀 수
+   없다는 게 이 진단 실험의 결론이고, Authority Feedback Loop 는 그 신뢰 소스를
+   정식으로 만든 것이다 — `task.truth` 는 `Principal` 안에서만 쓰이고,
+   `run_feedback()`/`framework.py` 는 `Principal.review_authority()` 의 응답
+   (`ConfirmedAuthority`)만 본다(`test_run_feedback_only_needs_the_review_authority_method`).
 3. **엔트로피를 LLM 에게 물어보는 안 (피드백 ④) 은 권장하지 않는다.** 차별점 표의
    첫 줄이 "저엔트로피 구간은 LLM 호출 자체를 원천 배제" 인데, H 를 LLM 으로 구하면
    모든 위임이 최소 1회 호출하게 되어 LLM률이 11.1% → 100% 로 오른다. 상시 LLM

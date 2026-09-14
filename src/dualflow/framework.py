@@ -24,6 +24,7 @@ import dataclasses
 import random
 from collections import Counter
 
+from .authority_feedback import run_feedback
 from .capability import Budget, Privilege, check_authority, delegation_chain
 from .llm import LLMJudge, TopBeliefJudge
 from .rule_engine import Fields, MatchResult, RuleEngine, classify, match_intent
@@ -56,8 +57,11 @@ class Config:
     cost_question: float = 1.0
     cost_review: float = 3.0    # Slow 경로 1회 (역질의보다 무겁고 LLM보다 가볍다)
     cost_llm: float = 10.0
+    cost_authority_feedback: float = 3.0  # Authority Feedback 1라운드 (review 와 동급 — A 호출)
     mode: str = "fast"          # fast | slow | and | adaptive | sage
     adaptive_sigma: float | None = None  # adaptive 의 경험 불일치 임계치 (기본은 sigma)
+    use_authority_feedback: bool = True  # scope_exceeded 를 협상으로 살릴지 (§7-2)
+    authority_feedback_max_rounds: int = 2  # bounded negotiation
     # ablation
     use_authority: bool = True
     use_semantic: bool = True
@@ -101,6 +105,8 @@ class Verdict:
     semantic_ok: bool = True
     match: MatchResult | None = None
     effective_budget: Budget | None = None
+    n_authority_feedback: int = 0       # Authority Feedback Loop 라운드 수
+    authority_negotiated: bool = False  # scope_exceeded 가 협상으로 살아났는가
     log: list[str] = field(default_factory=list)
 
     @property
@@ -110,7 +116,8 @@ class Verdict:
     def cost(self, cfg: Config) -> float:
         return (self.n_questions * cfg.cost_question
                 + self.n_reviews * cfg.cost_review
-                + self.n_llm * cfg.cost_llm)
+                + self.n_llm * cfg.cost_llm
+                + self.n_authority_feedback * cfg.cost_authority_feedback)
 
 
 # --------------------------------------------------------------------------
@@ -388,6 +395,24 @@ class DelegationVerifier:
         auth = check_authority(effective, interp.privilege())
         if cfg.use_authority:
             log.append(f"[joint] Authority: {'통과' if auth.allowed else '차단'} — {auth.reason}")
+
+        # AUTHORITY FEEDBACK LOOP — scope_exceeded 는 하드 리젝트가 아니라 협상 대상.
+        # task.truth 는 여기서 전혀 보지 않는다 — principal.review_authority 의
+        # 응답(ConfirmedAuthority)만 본다.
+        n_authority_feedback = 0
+        authority_negotiated = False
+        if (cfg.use_authority and not auth.allowed and auth.failure_kind == "scope_exceeded"
+                and cfg.use_authority_feedback):
+            neg = run_feedback(interp, effective, principal,
+                               cfg.authority_feedback_max_rounds, log)
+            n_authority_feedback = neg.rounds
+            if neg.resolved and neg.confirmed is not None:
+                interp = neg.confirmed.interpretation
+                authority_negotiated = True
+                auth = check_authority(effective, interp.privilege())
+                log.append(f"[joint] Authority(재검사): {'통과' if auth.allowed else '차단'} — "
+                           f"{auth.reason}")
+
         m = match_intent(interp, task.intent_fields, task.sysvars, self.engine, cfg.tau,
                          require_fields=cfg.use_field_match)
         if cfg.use_matching:
@@ -413,7 +438,8 @@ class DelegationVerifier:
 
         return Verdict(decision, reason, route, interp, sem.h_initial, sem.h_final,
                        sem.n_questions, sem.n_llm, sem.n_reviews,
-                       auth.allowed, semantic_ok, m, effective, log)
+                       auth.allowed, semantic_ok, m, effective,
+                       n_authority_feedback, authority_negotiated, log)
 
 
 # --------------------------------------------------------------------------
@@ -457,6 +483,7 @@ def evaluate(cfg: Config, tasks, judge=None, fresh_experience: bool = True) -> d
         "llm_rate": sum(r.n_llm for _, r, _ in rows) / n,
         "avg_questions": sum(r.n_questions for _, r, _ in rows) / n,
         "review_rate": sum(r.n_reviews for _, r, _ in rows) / n,
+        "authority_feedback_rate": sum(r.n_authority_feedback for _, r, _ in rows) / n,
         "avg_cost": cost / n,
         "counts": counts,
         "rows": rows,
