@@ -62,6 +62,11 @@ class Config:
     use_authority: bool = True
     use_semantic: bool = True
     use_matching: bool = True
+    use_field_match: bool = False  # V_action∧V_resource∧V_scope∧V_condition — 진단/ablation 전용.
+    # task.truth 를 직접 비교하는 오라클이라 라이브 파이프라인(기본값 False)에는 안 쓴다.
+    # 켜보면 어떤 조합이든(careless Slow 포함) unsafe=0% 가 되는데, 이는 Joint 가 안전해진
+    # 게 아니라 정답을 알고 채점하는 것과 같아서다 — Authority Feedback Loop(§7)가 대신
+    # 풀어야 할 문제를 오라클로 가려버린다. README "구현하며 확인한 빈틈" 참고.
     use_experience: bool = True
     use_llm: bool = True
     always_llm: bool = False    # SAGE-Agent 식 상시 LLM 사용 프로파일
@@ -383,7 +388,8 @@ class DelegationVerifier:
         auth = check_authority(effective, interp.privilege())
         if cfg.use_authority:
             log.append(f"[joint] Authority: {'통과' if auth.allowed else '차단'} — {auth.reason}")
-        m = match_intent(interp, task.intent_fields, task.sysvars, self.engine, cfg.tau)
+        m = match_intent(interp, task.intent_fields, task.sysvars, self.engine, cfg.tau,
+                         require_fields=cfg.use_field_match)
         if cfg.use_matching:
             log.append(f"[joint] 매칭: p={m.path} vs p*={m.reference_path} "
                        f"Sim_path={m.sim:.2f} — {m.reason}")

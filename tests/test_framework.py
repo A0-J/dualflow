@@ -309,6 +309,36 @@ class TestBeliefManipulation:
         r = run(t, Config(mode="fast"))
         assert r.h_initial == 0.0 and not r.authority_ok and r.decision == REJECT
 
+    def test_exact_field_match_would_close_the_resource_swap_gap(self, attacked):
+        """§4 빈틈(5) — Sim_path 는 같은 SOP 버킷 안의 자원 치환(예: 같은 read/narrow/
+        low-sensitivity 버킷 안에서 "/reports/2026-08/" 대신 "/reports/2025-01/")을
+        놓친다. `use_field_match=True`(V_resource∧V_scope∧V_condition 를 task.truth
+        와 정확 비교) 를 켜면 이 벤치마크에서는 완전히 막힌다 — 하지만 아래
+        test_exact_field_match_is_an_oracle_not_a_fix 가 보이듯 이건 실전 해법이
+        아니라 진단용이라 라이브 파이프라인 기본값은 여전히 False 다.
+        """
+        coarse = evaluate(Config(mode="fast"), attacked, judge=build_judge())
+        exact = evaluate(Config(mode="fast", use_field_match=True), attacked, judge=build_judge())
+        assert coarse["unsafe_rate"] > 0.0
+        assert exact["unsafe_rate"] == 0.0
+
+    def test_exact_field_match_is_an_oracle_not_a_fix(self, tasks, attacked):
+        """use_field_match=True 를 켜면 A 가 아예 검토하지 않는(carelessness=1.0)
+        경우도 안전해진다 — Joint 가 실제로 더 똑똑해져서가 아니라 task.truth 를
+        직접 비교하는 채점자가 됐기 때문이다. Authority Feedback Loop(§7-3, A 가
+        scope 를 실제로 확인/교정하는 절차)가 풀어야 할 문제를 오라클로 가리면
+        연구 의미가 없어진다 — 그래서 라이브 파이프라인은 이 스위치를 쓰지 않는다
+        (기본값 False 면 부주의가 다시 실제로 위험해져야 정상이다).
+        """
+        from dualflow.framework import warmup_then_attack
+        live = warmup_then_attack(Config(mode="slow", carelessness=1.0),
+                                  tasks, attacked, judge=build_judge(), warmup=5, trials=10)
+        oracle = warmup_then_attack(
+            Config(mode="slow", carelessness=1.0, use_field_match=True),
+            tasks, attacked, judge=build_judge(), warmup=5, trials=10)
+        assert live["unsafe_rate"] > 0.0
+        assert oracle["unsafe_rate"] == 0.0
+
 
 # --------------------------------------------------------------------------
 class TestImperfectReviewer:

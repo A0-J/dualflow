@@ -6,6 +6,23 @@
 가져온 부분이 실제로 의도한 대로 작동하는지 실험으로 확인할 수 있게 만들었다.
 LLM 호출 없이 결정론적으로 돌아가며, 실제 모델은 인터페이스 하나만 맞추면 붙는다.
 
+**"Dual" 은 Semantic Flow × Authority Flow 를 말한다 — Fast/Slow 가 아니다.**
+아래 §3 에 Fast/Slow/AND/Adaptive 비교가 많이 나오는데, 이건 Semantic Flow *안에서*
+"B 의 해석을 어떻게 확정할까" 를 고르는 전략일 뿐이다. 이 프레임워크가 실제로 풀려는
+두 문제는 서로 다르다:
+
+- **Semantic uncertainty** — B 가 A 의 요청을 제대로 이해했는가? ("지난달 보고서"
+  가 어느 파일인지 애매함) → entropy/information gain 으로 잰다(§2 RQ1).
+- **Authority consistency** — 해석이 명확해도 실제로 허용된 범위인가? B 가 자기
+  해석에 100% 확신해도(H=0), 위임 상한선 안의 *다른* 자원을 가리킬 수 있다
+  ("/reports/2026-08/" 대신 "/reports/2025-01/") → `low uncertainty ⇏ valid
+  delegation`, 이게 `silent_misread`/belief 조작 실험이 실측으로 보여주는 것이다.
+
+둘 다 확인해야 안전하다(Joint Verification). Fast/Slow/AND/Adaptive 는 그 확인을
+**얼마나 싸게** 할지에 관한 최적화이지, 확인 자체를 대체하지 않는다 — Slow 축이
+없으면 "특정 자원이 맞는지" 는 정책 검사만으로 원천적으로 못 푼다는 게 §7-2 에
+실측으로 정리돼 있다.
+
 ```bash
 pip install -e ".[dev]"
 
@@ -416,11 +433,29 @@ LLM 을 붙일 때도 **자유 생성이 아니라 후보 중 택일**로 좁혀
    상한선이라 AND+일관성검사(무조건 차단)만큼 안전하지는 않다 — "얼마나 자주 켤까"
    보다 **"에스컬레이션 이후 Slow 의 판단을 얼마나 신뢰할까"** 가 남은 질문이 됐다.
    실험 ③ 후속(항목 0)의 에이전트별 신뢰도가 이 신뢰 폭을 정하는 데 바로 쓰일 수 있다.
-2. **권한의 "범위" 와 "유무" 분리 (피드백 ③).** 아직 미구현. `check_authority` 가 둘을
-   한 번에 판정하고 reason 문자열로만 구분한다. 쪼개면 처리 방법이 갈린다 —
-   *유무* 실패(`delete` 권한 자체가 없음)는 재협상 불가한 하드 리젝트지만,
-   *범위* 실패(권한은 있는데 요청이 넓음)는 **역질의로 살릴 수 있다**
-   ("`/reports/` 까지만이면 되나요?"). over-rejection 을 줄이는 실질적 수단이기도 하다.
+2. **Authority Feedback Loop (피드백 ③, 다음으로 가장 급함).** 권한의 "범위" 와
+   "유무" 를 분리해야 한다. 지금 `check_authority` 는 둘을 한 번에 판정하고 reason
+   문자열로만 구분한다. *유무* 실패(`delete` 권한 자체가 없음)는 재협상 불가한
+   하드 리젝트지만, *범위* 실패(권한은 있는데 요청이 넓거나 특정 자원이 모호함)는
+   **B 가 제안 →  A 가 범위 확인/축소 → B 가 축소된 범위로 재실행** 형태의 협상으로
+   살릴 수 있다("`/reports/` 까지만이면 되나요?" → "8월 것만요" → 재실행). 지금의
+   Slow(`principal.review`)는 해석 전체를 approve/correct/unsure 로만 다뤄서, "의미
+   해석이 틀림" 과 "범위가 너무 넓음" 을 구분하지 않는다. 이 둘을 별개 필드로 쪼개는
+   게 이 항목의 핵심이다.
+
+   **왜 이게 지름길로 안 풀리는지 실측으로 확인했다.** Joint Verification 에
+   `V_action∧V_resource∧V_scope∧V_condition` 형태로 원본 값을 `task.truth` 와 직접
+   비교하는 exact-field 매칭을 시도해봤다(`match_intent(..., require_fields=True)`,
+   `Config.use_field_match`). 벤치마크상으로는 `clear_read` 류의 자원 치환 공격을
+   완전히 막는다(`test_exact_field_match_would_close_the_resource_swap_gap`). 그런데
+   A 가 검토를 아예 안 해도(`carelessness=1.0`) 여전히 unsafe=0% 가 나온다
+   (`test_exact_field_match_is_an_oracle_not_a_fix`) — Joint 가 안전해진 게 아니라
+   **정답(`task.truth`)을 직접 채점하는 오라클**이 됐기 때문이다. 이러면 A 의 확인이
+   왜 필요한지가 사라진다. 그래서 이 스위치는 라이브 파이프라인 기본값을 꺼두고
+   (`use_field_match=False`) 진단/ablation 용으로만 남겼다. **결론**: "특정 자원이
+   맞는지" 는 정책 검사로 대신할 수 없고, A 에게 실제로 확인받는 것(Authority
+   Feedback Loop) 외에는 답이 없다 — over-rejection 을 줄이는 부가 효과가 아니라
+   이 자체가 없으면 못 푸는 문제다.
 3. **엔트로피를 LLM 에게 물어보는 안 (피드백 ④) 은 권장하지 않는다.** 차별점 표의
    첫 줄이 "저엔트로피 구간은 LLM 호출 자체를 원천 배제" 인데, H 를 LLM 으로 구하면
    모든 위임이 최소 1회 호출하게 되어 LLM률이 11.1% → 100% 로 오른다. 상시 LLM
