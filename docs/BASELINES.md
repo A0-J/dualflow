@@ -156,6 +156,49 @@ IG(q) = H(p) - \mathbb{E}_{r}[H(p \mid r)]
 
 ---
 
+### 3.5 Independent per-parameter certainty vs. a joint belief over interpretations
+
+§3.2의 tool-choice blind spot은 우연한 구현 디테일이 아니라, SAGE-Agent와 DualFlow가 **"불확실성"이라는 같은 단어로 서로 다른 대상을 측정하기 때문에 구조적으로 발생한다.**
+
+SAGE-Agent의 viability score는 각 후보 \(c\)마다 **독립적으로** 계산된다.
+
+\[
+\pi_c(t) = \prod_j p(\theta_{c,j})
+\]
+
+여기에는 \(\sum_c \pi_c(t) = 1\)이라는 제약이 없다. 서로 배타적인 두 tool-call 후보라도 각자의 인자가 모두 지정되면 **둘 다** \(\pi=1\)에 도달할 수 있다.
+
+```text
+>>> read(file, /reports/)   전부 지정 → π = 1.0
+>>> export(file, /reports/) 전부 지정 → π = 1.0
+    sum(π) = 2.0   # 확률이 아니다
+```
+
+반면 DualFlow의 Semantic Flow는 후보 집합 전체에 대해 정규화된 하나의 belief \(p\)를 유지한다.
+
+```text
+>>> build_belief([(read, 0.5), (export, 0.5)])
+    {read: 0.5, export: 0.5}   sum(p) = 1.0,  H(p) = 1.0 bit
+```
+
+이 차이는 두 가지 결과로 이어진다.
+
+1. **후보 간 상호배타성이 구조적으로 보장된다.** 정규화된 belief에서는 한 해석의 확신이 오르면 다른 해석들은 자동으로 내려간다. SAGE의 독립곱 \(\pi_c\)에는 이런 제약이 없으므로, "서로 다른 tool이 모두 완전히 지정된" 상황에서 실행 게이트(\(\max_c \pi_c \ge \tau_{exec}\))가 tool 선택의 불확실성을 전혀 반영하지 못한다(§3.2, §3.3).
+2. **차원 간 상관관계를 포착하는 방식이 다르다.** DualFlow의 `conditional_entropy()`는 후보를 답변 값별로 묶어(bucket) 기대 잔여 엔트로피를 계산하므로, 한 차원(resource)에 대한 답이 다른 차원(scope)의 후보 분포까지 함께 좁히는 상관관계를 자동으로 반영한다. SAGE의 독립곱 구조에는 파라미터 간 상관관계를 표현할 자리가 없다 — 각 \(\theta_{c,j}\)는 그 후보 안에서만, 서로 무관하게 존재한다.
+
+정리하면:
+
+```text
+SAGE-Agent:  parameter 하나가 얼마나 완전히 지정되었는가   (per-candidate completeness)
+DualFlow:    전체 해석 후보 집합 위에서 의도가 얼마나 좁혀졌는가 (joint intent identification)
+```
+
+이는 SAGE-Agent가 틀렸다는 주장이 아니다. SAGE-Agent는 **단일 tool call의 argument completeness**를 다루도록 설계됐고, 그 문제에서는 이 정의가 적절하다. DualFlow가 다루는 문제는 **여러 해석 후보 사이의 intent ambiguity**이며, 여기에는 정규화된 결합분포가 필요하다 — 이것이 §6 positioning에서 두 방법을 "요청 의미의 불확실성"이라는 같은 행에 나란히 두면서도 서로 다른 메커니즘으로 표시하는 이유다.
+
+관련 테스트: `TestToolChoiceBlindSpot` (SAGE 쪽 경험적 관찰), `tests/test_semantic.py::TestEntropy`/`TestInformationGain` (DualFlow 쪽 정규화·엔트로피 성질).
+
+---
+
 ## 4. SAGE-Bench and Joint Verification
 
 SAGE-Bench는 SOP를 graph로 표현하고 agent trajectory를 graph path와 비교한다. DualFlow는 이 아이디어를 Joint Verification의 **path-level consistency signal**로 사용한다.
