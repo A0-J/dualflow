@@ -45,10 +45,10 @@ DualFlow의 Semantic Flow와 가장 직접적으로 비교되는 부분은 다�
 
 | SAGE-Agent component | Repository implementation |
 |---|---|
-| parameter viability score \(\pi_c\) | `pi()` |
+| parameter viability score $\pi_c$ | `pi()` |
 | EVPI | `evpi()` |
 | repeated-aspect cost | `cost()` |
-| execution threshold \(\tau_{exec}\) | `SageAgentBaseline.run()` |
+| execution threshold $\tau_{exec}$ | `SageAgentBaseline.run()` |
 | iterative clarification | `SageAgentBaseline.run()` |
 
 현재 구현에서 중요한 순서는 다음과 같다.
@@ -65,7 +65,7 @@ max π ≥ τ_exec ?
  clarification / stopping decision
 ```
 
-따라서 \(\tau_{exec}\) 조건을 이미 만족한 후보에 대해서는 clarification scoring이 실행되지 않는다.
+따라서 $\tau_{exec}$ 조건을 이미 만족한 후보에 대해서는 clarification scoring이 실행되지 않는다.
 
 ---
 
@@ -116,7 +116,7 @@ TestToolChoiceBlindSpot
 
 ### 3.3 Early execution gates can bypass later clarification logic
 
-현재 재현에서는 \(\max \pi \ge \tau_{exec}\) 조건이 만족되면 EVPI 계산 전에 실행이 결정된다.
+현재 재현에서는 $\max \pi \ge \tau_{exec}$ 조건이 만족되면 EVPI 계산 전에 실행이 결정된다.
 
 따라서 후보 분포가 하나의 잘못된 해석으로 수렴하도록 조작된 controlled attack에서는 clarification 단계가 호출되지 않는다.
 
@@ -146,9 +146,9 @@ test_attack_works_under_both_readings_of_eq2
 
 DualFlow의 Semantic Flow는 Shannon entropy reduction을 기준으로 clarification question을 선택한다.
 
-\[
+$$
 IG(q) = H(p) - \mathbb{E}_{r}[H(p \mid r)]
-\]
+$$
 
 질문 하나에 대한 정보이득은 이전에 어떤 답을 얻었는지에 따라 달라질 수 있으므로, 질문 순서를 고정하지 않고 **매 clarification round에서 information gain을 다시 계산**한다.
 
@@ -160,13 +160,13 @@ IG(q) = H(p) - \mathbb{E}_{r}[H(p \mid r)]
 
 §3.2의 tool-choice blind spot은 우연한 구현 디테일이 아니라, SAGE-Agent와 DualFlow가 **"불확실성"이라는 같은 단어로 서로 다른 대상을 측정하기 때문에 구조적으로 발생한다.**
 
-SAGE-Agent의 viability score는 각 후보 \(c\)마다 **독립적으로** 계산된다.
+SAGE-Agent의 viability score는 각 후보 $c$마다 **독립적으로** 계산된다.
 
-\[
+$$
 \pi_c(t) = \prod_j p(\theta_{c,j})
-\]
+$$
 
-여기에는 \(\sum_c \pi_c(t) = 1\)이라는 제약이 없다. 서로 배타적인 두 tool-call 후보라도 각자의 인자가 모두 지정되면 **둘 다** \(\pi=1\)에 도달할 수 있다.
+여기에는 $\sum_c \pi_c(t) = 1$이라는 제약이 없다. 서로 배타적인 두 tool-call 후보라도 각자의 인자가 모두 지정되면 **둘 다** $\pi=1$에 도달할 수 있다.
 
 ```text
 >>> read(file, /reports/)   전부 지정 → π = 1.0
@@ -174,7 +174,7 @@ SAGE-Agent의 viability score는 각 후보 \(c\)마다 **독립적으로** 계�
     sum(π) = 2.0   # 확률이 아니다
 ```
 
-반면 DualFlow의 Semantic Flow는 후보 집합 전체에 대해 정규화된 하나의 belief \(p\)를 유지한다.
+반면 DualFlow의 Semantic Flow는 후보 집합 전체에 대해 정규화된 하나의 belief $p$를 유지한다.
 
 ```text
 >>> build_belief([(read, 0.5), (export, 0.5)])
@@ -183,8 +183,8 @@ SAGE-Agent의 viability score는 각 후보 \(c\)마다 **독립적으로** 계�
 
 이 차이는 두 가지 결과로 이어진다.
 
-1. **후보 간 상호배타성이 구조적으로 보장된다.** 정규화된 belief에서는 한 해석의 확신이 오르면 다른 해석들은 자동으로 내려간다. SAGE의 독립곱 \(\pi_c\)에는 이런 제약이 없으므로, "서로 다른 tool이 모두 완전히 지정된" 상황에서 실행 게이트(\(\max_c \pi_c \ge \tau_{exec}\))가 tool 선택의 불확실성을 전혀 반영하지 못한다(§3.2, §3.3).
-2. **차원 간 상관관계를 포착하는 방식이 다르다.** DualFlow의 `conditional_entropy()`는 후보를 답변 값별로 묶어(bucket) 기대 잔여 엔트로피를 계산하므로, 한 차원(resource)에 대한 답이 다른 차원(scope)의 후보 분포까지 함께 좁히는 상관관계를 자동으로 반영한다. SAGE의 독립곱 구조에는 파라미터 간 상관관계를 표현할 자리가 없다 — 각 \(\theta_{c,j}\)는 그 후보 안에서만, 서로 무관하게 존재한다.
+1. **후보 간 상호배타성이 구조적으로 보장된다.** 정규화된 belief에서는 한 해석의 확신이 오르면 다른 해석들은 자동으로 내려간다. SAGE의 독립곱 $\pi_c$에는 이런 제약이 없으므로, "서로 다른 tool이 모두 완전히 지정된" 상황에서 실행 게이트($\max_c \pi_c \ge \tau_{exec}$)가 tool 선택의 불확실성을 전혀 반영하지 못한다(§3.2, §3.3).
+2. **차원 간 상관관계를 포착하는 방식이 다르다.** DualFlow의 `conditional_entropy()`는 후보를 답변 값별로 묶어(bucket) 기대 잔여 엔트로피를 계산하므로, 한 차원(resource)에 대한 답이 다른 차원(scope)의 후보 분포까지 함께 좁히는 상관관계를 자동으로 반영한다. SAGE의 독립곱 구조에는 파라미터 간 상관관계를 표현할 자리가 없다 — 각 $\theta_{c,j}$는 그 후보 안에서만, 서로 무관하게 존재한다.
 
 정리하면:
 
@@ -205,15 +205,15 @@ SAGE-Bench는 SOP를 graph로 표현하고 agent trajectory를 graph path와 비
 
 현재 live gate의 핵심은 다음 두 조건이다.
 
-\[
+$$
 Sim_{path}(p,p^*) \ge \tau
-\]
+$$
 
 그리고
 
-\[
+$$
 Terminal(p) = Terminal(p^*)
-\]
+$$
 
 여기서 terminal decision은 action type이 아니라 SOP trace의 최종 판정이다.
 
@@ -255,15 +255,15 @@ DualFlow의 Authority Flow는 이 원칙을 agent-to-agent delegation에 적용�
 
 Delegation chain에서 authority budget은 매 hop마다 intersection으로 합성된다.
 
-\[
+$$
 C_{next} = C_{current} \cap C_{ceiling}
-\]
+$$
 
 따라서:
 
-\[
+$$
 C_n \subseteq C_{n-1} \subseteq \cdots \subseteq C_A
-\]
+$$
 
 가 구조적으로 유지된다.
 

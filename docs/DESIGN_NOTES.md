@@ -29,11 +29,11 @@ Delegate가 Principal의 요청을 어떤 `action / resource / scope / condition
 
 Semantic uncertainty가 낮다는 사실만으로 실행이 올바르다고 볼 수는 없다.
 
-\[
+$$
 H \approx 0
 \not\Rightarrow
 \text{correct delegation}
-\]
+$$
 
 Delegate가 잘못된 해석 하나에 확신을 가지는 경우에도 entropy는 낮을 수 있기 때문이다.
 
@@ -122,7 +122,7 @@ test_run_feedback_only_needs_the_review_authority_method
 
 `rule_engine.py`에는 다음과 같은 exact-field comparison을 계산하는 기능이 있다.
 
-\[
+$$
 V_{\text{action}}
 \land
 V_{\text{resource}}
@@ -130,7 +130,7 @@ V_{\text{resource}}
 V_{\text{scope}}
 \land
 V_{\text{condition}}
-\]
+$$
 
 구현:
 
@@ -230,17 +230,17 @@ Non-amplification은 동일한 **intersection + revalidation** 패턴이 반복 
 
 각 hop의 budget은 `Budget.meet()`으로 합성된다.
 
-\[
+$$
 C_{\text{next}}
 =
 C_{\text{current}}
 \cap
 C_{\text{ceiling}}
-\]
+$$
 
 따라서:
 
-\[
+$$
 C_n
 \subseteq
 C_{n-1}
@@ -248,7 +248,7 @@ C_{n-1}
 \cdots
 \subseteq
 C_A
-\]
+$$
 
 ### 6.2 Authority Feedback
 
@@ -258,23 +258,23 @@ Principal이 어떤 수정안을 반환하더라도 매 라운드 `check_authori
 
 Verified history도 그대로 실행하지 않는다.
 
-\[
+$$
 C_{\text{adaptive}}
 =
 C_{\text{experience}}
 \cap
 C_{\text{current budget}}
-\]
+$$
 
 따라서 항상:
 
-\[
+$$
 C_{\text{adaptive}}
 \subseteq
 C_{\text{current budget}}
 \subseteq
 C_A
-\]
+$$
 
 가 성립한다.
 
@@ -295,15 +295,15 @@ Joint Verification은 exact-field equality를 live gate로 사용하지 않는�
 
 현재 핵심 조건은:
 
-\[
+$$
 Sim_{\text{path}}(p,p^*) \ge \tau
-\]
+$$
 
 그리고:
 
-\[
+$$
 Terminal(p) = Terminal(p^*)
-\]
+$$
 
 이다.
 
@@ -366,15 +366,15 @@ Optimization Layer의 목적은 Core Safety Mechanism을 바꾸는 것이 아니
 
 현재 gate는 설명 가능한 단순 규칙을 사용한다.
 
-\[
+$$
 n_{\text{confirmed}} \ge 3
-\]
+$$
 
 그리고
 
-\[
+$$
 agreement\_ratio \ge 0.8
-\]
+$$
 
 을 모두 만족하면 과거 verified authority를 재사용해 본다.
 
@@ -482,10 +482,10 @@ H → 0
 1. semantic candidate generation이 scripted다.
 2. Principal response가 simulated다.
 3. 작은 controlled pilot benchmark를 사용한다.
-4. 후보 집합 \(\Omega\) 안에 올바른 interpretation이 존재한다고 가정한다.
+4. 후보 집합 $\Omega$ 안에 올바른 interpretation이 존재한다고 가정한다.
 5. current authority state와 verified authority history를 trusted state로 본다.
 6. policy상 허용되지만 Principal이 의도하지 않은 in-scope resource selection은 별도 문제다.
-7. \(\theta, \sigma, k, \lambda\) 등 주요 threshold는 외부 domain에서 재튜닝이 필요하다.
+7. $\theta, \sigma, k, \lambda$ 등 주요 threshold는 외부 domain에서 재튜닝이 필요하다.
 
 따라서 현재 실험은 **mechanism correctness / safety invariant**를 검증하는 근거이며, 실제 LLM 환경에서의 external validity는 별도 평가가 필요하다.
 

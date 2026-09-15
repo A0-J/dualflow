@@ -53,7 +53,7 @@ Additional Analysis
 
 `task.truth`는 평가를 위한 ground truth다.
 
-`ideal_decision`과 reference SOP path \(p^*\)는 평가용으로 `task.truth`에서 유도되지만, Authority Feedback runtime은 이를 직접 읽지 않는다.
+`ideal_decision`과 reference SOP path $p^*$는 평가용으로 `task.truth`에서 유도되지만, Authority Feedback runtime은 이를 직접 읽지 않는다.
 
 ```text
 Runtime:
@@ -214,21 +214,21 @@ Principal-confirmed authority
 
 이 이력은 실행 권한을 새로 부여하지 않는다.
 
-\[
+$$
 C_{\text{adaptive}}
 =
 C_{\text{experience}}
 \cap
 C_{\text{current budget}}
-\]
+$$
 
 따라서:
 
-\[
+$$
 C_{\text{adaptive}}
 \subseteq
 C_{\text{current budget}}
-\]
+$$
 
 가 항상 유지된다.
 
@@ -238,15 +238,15 @@ C_{\text{current budget}}
 
 Adaptive gate:
 
-\[
+$$
 n_{\text{confirmed}} \ge 3
-\]
+$$
 
 그리고:
 
-\[
+$$
 agreement\_ratio \ge 0.8
-\]
+$$
 
 이면 verified authority reuse를 먼저 시도한다.
 
@@ -442,9 +442,9 @@ Agent B의 candidate generation이 오염됐다고 가정한다.
 
 공격자는 candidate set을 공격 목표 interpretation 하나로 좁혀:
 
-\[
+$$
 H = 0
-\]
+$$
 
 으로 만든다.
 
@@ -519,7 +519,7 @@ Cold-start 결과:
 
 다음 exact-field match를 구현해 진단 실험을 수행했다.
 
-\[
+$$
 V_{\text{action}}
 \land
 V_{\text{resource}}
@@ -527,7 +527,7 @@ V_{\text{resource}}
 V_{\text{scope}}
 \land
 V_{\text{condition}}
-\]
+$$
 
 이를 `task.truth`에서 유도한 reference와 직접 비교하면 resource substitution attack을 완전히 차단할 수 있다.
 
