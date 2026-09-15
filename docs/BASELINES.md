@@ -43,9 +43,11 @@ Eq.(2)는 '∝' 로 Eq.(1)의 1/K 를 흡수하고 Prop.1 도 파라미터 곱�
 
 **(5) Sim_path 는 SAGE-Bench 자신이 인정하듯 관대한 지표다.**
 p\* ⊆ p 인 경우 Sim_path = 1.0 이 되어 "더 깊이 들어간 해석"을 잡지 못한다. 본 구현은
-Sim_path 와 종단 액션 일치를 **둘 다** 요구해 일부 보완했지만, 완전한 해법은 아니다.
-역으로 `silent_misread` 사례는 **Action_Acc 만으로는 못 잡고 Sim_path 라야 잡히는** 반대
-방향의 증거다(양쪽 종단 액션이 모두 EXECUTE 인데 경로가 갈린다). 두 지표가 상보적이라는
+Sim_path 와 **terminal decision match**(경로의 종착점이 EXECUTE/ESCALATE/REJECT 중
+어디로 끝나는지 비교 — action type 이 아니라 SOP trace 의 최종 판정이다)를 **둘 다**
+요구해 일부 보완했지만, 완전한 해법은 아니다. 역으로 `silent_misread` 사례는
+**terminal decision match 만으로는 못 잡고 Sim_path 라야 잡히는** 반대 방향의 증거다
+(양쪽 다 terminal decision 이 EXECUTE 인데 경로가 갈린다). 두 지표가 상보적이라는
 근거로 쓸 수 있다.
 
 **(6) ChainCaps 의 manifest quality 병목은 위임 맥락에서도 그대로다.**

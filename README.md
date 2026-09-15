@@ -76,7 +76,7 @@ principal every time.
 | Component | Implementation | Related work |
 |---|---|---|
 | Authority budget, delegation chain | `capability.Budget`, `check_authority` | ChainCaps §3.2–3.3, Eq.(2) |
-| Action space, belief over interpretations | `semantic.Interpretation`, `build_belief` | SAGE-Agent Def.2–3 |
+| Action space, interpretation distribution | `semantic.Interpretation`, `build_belief` | SAGE-Agent Def.2–3 |
 | Entropy / clarification | `semantic.entropy`, `information_gain` | SAGE-Agent Def.4, reworked as information gain |
 | LLM fallback | `llm.LLMJudge` | SAGE-Agent's always-on judge, demoted to a fallback |
 | Joint matching | `rule_engine.match_intent`, `sim_path` | SAGE-Bench Eq.(6) |
@@ -109,8 +109,8 @@ delegation budget before it can be accepted — a careless `APPROVE` of an
 out-of-budget proposal is still rejected by that revalidation, not trusted.
 
 **Joint Verification.** Execution is allowed only after the resolved semantic
-interpretation and the confirmed authority agree with the original intent
-(path similarity + terminal action match).
+interpretation and the confirmed authority agree with the original intent —
+path similarity **and** terminal decision match (EXECUTE / ESCALATE / REJECT).
 
 **Adaptive Feedback.** Repeated principal feedback is expensive. DualFlow
 stores only *verified* authority states — confirmed by the principal **and**
@@ -167,11 +167,15 @@ Scope-negotiation pilot (`scope_negotiation_tasks()`), isolated from the
 
 Without feedback, every negotiable scope violation is safely rejected but
 never completed. With feedback, the same cases complete safely. The result is
-**identical under belief-manipulation attack** — feedback reads the
-principal's real answer, not the delegate's self-reported confidence — and
-stays at 0% unsafe even as principal carelessness rises to 1.0, because
-non-amplification revalidates every round regardless of what the principal
-said. Detail (including the carelessness sweep) is in
+**identical under semantic-proposal manipulation** — feedback reads the
+principal's real answer, not the delegate's self-reported semantic
+uncertainty — and stays at 0% unsafe even as principal carelessness rises to
+1.0, because non-amplification revalidates every round regardless of what the
+principal said. This holds only as long as the authority budget and the
+Principal feedback channel themselves are trusted; scope negotiation is not
+triggered at all when the delegate picks a different-but-in-budget resource
+(see [Current Scope and Limitations](#current-scope-and-limitations)). Detail
+(including the carelessness sweep) is in
 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md).
 
 ### 3. Adaptive reuse survives repetition, drift, and manipulation

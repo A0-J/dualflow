@@ -103,7 +103,8 @@ Optimization Layer 를 완전히 꺼도(`use_verified_experience=False`) Core �
 부주의하게 `APPROVE` 해도 이 재검증이 걸러낸다(그대로 신뢰하지 않는다).
 
 **Joint Verification.** 확정된 의미 해석과 확인된 권한이 원래 의도와 일치할
-때만(경로 유사도 + 종단 액션 일치) 실행이 허용된다.
+때만 — 경로 유사도와 **terminal decision match**(EXECUTE / ESCALATE / REJECT)
+를 모두 만족할 때만 — 실행이 허용된다.
 
 **Adaptive Feedback.** principal 에게 반복해서 확인받는 건 비용이 크다.
 DualFlow 는 principal 이 **확인해주고** 시스템이 **재검증했고** 그 결과
@@ -159,11 +160,15 @@ scope 협상 파일럿(`scope_negotiation_tasks()`) — 9개 과제 벤치마크
 
 Feedback 이 없으면 협상 가능한 모든 scope 위반이 안전하게 거절되지만 끝내
 완료되지 않는다. Feedback 을 켜면 같은 사례가 안전하게 완료된다. 이 결과는
-**belief 조작 공격 하에서도 동일하다** — Feedback 은 delegate 의 자기신고
-확신이 아니라 principal 의 실제 응답을 읽기 때문이다 — 그리고 principal 의
-부주의(carelessness)가 1.0 까지 올라가도 unsafe 0% 를 유지한다. non-amplification
-이 principal 이 뭐라고 답했든 매 라운드 재검증하기 때문이다. carelessness
-스윕을 포함한 상세 내용은 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) 에 있다.
+**semantic-proposal manipulation 하에서도 동일하다** — Feedback 은 delegate 의
+자기신고 semantic uncertainty 가 아니라 principal 의 실제 응답을 읽기 때문이다
+— 그리고 principal 의 부주의(carelessness)가 1.0 까지 올라가도 unsafe 0% 를
+유지한다. non-amplification 이 principal 이 뭐라고 답했든 매 라운드 재검증하기
+때문이다. 단 이건 위임 예산과 principal feedback 채널 자체가 신뢰 가능하다는
+전제에서만 성립하고, delegate 가 이미 예산 안의 *다른* 자원을 고르는 경우에는
+scope negotiation 자체가 트리거되지 않는다(자세한 건
+[현재 범위와 한계](#현재-범위와-한계)). carelessness 스윕을 포함한 상세 내용은
+[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) 에 있다.
 
 ### 3. Adaptive 재사용은 반복·변경·조작을 모두 견딘다
 
