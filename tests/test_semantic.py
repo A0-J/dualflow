@@ -164,3 +164,38 @@ class TestExperience:
         assert entropy(primed) < entropy(plain)
         assert top(primed) == A          # 경험이 1위 후보를 뒤집는다
         assert top(plain) == C
+
+
+class _CountingRandom(random.Random):
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.calls = 0
+
+    def random(self):
+        self.calls += 1
+        return super().random()
+
+
+class TestPrincipalRNGHygiene:
+    """carelessness=0, overcaution=0(기본값)일 때 Principal 이 rng.random() 을
+    전혀 호출하지 않아야 한다 — 안 그러면 그 draw 가 이후 모든 확률적 실험의
+    RNG 시퀀스를 조용히 밀어버린다(§EXPERIMENTS.md 의 재검증에서 실제로 발견됨:
+    reviewer_overcaution 도입 당시 이 불변식이 깨져서 §6.2 수치가 몰래 바뀌어
+    있었다)."""
+
+    def test_review_does_not_touch_rng_at_default_probabilities(self):
+        rng = _CountingRandom(0)
+        p = Principal(A, rng=rng)  # carelessness=0, overcaution=0 기본값
+        p.review(A)                 # proposed == truth 경로
+        p.review(B)                 # proposed != truth 경로
+        assert rng.calls == 0
+
+    def test_review_authority_does_not_touch_rng_at_default_probabilities(self):
+        from dualflow.authority_feedback import FeedbackDecision
+
+        rng = _CountingRandom(0)
+        p = Principal(A, rng=rng)
+        suggested = I("read", "file", "/reports/", label="suggested")
+        fb = p.review_authority(A, suggested)
+        assert rng.calls == 0
+        assert fb.decision == FeedbackDecision.RESTRICT

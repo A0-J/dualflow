@@ -262,11 +262,17 @@ class Principal:
         후보 집합이 조작돼 H=0 이 되더라도 이 경로는 영향을 받지 않는다.
         """
         summary = f"제안: {proposed}"
-        if proposed != self.truth and self.rng.random() < self.carelessness:
+        if proposed != self.truth and self.carelessness > 0 and self.rng.random() < self.carelessness:
             self.transcript.append((summary, "(대충 훑고) 네 그렇게 하세요"))
             return Review("approve", proposed)      # 부주의한 승인
         if proposed == self.truth:
-            if self.rng.random() < self.overcaution:
+            # overcaution==0(기본값)일 때 rng.random() 을 아예 호출하지 않는다 —
+            # 호출은 하되 항상 거짓이 되게만 짜면 결과는 같아 보여도 그 한 번의
+            # draw 가 이후 모든 확률적 실험의 RNG 시퀀스를 밀어버린다. 실제로
+            # 이 때문에 fig5/fig6 수치가 도입 당시 "그대로 유지된다"던 주장과
+            # 달리 조용히 바뀌어 있었다(§EXPERIMENTS.md 참고). and 의 단락평가로
+            # 그 draw 자체를 건너뛰어 이전 RNG 시퀀스와 완전히 동일하게 만든다.
+            if self.overcaution > 0 and self.rng.random() < self.overcaution:
                 self.transcript.append((summary, "(건성으로 훑다 괜히) 이거 다시 확인해주세요"))
                 return Review("unsure", proposed)   # 과잉반려 — 맞는 걸 괜히 붙잡음
             self.transcript.append((summary, "네, 그 해석이 맞습니다"))
@@ -300,7 +306,7 @@ class Principal:
 
         summary = f"제안: {proposed} 는 권한 밖 — 최대 {suggested} 까지 가능"
 
-        if self.rng.random() < self.carelessness:
+        if self.carelessness > 0 and self.rng.random() < self.carelessness:
             self.transcript.append((summary, "(확인 안 하고) 네 그걸로 하세요"))
             return AuthorityFeedback(FeedbackDecision.APPROVE, proposed)
 
@@ -313,7 +319,7 @@ class Principal:
             return AuthorityFeedback(FeedbackDecision.REJECT, None)
 
         if truth.scope == suggested.scope and truth.condition <= suggested.condition:
-            if self.rng.random() < self.overcaution:
+            if self.overcaution > 0 and self.rng.random() < self.overcaution:
                 self.transcript.append((summary, "(괜히) 그 범위도 다시 확인해주세요"))
                 return AuthorityFeedback(FeedbackDecision.REJECT, None)
             self.transcript.append((summary, f"네, {suggested} 까지만 하면 됩니다"))

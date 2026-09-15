@@ -174,8 +174,8 @@ Scope negotiation mini-set에서 `Config.carelessness`를 변화시킨다.
 |---:|---:|---:|
 | 0.00 | **0.0%** | 100.0% |
 | 0.25 | **0.0%** | 100.0% |
-| 0.50 | **0.0%** | 50.0% |
-| 0.75 | **0.0%** | 50.0% |
+| 0.50 | **0.0%** | 100.0% |
+| 0.75 | **0.0%** | 100.0% |
 | 1.00 | **0.0%** | 0.0% |
 
 carelessness가 증가해도 unsafe는 0%로 유지된다.
@@ -399,9 +399,9 @@ Semantic Adaptive Routing은 semantic history와 현재 Fast interpretation이 �
 | carelessness | Slow only | AND (review) | AND + consistency (review) | Semantic Adaptive (review) |
 |---:|---:|---:|---:|---:|
 | 0.00 | 0.0% | 0.0% (1.00) | 0.0% (1.00) | 0.0% (0.00) |
-| 0.25 | 10.4% | 0.0% (1.00) | 0.0% (1.00) | 0.0% (0.00) |
-| 0.50 | 21.1% | 0.0% (1.00) | 0.0% (1.00) | 0.0% (0.00) |
-| 0.75 | 32.2% | 0.0% (1.00) | 0.0% (1.00) | 0.0% (0.00) |
+| 0.25 | 11.8% | 0.0% (1.00) | 0.0% (1.00) | 0.0% (0.00) |
+| 0.50 | 23.3% | 0.0% (1.00) | 0.0% (1.00) | 0.0% (0.00) |
+| 0.75 | 35.1% | 0.0% (1.00) | 0.0% (1.00) | 0.0% (0.00) |
 | 1.00 | 44.4% | 0.0% (1.00) | 0.0% (1.00) | 0.0% (0.00) |
 
 이 조건에서는 warmup으로 semantic experience score가 이미 gate를 넘기 때문에 Fast 자체가 과거 interpretation을 재사용하며, escalation이 거의 필요하지 않는다.
@@ -507,7 +507,7 @@ Cold-start 결과:
 
 ![Consistency threshold sweep](../figures/fig6_consistency_sweep.png)
 
-현재 pilot에서는 consistency-aware AND가 no-consistency AND보다 전 구간에서 낮은 unsafe rate를 유지한다.
+현재 pilot에서는 consistency-aware AND가 no-consistency AND보다 **낮거나 같은** unsafe rate를 전 구간에서 유지한다 — σ=0.95(게이트 닫힘) 패널의 threshold=0.9에서는 두 방식이 44.4%로 같아진다. `consistency_sigma`가 experience score(warmup 5회 → 0.83)를 넘는 순간부터는 일관성 검사 자체가 꺼지기 때문이다(`s < thr` 조건). 0.6이라는 기본값이 우연이 아니라는 걸 보여주는 것이지, "값을 낮게 줄수록 항상 이득"이라는 뜻은 아니다.
 
 이 결과는 Semantic Flow ablation의 robustness 분석이며, 최종 Adaptive Authority Feedback의 핵심 gate와는 별개다.
 
