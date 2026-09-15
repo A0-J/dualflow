@@ -1,120 +1,497 @@
-# 설계 노트
+# Design Notes
 
-시행착오와 구현 결정의 이유를 남겨둔 문서. [README](../README.md) 의 Current Scope
-and Limitations / Roadmap 은 이 문서를 요약한 것이다.
+이 문서는 DualFlow의 **최종 설계 원칙과 구현 경계**를 정리한다.  
+연구 과정의 시간순 기록보다, 현재 `main` 코드가 왜 이런 구조를 갖는지와 무엇을 안전성의 핵심으로 보는지를 설명하는 데 목적이 있다.
 
-## 지름길(exact-field 매칭)로는 안 풀리는 이유 — Authority Feedback Loop 의 동기
+> 핵심 원칙  
+> **DualFlow = Semantic Verification × Authority Verification**  
+> Core Safety Mechanism은 experience 없이도 안전해야 하며, experience는 반복적인 검증 비용을 줄이는 최적화 레이어로만 사용한다.
 
-Joint Verification 에 `V_action∧V_resource∧V_scope∧V_condition` 형태로 원본 값을
-`task.truth` 와 직접 비교하는 exact-field 매칭을 시도해봤다
-(`match_intent(..., require_fields=True)`, `Config.use_field_match`, 기본 False).
+---
 
-벤치마크상으로는 자원 치환 공격을 완전히 막지만, A 가 검토를 아예 안 해도
-(`carelessness=1.0`) 여전히 unsafe=0% 가 나온다
-(`test_exact_field_match_is_an_oracle_not_a_fix`). 이건 Joint 가 안전해진 게
-아니다 — 정확히는, **현재 verifier 가 가진 정책·권한 정보만으로는 A 가 의도한
-정확한 resource/scope 를 복원할 수 없고, 이를 `task.truth` 와 비교하면 평가
-오라클이 된다**는 뜻이다.
+## 1. 두 검증 축을 분리하는 이유
 
-추가 신뢰 소스(A 의 실제 확인) 없이는 이 문제를 풀 수 없다는 게 이 진단 실험의
-결론이고, Authority Feedback Loop 는 그 신뢰 소스를 정식으로 만든 것이다 —
-`task.truth` 는 `Principal` 안에서만 쓰이고, `run_feedback()`/`framework.py` 는
-`Principal.review_authority()` 의 응답(`ConfirmedAuthority`)만 본다
-(`test_run_feedback_only_needs_the_review_authority_method`).
+Agent-to-agent delegation에는 서로 다른 두 질문이 존재한다.
 
-이 스위치는 라이브 파이프라인 기본값을 꺼두고(`use_field_match=False`)
-진단/ablation 용으로만 남겼다.
+### Semantic Verification
 
-## Authority Feedback 의 경계
+> **What does the request mean?**
 
-Authority failure 를 세 가지로 구분한다(`capability.check_authority`):
+Delegate가 Principal의 요청을 어떤 `action / resource / scope / condition`으로 해석했는지를 다룬다.
 
-- `no_grant` — action/resource 자체가 위임된 적 없음 → 하드 리젝트, 협상 불가
-- `condition_missing` — scope 는 맞지만 필수 조건이 빠짐 → 하드 리젝트, 협상 불가
-  (조건은 delegate 가 스스로 채울 수 있는 값이 아니다)
-- `scope_exceeded` — action/resource/condition 은 맞는데 범위만 넘음 →
-  Feedback 을 통한 협상 가능
+주요 구성 요소:
 
-**따라서 Authority Feedback 은 권한이 없는 행동을 새로 허용하는 메커니즘이
-아니라, 이미 위임된 budget 안에서 과도한 scope 를 축소/교정하는
-메커니즘이다.** `no_grant`/`condition_missing` 은 Feedback 을 아예 호출하지
-않고 즉시 거부한다 — 이 경계가 무너지면 Authority Feedback Loop 는 Authority
-Flow 의 하드 제약을 우회하는 구멍이 될 수 있다.
+- interpretation candidates
+- Shannon entropy
+- information gain
+- clarification
+- Fast / Slow / AND / Semantic Adaptive Routing
 
-## non-amplification 의 구현 방식
+Semantic uncertainty가 낮다는 사실만으로 실행이 올바르다고 볼 수는 없다.
 
-non-amplification 은 별도의 검증기(verifier)가 아니다 — 기존 메커니즘 세 곳이
-같은 연산(`Budget.meet`, 즉 교집합)을 반복 적용해서 만들어내는 성질이다.
+\[
+H \approx 0
+\not\Rightarrow
+\text{correct delegation}
+\]
 
-1. **위임 체인**: `delegation_chain` 이 각 홉마다 `Budget.meet()` 만 적용한다.
-   합성이 권한을 넓히는 경로 자체가 코드에 없다.
-2. **Authority Feedback**: 라운드마다(`run_feedback` 의 `for` 루프 top) 현재
-   제안을 `check_authority()` 로 다시 검증한다. Principal 이 무엇을 승인했든,
-   그 결과가 위임 예산 밖이면 다음 라운드에서 다시 걸린다.
-3. **Adaptive reuse**: 검증된 이력을 재사용할 때도 그 값을 그대로 믿지 않고
-   현재 예산과 다시 교집합한다.
+Delegate가 잘못된 해석 하나에 확신을 가지는 경우에도 entropy는 낮을 수 있기 때문이다.
 
-즉:
+### Authority Verification
 
-$$ C_{\text{adaptive}} = C_{\text{experience}} \cap C_{\text{current budget}}
-\;\subseteq\; C_{\text{current budget}} \;\subseteq\; C_A $$
+> **What is the delegate allowed to do?**
 
-가 세 곳 모두에서 반복해서 성립하고, 이 부등식을 깨는 코드 경로가 없다는 것이
-`test_verified_history_alone_can_never_widen_authority` 같은 테스트로 고정돼
-있다. "non-amplification 을 검사한다" 는 표현보다 "non-amplification 이
-구조적으로 성립한다" 가 더 정확하다.
+Delegate의 실행 제안이 현재 위임된 capability budget 안에 있는지를 다룬다.
 
-## Verified Experience 의 위치
+검증 대상:
 
-두 저장소를 혼동하면 안 된다:
+- action / resource grant
+- scope
+- condition
+- delegation budget
+
+따라서 DualFlow는 semantic confidence를 authority 판단으로 대체하지 않고, 두 축을 독립적으로 유지한다.
+
+---
+
+## 2. Runtime과 Evaluation Ground Truth의 경계
+
+Pilot benchmark에는 평가용 정답인 `task.truth`가 존재한다.  
+그러나 runtime verifier가 이 값을 직접 사용하면 시스템이 정답을 미리 알고 있는 **evaluation oracle**이 된다.
+
+따라서 현재 설계에서는 두 영역을 분리한다.
+
+```text
+Runtime
+────────────────────────────────
+Delegation
+→ Semantic Flow
+→ Authority Flow
+→ Principal Feedback
+→ Joint Verification
+→ Execute / Reject
+
+Evaluation only
+────────────────────────────────
+task.truth
+→ ideal decision / metric calculation
+```
+
+`run_feedback()`은 `task.truth`를 직접 읽지 않고 `Principal.review_authority()`의 응답만 사용한다.
+
+이 경계는 다음 테스트로 고정되어 있다.
+
+```text
+test_run_feedback_only_needs_the_review_authority_method
+```
+
+---
+
+## 3. Exact-field Matching은 Live Gate가 아니다
+
+`rule_engine.py`에는 다음과 같은 exact-field comparison을 계산하는 기능이 있다.
+
+\[
+V_{\text{action}}
+\land
+V_{\text{resource}}
+\land
+V_{\text{scope}}
+\land
+V_{\text{condition}}
+\]
+
+구현:
+
+```text
+field_match()
+Config.use_field_match
+```
+
+그러나 `Config.use_field_match=False`가 기본값이며, live pipeline의 판정에는 사용하지 않는다.
+
+이유는 reference field가 `task.truth`에서 유도되기 때문이다.  
+이를 runtime gate로 켜면 resource substitution 공격을 쉽게 차단할 수 있지만, 이는 verifier가 Principal의 latent intent를 이미 알고 있다는 비현실적인 가정을 도입한다.
+
+관련 테스트:
+
+```text
+test_exact_field_match_is_an_oracle_not_a_fix
+```
+
+따라서 exact-field matching은 현재 **diagnostic / oracle ablation**으로만 유지한다.
+
+이 실험에서 얻은 핵심 결론은 다음과 같다.
+
+> 정책과 capability 정보만으로는 Principal이 의도한 정확한 resource/scope를 항상 복원할 수 없다.
+
+이 missing information을 runtime에서 획득하기 위해 Authority Feedback Loop를 둔다.
+
+---
+
+## 4. Authority Failure Taxonomy
+
+`capability.check_authority()`는 실패를 세 종류로 나눈다.
+
+| failure kind | 의미 | 처리 |
+|---|---|---|
+| `no_grant` | action/resource 자체가 위임되지 않음 | hard reject |
+| `condition_missing` | scope는 맞지만 필수 시스템 조건이 충족되지 않음 | hard reject |
+| `scope_exceeded` | grant와 condition은 맞지만 제안 범위가 위임 상한을 초과 | feedback 가능 |
+| `valid` | 현재 budget 안에서 허용됨 | continue |
+
+중요한 설계 경계는 다음과 같다.
+
+```text
+no_grant          → REJECT
+condition_missing → REJECT
+scope_exceeded    → Authority Feedback Loop
+valid             → continue
+```
+
+즉 **협상 가능한 것은 `scope_exceeded`뿐**이다.
+
+Authority Feedback은 없는 권한을 새로 만들어내는 기능이 아니라, 이미 존재하는 위임 budget 안에서 과도한 scope를 축소하거나 교정하는 기능이다.
+
+---
+
+## 5. Authority Feedback Loop
+
+`scope_exceeded`가 발생한 경우 Agent A(Principal)는 bounded negotiation을 통해 다음 중 하나를 반환할 수 있다.
+
+```text
+APPROVE
+CORRECT
+RESTRICT
+REJECT
+```
+
+Feedback 결과는 곧바로 실행 권한이 되지 않는다.
+
+매 라운드에서 수정된 proposal은 다시 `check_authority()`를 통과해야 한다.
+
+```text
+B proposal
+    ↓
+scope_exceeded
+    ↓
+A feedback
+    ↓
+revised proposal
+    ↓
+authority recheck
+    ├─ valid → continue
+    ├─ scope_exceeded → next bounded round
+    └─ hard failure / reject / exhausted → REJECT
+```
+
+이 때문에 Principal이 실수하더라도 feedback 자체가 privilege amplification 통로가 되지 않는다.
+
+---
+
+## 6. Non-amplification은 별도 판정기가 아니라 구조적 불변식
+
+DualFlow에는 `non_amplification_check()` 같은 독립적인 분기가 없다.
+
+Non-amplification은 동일한 **intersection + revalidation** 패턴이 반복 적용되기 때문에 구조적으로 성립한다.
+
+### 6.1 Delegation chain
+
+각 hop의 budget은 `Budget.meet()`으로 합성된다.
+
+\[
+C_{\text{next}}
+=
+C_{\text{current}}
+\cap
+C_{\text{ceiling}}
+\]
+
+따라서:
+
+\[
+C_n
+\subseteq
+C_{n-1}
+\subseteq
+\cdots
+\subseteq
+C_A
+\]
+
+### 6.2 Authority Feedback
+
+Principal이 어떤 수정안을 반환하더라도 매 라운드 `check_authority()`로 현재 budget에 대해 재검증한다.
+
+### 6.3 Adaptive reuse
+
+Verified history도 그대로 실행하지 않는다.
+
+\[
+C_{\text{adaptive}}
+=
+C_{\text{experience}}
+\cap
+C_{\text{current budget}}
+\]
+
+따라서 항상:
+
+\[
+C_{\text{adaptive}}
+\subseteq
+C_{\text{current budget}}
+\subseteq
+C_A
+\]
+
+가 성립한다.
+
+관련 테스트:
+
+```text
+test_verified_history_alone_can_never_widen_authority
+```
+
+따라서 문서와 논문에서는 **"non-amplification을 검사한다"**보다  
+**"non-amplification이 구조적으로 보장된다"**고 표현하는 것이 정확하다.
+
+---
+
+## 7. Joint Verification의 실제 Live Gate
+
+Joint Verification은 exact-field equality를 live gate로 사용하지 않는다.
+
+현재 핵심 조건은:
+
+\[
+Sim_{\text{path}}(p,p^*) \ge \tau
+\]
+
+그리고:
+
+\[
+Terminal(p) = Terminal(p^*)
+\]
+
+이다.
+
+여기서 `Terminal`은 `read/write` 같은 action type이 아니라 SOP trace의 최종 decision이다.
+
+```text
+EXECUTE
+ESCALATE
+REJECT
+```
+
+따라서 그림과 문서에서는 다음 표현을 사용한다.
+
+```text
+Path similarity: Sim_path ≥ τ
+AND
+Terminal decision match
+AND
+Authority recheck
+```
+
+`V_action / V_resource / V_scope / V_condition`은 계산 가능하지만, 현재는 oracle/ablation 용도이며 live gate를 구성하지 않는다.
+
+---
+
+## 8. 두 Experience Store는 서로 다른 질문에 답한다
+
+두 저장소의 역할을 혼동하면 안 된다.
 
 | | `semantic.ExperienceStore` | `authority_feedback.VerifiedAuthorityStore` |
 |---|---|---|
-| 담는 것 | semantic interpretation 이력 — EXECUTE 로 끝난 아무 해석 | A 가 **실제로 확인해주고** 시스템이 **재검증**해서 EXECUTE 까지 이어진 권한 상태만 |
-| 쓰이는 곳 | Semantic Flow(Fast 의 experience 게이트, Semantic Adaptive Routing) | Authority Feedback Loop 의 Adaptive Gate |
-| 신뢰 근거 | "과거에 이렇게 해석했다" (semantic 신호) | "A 가 이 범위를 직접 확인했다" (authority 신호) |
+| 저장 내용 | 과거 semantic interpretation | Principal이 확인하고 시스템이 재검증한 authority state |
+| 질문 | "과거에는 이 요청을 어떻게 해석했나?" | "A가 실제로 어느 범위를 확인했나?" |
+| 사용 위치 | Fast / Semantic Adaptive Routing | Adaptive Authority Feedback |
+| 신뢰 수준 | semantic history | principal-confirmed authority history |
+| Core safety 의존성 | 없음 | 없음 |
 
-전자는 **의미 해석**에 대한 이력이고, 후자는 **권한 범위**에 대한 이력이다 — 이름이
-비슷해도 완전히 다른 질문에 답한다. `VerifiedAuthorityStore` 는 권한을 만들어내는
-source 가 아니라 **현재 권한을 좁히는 hint** 일 뿐이라는 게 핵심이다(non-amplification
-절 참고) — 아무리 많이 확인됐어도 그 자체로 실행을 허가하지 않고, 항상 현재 예산과
-다시 교집합된 뒤에만 쓰인다.
+`VerifiedAuthorityStore`에 들어가는 것은 단순 EXECUTE 이력이 아니다.
 
-## 미해결 항목
+개념적으로:
 
-**Slow 리뷰어를 A 마다 다르게(에이전트별 신뢰도) 두거나, 검토 예산(하루 N건)을
-제약으로 넣으면** "Slow 를 누구에게, 몇 건에 쓸 것인가" 가 최적화 문제가 된다.
-지금 `warmup_then_attack` 이 그 실험의 골격이다. Semantic Adaptive Routing 이
-에스컬레이션한 뒤 Slow 자체의 신뢰도가 상한선이 된다는 관찰(EXPERIMENTS.md §4.3)과
-바로 연결된다.
+```text
+Principal confirmation
++ authority revalidation
++ successful execution
+→ Verified Authority Experience
+```
 
-**엔트로피를 LLM 에게 물어보는 안은 권장하지 않는다.** 차별점의 핵심이
-"저엔트로피 구간은 LLM 호출 자체를 원천 배제" 인데, H 를 LLM 으로 구하면 모든
-위임이 최소 1회 호출하게 되어 LLM률이 11.1% → 100% 로 오른다. 상시 LLM
-베이스라인과 비용이 같아진다. 타협안은 **LLM 은 후보 집합 Ω 생성에만 쓰고 H 는
-공식으로 계산**하는 것이다(현 구조가 이미 그 모양이다). 대신 "LLM 이 신고한
-확률이 얼마나 calibrated 한가" 를 별도 실험으로 돌리면 공식을 쓰는 근거가
-논문에 생긴다.
+`framework.py`는 실제 authority negotiation을 거친 실행만 기록하며, auto-restrict로 재사용한 결과를 다시 새 확인값처럼 누적하지 않는다.
 
-**후보 생성기의 품질이 다음 병목이다.** 현재 실험은 Ω 안에 정답이 항상 있다고
-가정한다. 정답이 Ω 밖일 때(`apply_answer` 가 빈 집합을 만나는 경우)의 거동이
-실제 배치의 리스크다.
+핵심 원칙:
 
-**σ, k, λ 스윕.** θ 스윕과 같은 방식으로 돌릴 수 있게 `evaluate` 가 준비돼 있다.
+> **Verified Experience is not an authority source. It is only a narrowing hint.**
 
-**용어.** 논문에서는 `belief` 대신 `interpretation distribution` 같은 표현을
-쓰는 편이 안전하다. "belief" 는 개념적으로 애매하고, 이 논지가 바로 그
-"자기신고 belief" 를 공격 대상으로 삼기 때문에 같은 단어를 쓰면 혼동된다.
+---
 
-## 실제 LLM 붙이기
+## 9. Adaptive Authority Feedback
 
-교체할 지점은 세 곳뿐이고, 나머지는 그대로 재사용된다.
+Optimization Layer의 목적은 Core Safety Mechanism을 바꾸는 것이 아니라 Principal feedback 비용을 줄이는 것이다.
 
-| 지점 | 현재 | 교체 |
+현재 gate는 설명 가능한 단순 규칙을 사용한다.
+
+\[
+n_{\text{confirmed}} \ge 3
+\]
+
+그리고
+
+\[
+agreement\_ratio \ge 0.8
+\]
+
+을 모두 만족하면 과거 verified authority를 재사용해 본다.
+
+```text
+verified history sufficient and consistent
+        ↓
+C_experience ∩ C_current_budget
+        ↓
+authority recheck
+        ↓
+valid → feedback 생략
+```
+
+이력이 부족하거나 불일치하거나 현재 budget과 맞지 않으면 Principal feedback을 다시 활성화한다.
+
+복잡한 learned risk score를 두지 않은 이유는 현재 단계의 목표가 **adaptive decision의 해석 가능성**과 **safety invariant 유지**이기 때문이다.
+
+---
+
+## 10. Drift Invalidation
+
+Verified history는 재사용 가능하지만 영구적이지 않다.
+
+새로 Principal이 확인한 authority state가 저장된 state와 다르면 stale history를 reset하고 새 이력을 구축한다.
+
+```text
+old verified scope
+        ↓
+new principal-confirmed scope differs
+        ↓
+reset stale history
+        ↓
+rebuild from the new state
+```
+
+관련 테스트:
+
+```text
+test_a_differing_confirmation_resets_stale_history
+```
+
+이 설계는 오래된 history가 legitimate delegation drift를 계속 압도하는 것을 방지한다.
+
+---
+
+## 11. Semantic Adaptive Routing은 별도 Ablation
+
+`Config.mode="adaptive"`의 Semantic Adaptive Routing과 Optimization Layer의 Adaptive Authority Feedback은 다른 메커니즘이다.
+
+### Semantic Adaptive Routing
+
+- `semantic.ExperienceStore` 사용
+- 평상시 Fast
+- Fast가 확정하지 못하거나 semantic history와 충돌할 때 Slow로 escalation
+- Semantic Flow 내부 strategy
+
+### Adaptive Authority Feedback
+
+- `VerifiedAuthorityStore` 사용
+- `scope_exceeded` 상황에서 Principal feedback을 호출할지 결정
+- Optimization Layer
+- 현재 최종 구조에서 "adaptive feedback"이라고 부르는 대상
+
+논문에서는 두 메커니즘을 이름부터 분리해 혼동을 피한다.
+
+---
+
+## 12. Threat Model의 경계
+
+현재 robustness 실험에서 공격자는 Agent B의 semantic proposal generation을 오염시킬 수 있다고 본다.
+
+예:
+
+```text
+candidate set → attacker-selected single interpretation
+H → 0
+```
+
+따라서 uncertainty-only execution gate는 공격 가능하다.
+
+반면 Adaptive Authority Feedback은 다음 trusted state를 전제로 한다.
+
+- current authority budget
+- VerifiedAuthorityStore
+- Principal feedback channel
+
+따라서 정확한 표현은:
+
+> **robust to semantic-proposal manipulation under trusted authority state**
+
+이다.
+
+"모든 intent manipulation에 구조적으로 면역"이라고 넓게 표현하지 않는다.
+
+특히 이미 current authority 안에 있는 다른 resource를 선택하면 `scope_exceeded`가 발생하지 않을 수 있으며, 이는 별도의 intent confirmation 문제다.
+
+---
+
+## 13. Current Scope and Limitations
+
+현재 저장소는 **deterministic mechanism-validation prototype**이다.
+
+주요 한계:
+
+1. semantic candidate generation이 scripted다.
+2. Principal response가 simulated다.
+3. 작은 controlled pilot benchmark를 사용한다.
+4. 후보 집합 \(\Omega\) 안에 올바른 interpretation이 존재한다고 가정한다.
+5. current authority state와 verified authority history를 trusted state로 본다.
+6. policy상 허용되지만 Principal이 의도하지 않은 in-scope resource selection은 별도 문제다.
+7. \(\theta, \sigma, k, \lambda\) 등 주요 threshold는 외부 domain에서 재튜닝이 필요하다.
+
+따라서 현재 실험은 **mechanism correctness / safety invariant**를 검증하는 근거이며, 실제 LLM 환경에서의 external validity는 별도 평가가 필요하다.
+
+---
+
+## 14. External LLM Evaluation에서 교체할 지점
+
+Core 구조를 바꾸지 않고 다음 세 부분만 실제 시스템으로 교체할 수 있다.
+
+| 지점 | 현재 | 외부 평가 시 |
 |---|---|---|
-| 해석 후보 생성 | `DelegationTask.candidates` (스크립트) | 명세 + 툴 스키마로부터 후보를 뽑는 파서/모델 |
-| 역질의 응답 | `semantic.Principal` (오라클) | 실제 Agent A 엔드포인트 |
-| LLM 의미 판단 | `llm.ScriptedJudge` | `llm.AnthropicJudge` (골격 포함) |
+| interpretation candidate generation | `DelegationTask.candidates` | 실제 LLM / parser |
+| clarification / authority response | simulated `Principal` | 실제 Agent A |
+| fallback semantic judge | `ScriptedJudge` | 실제 LLM judge |
 
-LLM 을 붙일 때도 **자유 생성이 아니라 후보 중 택일**로 좁혀서 부르는 구조를
-유지할 것. 호출 1회, 출력 토큰 수 개로 끝나므로 fallback 비용 가정이 유지된다.
+실제 LLM을 붙일 때도 authority algebra와 non-amplification invariant는 그대로 유지한다.
+
+---
+
+## 15. Design Summary
+
+```text
+Core Safety Mechanism
+──────────────────────────────────
+Semantic Verification
++ Authority Verification
++ Authority Feedback
++ Joint Verification
+
+Optimization Layer
+──────────────────────────────────
+Verified Authority Experience
++ Adaptive Feedback Gate
+```
+
+핵심 설계 원칙은 두 문장으로 요약할 수 있다.
+
+> **Core provides safety even without experience.**
+
+> **Optimization reduces feedback cost without widening authority.**
