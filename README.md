@@ -1,3 +1,5 @@
+**English** | [한국어](README_KOR.md)
+
 # DualFlow
 
 **Semantic and Authority Verification for Safe Agent-to-Agent Delegation**
