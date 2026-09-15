@@ -1,7 +1,7 @@
 """
 실험 결과를 그림으로 저장한다.
 
-    dualflow-plots                        # figures/ 에 PNG 5장
+    dualflow-plots                        # figures/ 에 PNG 8장
     dualflow-plots careless --trials 50   # 논문용 — 밴드가 좁아진다
     python -m dualflow.plots --outdir 어디에 --dpi 300
 
@@ -18,9 +18,13 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from .bench import adversarial_tasks, build_judge, build_tasks
+from .bench import (
+    adversarial_tasks, build_judge, build_tasks, scope_negotiation_sequence,
+    scope_negotiation_tasks,
+)
 from .framework import (
-    Config, DelegationVerifier, ExperienceStore, evaluate, warmup_then_attack,
+    Config, DelegationVerifier, ExperienceStore, evaluate, run_sequence,
+    warmup_then_attack,
 )
 
 PALETTE = {"unsafe": "#c0392b", "benign": "#27ae60", "cost": "#2980b9",
@@ -236,9 +240,109 @@ def fig_consistency_sweep(outdir, dpi, trials=10, warmup=5, sweep_c=1.0, **_):
     plt.close(fig)
 
 
+def fig_authority_feedback(outdir, dpi, **_):
+    """Fig.7 — Authority Feedback Loop pilot (실험 ⑤, §7-2).
+
+    scope_negotiation_tasks() 위에서 Feedback 을 껐을 때/켰을 때를 비교한다 —
+    fig1/fig2 와 같은 두 막대(unsafe/benign) 형식을, 정상 조건과 belief 조작
+    공격 조건 두 패널로 나란히 그린다.
+    """
+    tasks = scope_negotiation_tasks()
+    judge = build_judge(tasks)
+    adv = adversarial_tasks(tasks)
+    cfgs = [Config(name="Feedback\noff", mode="fast", use_authority_feedback=False),
+            Config(name="Feedback\non (proposed)", mode="fast")]
+
+    def panel(ax, ts, title):
+        rows = [evaluate(c, ts, judge=judge) for c in cfgs]
+        x = range(len(rows))
+        w = 0.38
+        ax.bar([i - w / 2 for i in x], [r["unsafe_rate"] * 100 for r in rows], w,
+               label="Unsafe execution", color=PALETTE["unsafe"])
+        ax.bar([i + w / 2 for i in x], [r["benign_completion"] * 100 for r in rows], w,
+               label="Benign completion", color=PALETTE["benign"])
+        for i, r in enumerate(rows):
+            ax.text(i - w / 2, r["unsafe_rate"] * 100 + 2,
+                    f"{r['unsafe_rate']*100:.0f}", ha="center", fontsize=8)
+            ax.text(i + w / 2, r["benign_completion"] * 100 + 2,
+                    f"{r['benign_completion']*100:.0f}", ha="center", fontsize=8)
+        ax.set_xticks(list(x))
+        ax.set_xticklabels([c.name for c in cfgs], fontsize=9)
+        ax.set_ylabel("%")
+        ax.set_ylim(0, 124)
+        ax.set_title(title, fontsize=11)
+        ax.legend(fontsize=8, loc="upper left", framealpha=0.9)
+        ax.grid(axis="y", alpha=0.25)
+
+    fig, axes = plt.subplots(1, 2, figsize=(9, 4.2))
+    panel(axes[0], tasks, "Normal condition")
+    panel(axes[1], adv, "Under belief manipulation (cold)")
+    fig.suptitle("Authority Feedback Loop — scope negotiation (experiment 5)",
+                fontsize=12)
+    fig.tight_layout()
+    fig.savefig(outdir / "fig7_authority_feedback.png", dpi=dpi)
+    plt.close(fig)
+
+
+def fig_adaptive_verification(outdir, dpi, **_):
+    """Fig.8 — Adaptive Verification 9-round timeline (실험 ⑥, §7-2 확장).
+
+    같은 위임 유형을 반복(round 0-4) -> drift(round 5) -> 재구축(6-7) ->
+    조작된 제안(round 8) 으로 이어지는 단일 시퀀스. 막대(항상 높이 1)는 그
+    라운드에 Principal 에게 실제로 물어봤는지(파랑)/검증된 이력으로 자동
+    해결됐는지(초록)를 색으로 보여주고, 꺾은선은 쌓인 확인 횟수(verified_n)다
+    — agreement_ratio 는 drift 리셋 직후에도 곧장 1.0 이 돼서(단일 값만 남으므로)
+    "쌓이다가 끊기는" 모양을 안 보여준다. n 이 그 모양을 보여주는 지표다.
+    """
+    tasks = scope_negotiation_sequence()
+    judge = build_judge(tasks)
+    rounds = run_sequence(Config(mode="fast", use_experience=False), tasks, judge)
+
+    xs = [r.index for r in rounds]
+    asked = [not r.authority_auto_restricted for r in rounds]
+    colors = [PALETTE["cost"] if a else PALETTE["benign"] for a in asked]
+    verified_n = [r.verified_n for r in rounds]
+
+    fig, ax = plt.subplots(figsize=(9.5, 4.6))
+    ax.bar(xs, [1] * len(xs), width=0.6, color=colors)
+    ax.set_ylim(0, 1.55)
+    ax.set_yticks([])
+    ax.set_ylabel("Principal interaction")
+    ax.set_xlabel("round (same delegation key)")
+    ax.set_xticks(xs)
+    from matplotlib.patches import Patch
+    ax.legend(handles=[Patch(color=PALETTE["cost"], label="Asked Principal"),
+                       Patch(color=PALETTE["benign"], label="Auto-restrict "
+                             "(Verified Experience)")],
+              fontsize=8, loc="upper left", framealpha=0.9)
+
+    ax2 = ax.twinx()
+    ax2.plot(xs, verified_n, "o--", color=PALETTE["and"], label="confirmed history (n)")
+    ax2.axhline(3, ls=":", color="grey", linewidth=1)
+    ax2.text(0, 3.1, "n_min = 3", fontsize=8, color="grey")
+    ax2.set_ylabel("verified_n")
+    ax2.set_ylim(0, 4.4)
+    ax2.legend(fontsize=8, loc="center right")
+
+    ax.axvline(4.5, ls="--", color=PALETTE["slow"], linewidth=1.2)
+    ax.text(4.5, 1.47, "legitimate drift\n(2026-08 → 2026-09)",
+            ha="center", va="top", fontsize=8, color=PALETTE["slow"])
+    ax.axvline(7.5, ls="--", color=PALETTE["unsafe"], linewidth=1.2)
+    ax.text(7.5, 1.47, "manipulated\nproposal (H=0)",
+            ha="center", va="top", fontsize=8, color=PALETTE["unsafe"])
+
+    fig.suptitle("Adaptive Verification — stable reuse, drift, and manipulation "
+                "in one sequence (experiment 6)", fontsize=12)
+    fig.tight_layout()
+    fig.savefig(outdir / "fig8_adaptive_verification.png", dpi=dpi)
+    plt.close(fig)
+
+
 FIGURES = {"pilot": fig_pilot, "attack": fig_attack, "theta": fig_theta,
            "experience": fig_experience, "careless": fig_careless,
-           "consistency": fig_consistency_sweep}
+           "consistency": fig_consistency_sweep,
+           "authfeedback": fig_authority_feedback,
+           "adaptiveauth": fig_adaptive_verification}
 
 
 def main(argv=None) -> int:
