@@ -193,13 +193,12 @@ Experience 는 "낡아버린 정책/캐시" 처럼 보이지 않는다(§3 실�
 | 1.00 | 0.0% | 80.0% | 0.0% | 0.22 | 0.22 |
 | 2.00 | 0.0% | 40.0% | 0.0% | 0.00 | 0.00 |
 
-여기서 가장 중요한 관찰은 **unsafe 가 어느 θ 에서도 0%** 라는 점이다. θ 는 "얼마나 유용한가"만
-조절하고 "안전한가"는 Authority Flow 와 매칭 검증이 따로 책임진다. 두 축이 분리돼 있다는 것이
-이 아키텍처의 설계 의도인데, 스윕이 그걸 실측으로 보여준다. 발표·논문에서 쓸 수 있는 그림이다.
+![θ 스윕 — 안전성은 평평하고 유용성/비용만 움직인다](figures/fig3_theta_sweep.png)
 
-반대로 기본값 θ=0.5 는 이 벤치마크에서 **지배당한다**. θ=0.25 가 같은 LLM률로 benign 100% 를
-내기 때문이다. 기본값은 슬라이드 설정을 따라 0.5 로 두었으니, 실제 도메인에서는 반드시
-스윕으로 정할 것.
+**unsafe 가 어느 θ 에서도 0%** — θ 는 "얼마나 유용한가"만 조절하고 "안전한가"는 Authority
+Flow 와 매칭 검증이 따로 책임진다는 뜻이다. 기본값 θ=0.5 는 이 벤치마크에서 θ=0.25 에
+**지배당한다**(같은 LLM률로 benign 100%) — 슬라이드 설정을 따라 0.5 로 뒀을 뿐, 실제
+도메인에서는 반드시 스윕으로 정할 것.
 
 ### Fast / Slow / AND 파일럿 (피드백 ①②)
 
@@ -223,14 +222,14 @@ Semantic Flow 를 세 가지 방식으로 갈라 각각 돌린다. `Config.mode`
 | AND | 0.0% | 80.0% | 20.0% | 0.44 | 1.00 | 0.11 | 4.56 |
 | Adaptive (제안) | 0.0% | 80.0% | 20.0% | 0.44 | **0.00** | 0.11 | **1.56** |
 
-**정상 상황에서는 Slow 가 AND 를 지배한다.** 안전성이 같고, A 의 교정이 `silent_misread`
-를 살려내 benign 100% 를 찍으며, 비용도 더 싸다. 대신 **모든 위임에서 A 를 호출**한다
-(검토율 1.00). 연구의 출발점이 "사람/LLM 개입 최소화" 였으므로 이 결과는
-"Slow 를 켤지 말지" 가 아니라 **"Slow 를 언제 켤지"** 가 진짜 문제였다.
+![Fast/Slow/AND 파일럿 — 정상 조건](figures/fig1_pilot_normal.png)
 
-이 파일럿(경험 없는 신선한 `ExperienceStore`)에서는 애초에 경험과 모순될 일이 없으므로
-Adaptive 는 그냥 Fast 와 같다 — 비용·검토율이 Fast 와 동일(1.56, 0.00)하고 AND 보다 싸다.
-Adaptive 가 실제로 갈리는 지점은 경험이 쌓인 뒤 공격이 들어오는 §3 실험 ④ 다.
+**정상 상황에서는 Slow 가 AND 를 지배한다** — 안전성이 같고, A 의 교정이 `silent_misread`
+를 살려내 benign 100% 를 찍으며 비용도 더 싸다. 대신 **모든 위임에서 A 를 호출**한다(검토율
+1.00) — 연구의 출발점이 "개입 최소화" 였으므로, 진짜 문제는 "Slow 를 켤지" 가 아니라
+**"언제 켤지"** 였다. 이 파일럿은 경험이 아직 없는 신선한 `ExperienceStore` 라 Adaptive 는
+그냥 Fast 와 같다(비용·검토율 동일) — Adaptive 가 실제로 갈리는 지점은 경험이 쌓인 뒤
+공격이 들어오는 §3 실험 ④ 다.
 
 ### belief 조작 공격 (피드백 ⑥ — "belief 는 공격에 취약")
 
@@ -265,29 +264,27 @@ SAGE-Agent 원 공식에서 무슨 일이 일어나는지부터 보면:
 | AND | **0.0%** | 0.0% | 100.0% | 3.00 |
 | Adaptive (제안) | 44.4% | 0.0% | 20.0% | 0.00 |
 
-Adaptive 가 여기서는 Fast 와 똑같이 뚫린다 — **이건 한계이지 버그가 아니다.** 비교할
-경험 이력이 아직 하나도 없는 "첫 공격" 상황이라, 경험 불일치 신호 자체가 존재하지 않는다.
-이 방어는 "정상 운영으로 이력이 쌓인 뒤 공격이 온다" 는 실험 ③/④ 의 전제 위에서만 작동한다
-— 아래 실험 ④ 참고.
+Adaptive 가 여기서는 Fast 와 똑같이 뚫린다 — **한계이지 버그가 아니다.** 비교할 경험
+이력이 아직 없는 "첫 공격" 이라 불일치 신호 자체가 없다. 이 방어는 "이력이 쌓인 뒤 공격이
+온다" 는 실험 ③/④ 의 전제 위에서만 작동한다.
+
+![belief 조작 공격 — 정상 vs 공격 조건](figures/fig2_attack.png)
 
 읽는 법:
 
-- **EVPI 는 방어선이 아니다.** τ_exec 검사(§5.2 Step 1)가 EVPI 계산보다 앞에 있어,
-  π 가 문턱을 넘으면 질문 생성도 EVPI 도 실행되지 않는다. 9건 전부 그렇게 통과했다.
-  EVPI 를 아무리 잘 설계해도 belief 단계에서 이미 끝난다.
-- **확률을 조작할 필요조차 없다.** Eq.(13)은 지정된 인자에 무조건 p=1 을 준다. 값이
-  맞는지는 보지 않으므로, 공격자는 **빈칸만 채우면** π=1 을 얻는다.
-- **엔트로피 축만으로는 부족하다.** Authority·매칭을 붙여도 44.4% 가 통과한다. 통과하는
-  것들은 *같은 SOP 경로, 같은 권한 안의 다른 자원* 을 노린 공격이다
-  (`/reports/2026-08/` → `/reports/2025-01/`). Sim_path 가 경로만 보기 때문에 잡히지 않는다.
-- **Slow 축은 구조적으로 면역이다.** A 의 검토는 B 의 자기신고 값을 입력으로 쓰지 않는다.
-  게다가 A 가 교정까지 해줘 benign 80% 를 복구한다.
-- **AND 는 공격 하에서 오탐 0%, 미탐 100%.** 교수님이 말한 보수적 트레이드오프의
-  정의 그대로 나온다. 안전하지만 공격받는 동안 시스템이 멈춘다.
+- **EVPI 는 방어선이 아니다.** τ_exec 검사가 EVPI 계산보다 앞에 있어, π 가 문턱을 넘으면
+  질문도 EVPI 도 실행되지 않는다 — 9건 전부 그렇게 통과했다.
+- **확률을 조작할 필요조차 없다.** Eq.(13)은 지정된 인자에 무조건 p=1 을 준다. 공격자는
+  **빈칸만 채우면** π=1 을 얻는다.
+- **엔트로피 축만으로는 부족하다.** Authority·매칭을 붙여도 44.4% 가 통과한다 — *같은 SOP
+  경로, 같은 권한 안의 다른 자원* 을 노린 공격(`/reports/2026-08/` → `/reports/2025-01/`)은
+  Sim_path 가 경로만 보므로 못 잡는다.
+- **Slow 축은 구조적으로 면역이다.** A 의 검토는 B 의 자기신고 값을 입력으로 쓰지 않고,
+  교정까지 해줘 benign 80% 를 복구한다.
+- **AND 는 공격 하에서 오탐 0%, 미탐 100%** — 보수적 트레이드오프의 정의 그대로다.
 
-이 표가 논문의 핵심 그림이 될 수 있다. 주장은 "우리가 더 싸다" 가 아니라
-**"자기신고 불확실성 단일 축에 실행 결정을 거는 구조는 뚫린다"** 이고,
-AND 결합은 취향이 아니라 그 공격에 대한 필연적 대응이 된다.
+주장은 "우리가 더 싸다" 가 아니라 **"자기신고 불확실성 단일 축에 실행 결정을 거는 구조는
+뚫린다"** 이고, AND 결합은 취향이 아니라 그 공격에 대한 필연적 대응이다.
 
 ### 실험 ③ — A 의 검토가 완벽하지 않을 때 (`fig5`)
 
@@ -299,13 +296,10 @@ Slow 단독이 AND 를 지배한다(안전성 동일, benign 100%, 비용 저렴
 시나리오는 **정상 운영 5회로 경험을 쌓은 뒤 같은 유형에 belief 조작 공격 1회** 다.
 지표는 공격 시점의 unsafe 실행률이고, 확률적이므로 50회 평균이다.
 
-> **버그 수정 (2026-09-07):** `adversarial_tasks()` 가 공격 버전을 만들 때 `name` 에
-> `"@attack"` 을 붙이면서, `experience_key` 를 따로 지정하지 않은 8/9 과제는
-> `key`(=`experience_key or name`) 가 함께 바뀌어버렸다. 그 결과 warmup 으로 쌓은
-> 경험이 공격 시점에 **다른 키로 조회**돼 사실상 무시되고 있었고, 아래는 지금까지
-> `vague_clarifiable` 과제 단 하나(9개 중 1개, n=1)의 거동만 반영한 수치였다.
-> `experience_key=t.key` 로 고정해 수정하니(`bench.py`), 결론이 약해지는 게 아니라
-> 오히려 훨씬 강해졌다 — 아래는 수정 후 수치다.
+> **버그 수정 (2026-09-07):** `adversarial_tasks()` 가 공격 버전의 `name` 에 `"@attack"`
+> 을 붙이면서, `experience_key` 를 지정 안 한 8/9 과제는 `key` 도 같이 바뀌어 warmup 경험이
+> 다른 키로 조회되고 있었다(사실상 9개 중 1개만 반영된 수치였음). `experience_key=t.key`
+> 로 고정해 수정하니 결론이 오히려 더 강해졌다 — 아래는 수정 후 수치다.
 
 | carelessness | Slow only | AND (σ=0.80, 게이트 열림) | AND (σ=0.95, 게이트 닫힘) | AND + 일관성검사 |
 |---|---|---|---|---|
@@ -315,27 +309,21 @@ Slow 단독이 AND 를 지배한다(안전성 동일, benign 100%, 비용 저렴
 | 0.75 | 35.1% | **0.0%** | 35.3% | **0.0%** |
 | 1.00 | 44.4% | **0.0%** | 44.4% | **0.0%** |
 
-*(50회 평균 ± 표준오차. σ=0.80 에서는 experience 게이트만으로 이미 unsafe 가 0% —
-이 조건에서는 일관성 검사가 더 해줄 일이 없다. σ=0.95 로 게이트를 닫으면 AND 단독은
-Slow-only 와 거의 같아진다 — 축 하나(Fast 의 경험 게이트)가 꺼지면 나머지 하나(Slow)만
-으로는 부족하다는 뜻. AND + 일관성검사만이 게이트 상태와 무관하게 항상 0% 를 유지한다.)*
+![carelessness 스윕 — Slow only vs AND vs AND+일관성검사](figures/fig5_careless_reviewer.png)
 
-`carelessness > 0` 인 구간은 확률적이므로 `warmup_then_attack` 이 시행별 결과와
-표준오차를 함께 돌려주고, fig5 는 그것을 음영 밴드로 그린다. `--trials 50` 기준으로는
-밴드가 거의 안 보일 만큼 좁다. `carelessness=0` 또는 `=1` 에서는 매 리뷰가 결정론적
-(항상 승인 / 항상 거부)이라 분산이 정확히 0 이다.
+σ=0.80(경험 게이트 발동)에서는 게이트만으로 이미 unsafe 0% — 일관성 검사가 더 해줄 일이
+없다. 게이트를 닫으면(σ=0.95) AND 단독은 Slow-only 와 거의 같아진다(축 하나가 꺼지면
+나머지 하나만으로는 부족). **AND + 일관성검사만이 게이트 상태와 무관하게 항상 0% 를
+유지한다.** 아래는 그 0.6 이라는 문턱값이 우연이 아닌지 0.4~0.9 로 스윕해 확인한 것이다.
 
-**AND 가 존재해야 하는 이유가 여기서 수치로 나온다.** c=0 에서는 세 방식이 같지만,
-A 가 흔들리기 시작하면 갈라진다. 그리고 **갈라지게 만드는 것은 엔트로피가 아니라
-경험이다.** H 는 후보 집합만 오염시키면 0 으로 위조되지만, 누적 이력은 공격자가 손댈 수
-없다 (`test_experience_is_what_separates_them_not_entropy` — warmup=0 이면 이득이 사라진다).
+![consistency_sigma 스윕](figures/fig6_consistency_sweep.png)
 
-수정 전 버전에는 "계속 거절돼 온 위임 유형은 경험이 안 쌓여 두 방식 모두 무력하고,
-그 잔여가 33.3%" 라고 적었었다. 고치고 보니 그건 실제 한계가 아니라 버그의 그림자였다
-— `DelegationBench-mini` 9개 과제는 전부 warmup 중 정상적으로 승인 이력을 쌓을 수
-있는 유형이라, 키만 제대로 이어지면 잔여 unsafe 는 0% 다. (애초에 승인 이력을 쌓을
-수 없는 과제 유형 — 예: 정의상 항상 반려되는 위임 — 에서는 이 방어가 여전히 무력할
-것으로 예상되지만, 현재 벤치마크에는 그런 과제가 없어 실측하지는 못했다.)
+**갈라지게 만드는 것은 엔트로피가 아니라 경험이다.** H 는 후보 집합만 오염시키면 0 으로
+위조되지만, 누적 이력은 공격자가 손댈 수 없다
+(`test_experience_is_what_separates_them_not_entropy`). 단, 이 방어는
+`DelegationBench-mini` 9개처럼 warmup 중 정상적으로 승인 이력을 쌓을 수 있는 유형에서만
+검증됐다 — 애초에 승인 이력을 못 쌓는 과제 유형(예: 정의상 항상 반려)에서는 여전히
+무력할 것으로 예상되지만 실측하지는 못했다.
 
 ### 실험 ④ — Adaptive DualFlow: Slow 를 언제 켤 것인가 (§7-1 구현)
 
@@ -358,11 +346,10 @@ A 가 흔들리기 시작하면 갈라진다. 그리고 **갈라지게 만드는
 | 0.75 | 32.2% | 0.0% (1.00) | 0.0% (1.00) | 0.0% (**0.00**) |
 | 1.00 | 44.4% | 0.0% (1.00) | 0.0% (1.00) | 0.0% (**0.00**) |
 
-**Adaptive 가 AND 를 그대로 지배한다** — 동일한 0% unsafe 를 검토율 0 으로 낸다.
-이유는 Adaptive 의 에스컬레이션 로직이 아니라 **Fast 자신의 experience 게이트**다.
-σ=0.80 에서는 경험 점수(warmup 5회 → 0.83)가 이미 σ 를 넘어서, Fast 가 오염된
-후보 집합(공격)을 아예 쳐다보지도 않고 경험값을 직접 돌려준다. 에스컬레이션 조건
-("Fast 결과가 경험과 모순") 자체가 성립하지 않으므로 Slow 를 부를 필요가 없다.
+**Adaptive 가 AND 를 그대로 지배한다** — 동일한 0% unsafe 를 검토율 0 으로 낸다. 이유는
+Adaptive 의 에스컬레이션 로직이 아니라 **Fast 자신의 experience 게이트**다: 경험 점수
+(warmup 5회 → 0.83)가 이미 σ 를 넘어서 Fast 가 오염된 후보를 아예 안 보고 경험값을
+직접 돌려주므로, 에스컬레이션 자체가 필요 없다.
 
 **σ=0.95 (게이트 닫힘, `adaptive_sigma=0.6` 로 별도 지정)**
 
@@ -375,31 +362,24 @@ A 가 흔들리기 시작하면 갈라진다. 그리고 **갈라지게 만드는
 | 1.00 | 44.4% | 44.4% (1.00) | 0.0% (1.00) | 44.4% (0.44) |
 
 여기서는 경험 게이트가 닫혀 있어 Fast 가 매번 오염된 후보로 판단하므로, 공격 인스턴스의
-44% 정도(warmup 으로 쌓인 경험과 공격 목표가 실제로 다른 과제 비율)에서 에스컬레이션이
-발동한다(검토율 0.44, AND 는 1.00). 그런데 `adaptive_sigma` 를 `sigma` 와 별개로
-낮게 주지 않으면 — 기본값은 `sigma` 를 그대로 물려받는다 — 임계치가 0.95 가 되어 경험
-점수 0.83 이 못 미치고, 에스컬레이션 자체가 트리거되지 않아 Fast 와 동일하게 뚫린다.
-`AND` 가 `consistency_sigma` 를 `sigma` 와 분리해야 했던 것과 같은 이유다.
+44%(warmup 이력과 공격 목표가 실제로 다른 비율)에서 에스컬레이션이 발동한다(검토율 0.44,
+AND 는 1.00). `adaptive_sigma` 를 `sigma` 와 별개로 낮게 주지 않으면(기본은 `sigma` 를
+물려받음) 임계치가 0.95 가 돼 경험 점수 0.83 이 못 미쳐 에스컬레이션이 안 걸리고 Fast 와
+동일하게 뚫린다 — `AND` 가 `consistency_sigma` 를 분리해야 했던 것과 같은 이유다.
 
-**여기서 AND+일관성검사(0%)와 Adaptive 가 갈리는 이유가 흥미롭다.** AND+일관성검사는
-Fast 내부에서 경험과 모순되면 `_consistent()` 가 그 자리에서 확정을 거부하고, AND 의
-`agreed = fast.confirmed and slow.confirmed` 조건상 Fast 가 거부한 순간 Slow 의
-실제 판단과 무관하게 무조건 차단된다 — Slow 호출은 일어나지만 그 결과는 버려진다.
-Adaptive 는 반대로 에스컬레이션을 "진짜 질문" 으로 쓴다: Slow 가 승인하면 그대로
-통과시킨다. 그래서 A 가 부주의(carelessness>0)하면 Adaptive 의 안전성은
-AND+일관성검사(0%) 가 아니라 **Slow 단독과 같은 수준**까지 떨어진다(위 표에서
-Adaptive ≈ Slow only, 오차범위 내). 이건 버그가 아니라 설계상 트레이드오프다 —
-"에스컬레이션된 요청은 Slow 의 진짜 판단을 신뢰한다" 와 "경험과 모순되면 Slow 판단과
-무관하게 무조건 막는다" 는 서로 다른 정책이고, 후자가 더 안전한 대신 그 분기에서는
-Slow 를 부르는 의미가 없어진다(오탐이 아니라 결정을 이미 내려놓고 형식적으로만 묻는
-것과 같다).
+**AND+일관성검사(0%)와 Adaptive 가 갈리는 이유.** AND+일관성검사는 Fast 가 경험과
+모순되면 `_consistent()` 로 그 자리에서 거부하고, `agreed = fast.confirmed and
+slow.confirmed` 조건상 Slow 의 실제 판단과 무관하게 무조건 차단한다(Slow 는 불려도
+결과가 버려진다). Adaptive 는 에스컬레이션을 **진짜 질문**으로 쓴다 — Slow 가 승인하면
+그대로 통과시킨다. 그래서 A 가 부주의하면 Adaptive 의 안전성은 AND+일관성검사(0%) 가
+아니라 **Slow 단독과 같은 수준**까지 떨어진다(위 표에서 Adaptive ≈ Slow only). 버그가
+아니라 트레이드오프다 — "진짜로 신뢰" 와 "무조건 차단" 은 다른 정책이고, 후자가 더
+안전한 대신 그 분기에서 Slow 를 부르는 의미가 없어진다.
 
-**요약.** Adaptive 는 review_rate 를 AND 의 1.00 에서 실질적으로 0(σ 게이트가 열려
-있을 때) 또는 그 발동 비율만큼(게이트가 닫혀 있을 때, 0.44)으로 낮추면서, 경험 게이트가
-포착하는 공격에 대해서는 AND 와 동일한 안전성을 낸다. 다만 (1) 경험 이력이 아직 없는
-"첫 공격" 에는 무력하고(위 §3 cold-attack 표), (2) 에스컬레이션된 뒤에는 Slow 자체의
-신뢰도(carelessness)가 그대로 상한선이 된다 — AND+일관성검사처럼 그 상한선 자체를
-없애지는 못한다. `mode="adaptive"`, `tests/test_framework.py::TestAdaptive` 참고.
+**요약.** Adaptive 는 review_rate 를 AND 의 1.00 에서 0(게이트 열림) 또는 0.44(게이트
+닫힘)로 낮추면서 경험 게이트가 포착하는 공격엔 AND 와 동일한 안전성을 낸다. 다만
+(1) 경험 이력이 없는 "첫 공격" 에는 무력하고, (2) 에스컬레이션된 뒤엔 Slow 자체의
+신뢰도가 그대로 상한선이다. `tests/test_framework.py::TestAdaptive` 참고.
 
 ### Experience Score 누적 (`demo.py experience`)
 
@@ -410,8 +390,10 @@ Slow 를 부르는 의미가 없어진다(오탐이 아니라 결정을 이미 �
 | 1–4 | clarify | 2 | 0 | 0.50 → 0.80 | 1.93 → 1.50 | 2.0 |
 | 5–7 | **experience** | **0** | 0 | 0.83 → 0.88 | 1.38 → 1.18 | **0.0** |
 
+![Experience Score 누적 — 경험이 clarification 루프를 없앤다](figures/fig4_experience.png)
+
 경험이 쌓이면 초기 엔트로피 자체가 내려가고, Score ≥ σ 가 되는 5회차부터 역질의 없이
-자율 판단한다. 그래도 Authority Flow 는 매번 동일하게 검사된다 —
+자율 판단한다. Authority Flow 는 그래도 매번 동일하게 검사된다 —
 `test_authority_beats_confidence` 가 경험을 10회 강제 주입해도 권한 위반은 여전히
 차단됨을 확인한다.
 
@@ -433,6 +415,8 @@ Feedback Loop 자체를 본다.
 | Feedback 없음 | 0.0% | 0.0% | 0.0% |
 | **Feedback 켬(제안)** | 0.0% | **100.0%** | 66.7% |
 
+![Authority Feedback Loop — 정상/공격 조건](figures/fig7_authority_feedback.png)
+
 **공격(belief 조작, cold) 시나리오에서도 수치가 완전히 동일하다.** Authority
 Feedback 은 Slow 축과 같은 이유로 belief 조작에 면역이다 — B 의 자기신고
 확신(H)이 아니라 A 의 실제 응답만 보기 때문이다.
@@ -445,22 +429,18 @@ Feedback 은 Slow 축과 같은 이유로 belief 조작에 면역이다 — B �
 | 0.75 | 0.0% | 50.0% |
 | 1.00 | 0.0% | 0.0% |
 
-**carelessness 가 올라가도 unsafe 는 0% 로 고정이다.** A 가 확인 없이 범위 밖
-제안을 그대로 승인해도(`AuthorityFeedback(APPROVE, proposed)`) non-amplification
-검사(매 라운드 top 에서 위임 예산 재검증)가 막는다 — Authority Feedback 이 만든
-안전성은 "A 가 항상 옳다" 는 가정에 기대지 않는다. 대신 benign completion 이
-떨어진다: A 가 oracle 이 아니라는 것의 실제 의미는 "위험해진다" 가 아니라
-"협상이 실패해 안전하게 거절되는 경우가 늘어난다"(over-rejection) 는 것이다 —
-§실험③(부주의한 Slow 리뷰어)과 같은 결의 결과가 여기서도 나온다.
+**carelessness 가 올라가도 unsafe 는 0% 로 고정이다** — A 가 확인 없이 범위 밖 제안을
+그대로 승인해도 non-amplification 검사(매 라운드 top 에서 위임 예산 재검증)가 막는다.
+대신 benign completion 이 떨어진다: A 가 oracle 이 아니라는 것의 실제 의미는
+"위험해진다" 가 아니라 **"협상이 실패해 안전하게 거절되는 경우가 늘어난다"**
+(over-rejection)는 것이다 — §실험③과 같은 결의 결과다.
 
-**표현을 좁혀서 정확히 쓸 것.** "carelessness=1.0 에서도 unsafe 0%" 는
-"Principal 이 틀려도 DualFlow 가 모든 종류의 잘못된 intent 를 막는다" 는 뜻이
-아니다. 정확히는 **"scope negotiation 에서 reviewer error 가 privilege
-amplification 으로 이어지는 것을 non-amplification invariant 가 차단한다"**
-는 것이다 — 이미 권한 범위 안에 있는 자원 중에서 A 가 의도하지 않은 *다른*
-자원을 B 가 골랐다면(자원이 이미 권한 안에 있으므로 scope_exceeded 자체가
-발생하지 않는다), Authority Feedback Loop 는 관여하지 않는다. 그건 별개의
-intent confirmation 문제이고, 실제 LLM 평가에서 다시 나타날 가능성이 크다.
+**표현은 정확히 좁혀서 쓸 것.** 이건 "Principal 이 틀려도 모든 intent 오류를 막는다"
+가 아니라 **"scope negotiation 에서 reviewer error 가 privilege amplification 으로
+이어지는 걸 non-amplification invariant 가 막는다"** 는 뜻이다 — 이미 권한 범위 안의
+*다른* 자원을 B 가 골랐다면(scope_exceeded 자체가 안 생기므로) Authority Feedback Loop
+는 관여하지 않는다. 그건 별개의 intent confirmation 문제이고, 실제 LLM 평가에서
+다시 나타날 가능성이 크다.
 
 ### 실험 ⑥ — Adaptive Verification: 언제 A 에게 다시 물어볼 것인가 (§7-2 확장, `fig8`)
 
@@ -472,63 +452,35 @@ Adaptive 와 같은 문제의식). `run_sequence()` 로 같은 위임 유형을 
 바뀌면 Feedback 으로 되돌아가는가, C) 조작된 제안(H=0)이 auto-restrict 를 속일
 수 있는가.
 
-```
-Principal
-Feedback     ●   ●   ●           ●   ●   ●
-             │   │   │           │   │   │
-Round        0   1   2   3   4   5   6   7   8
-                         ↑       ↑           ↑
-                   adaptive    drift      manipulated
-                    reuse    (재활성화)    (auto-restrict)
+![Adaptive Verification — 9라운드 타임라인](figures/fig8_adaptive_verification.png)
 
-confirmed   ────────────────────┼───────────────────
-scope        2026-08 (×3, 재사용×2)  │  2026-09 (×3, 재사용×1)
-                                 └─ 낡은 이력 리셋
-```
+| # | 상황 | A 에게 물어봄 | auto-restrict | 이력 n | 확정된 scope |
+|---|---|---|---|---|---|
+| 0–2 | stable (8월 반복) | 예(매번) | 아니오 | 1→3 | `/reports/2026-08/` |
+| 3–4 | stable (이력 충분) | **아니오** | **예** | 3 | `/reports/2026-08/` |
+| 5 | **legitimate drift** (9월로 변경) | 예 | 아니오 | **1**(리셋) | `/reports/2026-09/` |
+| 6–7 | post-drift repeat | 예(재구축 중) | 아니오 | 2→3 | `/reports/2026-09/` |
+| 8 | **manipulated proposal** (H=0) | 아니오 | 예 | 3 | `/reports/2026-09/` (공격 목표 아님) |
 
-| # | 상황 | A 에게 물어봄 | auto-restrict | 이력 n | agreement | 확정된 scope |
-|---|---|---|---|---|---|---|
-| 0–2 | stable (8월 반복) | 예(매번) | 아니오 | 1→3 | 1.00 | `/reports/2026-08/` |
-| 3–4 | stable (이력 충분) | **아니오** | **예** | 3 | 1.00 | `/reports/2026-08/` |
-| 5 | **legitimate drift** (9월로 변경) | 예 | 아니오 | **1**(리셋) | 1.00 | `/reports/2026-09/` |
-| 6–7 | post-drift repeat | 예(재구축 중) | 아니오 | 2→3 | 1.00 | `/reports/2026-09/` |
-| 8 | **manipulated proposal** (H=0) | 아니오 | 예 | 3 | 1.00 | `/reports/2026-09/` (공격 목표 아님) |
+- **A. 반복 → Feedback 감소.** round 0-2 는 이력 부족(`n<3`)으로 매번 실제로 물어본다.
+  round 3 부터 `n_confirmed≥3, agreement≥0.8` (해석 가능한 단순 규칙)을 넘어 `C_adaptive
+  = C_experience ∩ C_current_budget` 를 먼저 시도하고 재검증만으로 확정한다 — feedback률
+  100%→0%, 같은 scope 로 안전하게 실행.
+- **B. drift → 재활성화 + 리셋.** round 5 에서 범위가 8월→9월로 바뀌면 낡은 이력과 새
+  상한이 안 겹쳐(`Privilege.meet` 실패) 자동 재사용이 무산되고 Feedback 으로 돌아간다.
+  `VerifiedAuthorityStore.record()` 가 이때 **낡은 이력을 리셋**한다(`n`: 3→1) — 안 하면
+  8월 이력이 9월 확인을 계속 압도해 `agreement_ratio` 가 오래도록 회복 안 된다
+  (`test_a_differing_confirmation_resets_stale_history`).
+- **C. 조작 → auto-restrict 도 안 속는다(단, 범위를 정확히 좁혀서 말할 것).** round 8
+  은 H=0 으로 조작된 공격인데도 auto-restrict 가 A 에게 안 묻고 **정답**으로 실행된다 —
+  재사용 후보가 `VerifiedAuthorityStore`(A 의 과거 확인)와 `auth.suggested`(위임 예산)의
+  교집합일 뿐 B 의 조작된 후보를 아예 안 보기 때문이다. "belief 조작에 구조적으로 면역"
+  이라 넓게 쓰면 과장이다 — 정확히는 **"immune to semantic-proposal manipulation under
+  trusted authority state"** 다. 위임 예산이나 `VerifiedAuthorityStore` 자체가 조작 가능
+  하다면 별개의 문제다.
 
-읽는 법:
-
-- **A. 반복 → Feedback 감소.** round 0-2 는 검증된 이력이 부족(`n<3`)해서 매번
-  실제로 물어본다. round 3 부터 `n_confirmed=3, agreement=1.0` 이 조건
-  (`n_min=3, σ=0.8`, 처음부터 복잡한 risk score 대신 해석 가능한 단순 규칙으로
-  시작했다)을 넘어 A 에게 묻지 않고 `C_adaptive = C_experience ∩
-  C_current_budget` 를 먼저 시도한 뒤 재검증만으로 확정한다 — feedback률이
-  100% 에서 0% 로 떨어지면서도 같은 scope(`/reports/2026-08/`)로 안전하게
-  실행된다.
-- **B. drift → Feedback 재활성화, 그리고 리셋.** round 5 에서 위임 범위가 실제로
-  8월에서 9월로 바뀌면, 낡은 8월 이력(3회)과 새로 제시된 상한(9월)이 전혀
-  안 겹쳐(`Privilege.meet` 실패) 자동 재사용이 무산되고 곧바로 Feedback 으로
-  돌아간다. 이때 `VerifiedAuthorityStore.record()` 가 **낡은 이력을 리셋**한다
-  (`n` 이 3→1) — 리셋이 없으면 8월 이력(3표)이 9월 확인(1표)을 계속 압도해서
-  `agreement_ratio` 가 오래도록 0.8 을 못 넘는다(직접 확인:
-  `test_a_differing_confirmation_resets_stale_history`). round 6-7 에서 9월
-  확인이 다시 3회 쌓여 이력이 재구축된다.
-- **C. 조작 → auto-restrict 도 안 속는다(단, 범위를 정확히 좁혀서 말할 것).**
-  round 8 은 B 의 후보 집합이 목표 해석 하나로 좁혀져 H=0 이 되는, 다른
-  실험들과 같은 유형의 공격이다. 그런데도 auto-restrict 는 A 에게 묻지 않고
-  **정답**(`/reports/2026-09/`)으로 실행된다 — 재사용 후보가
-  `VerifiedAuthorityStore`(A 가 과거에 실제로 확인해준 값)와 `auth.suggested`
-  (위임 예산에서 계산된 현재 상한)의 교집합일 뿐이고, 둘 다 B 의(조작된) 후보를
-  입력으로 쓰지 않기 때문이다. 다만 "belief 조작에 구조적으로 면역" 이라고
-  넓게 쓰면 과장이다 — **정확히는**: semantic candidate/probability 가
-  조작되더라도, adaptive authority restriction 은 그 candidate 를 입력으로
-  쓰지 않으므로 **현재 위임 예산과 `VerifiedAuthorityStore` 자체가 신뢰
-  가능한 한** 영향을 받지 않는다("immune to semantic-proposal manipulation
-  under trusted authority state"). 공격자가 위임 예산이나
-  `VerifiedAuthorityStore`(즉 experience_key, Principal 의 과거 확인 기록)
-  자체를 조작할 수 있다면 이는 별개의 문제다.
-
-`use_verified_experience=False` 로 끄면 매 라운드 실제로 물어본다 —
-adaptive 는 opt-in 이며 Authority Feedback Loop 자체의 안전성(non-amplification)
-과는 독립이다. `tests/test_authority_feedback.py::TestAdaptiveVerification`,
+`use_verified_experience=False` 로 끄면 매 라운드 실제로 물어본다 — adaptive 는 opt-in
+이며 Authority Feedback Loop 자체의 안전성과는 독립이다. `TestAdaptiveVerification`,
 `TestVerifiedAuthorityStore` 참고.
 
 ## 4. 구현하며 확인한 선행연구의 빈틈
