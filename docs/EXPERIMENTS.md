@@ -3,6 +3,12 @@
 이 문서는 DualFlow의 **실험 프로토콜, 결과, ablation, robustness 분석**을 정리한다.  
 [README](../README.md)는 여기서 핵심 결과만 요약하고, 이 문서는 각 결과가 어떤 질문에 답하는지와 어떤 조건에서 성립하는지를 상세히 기록한다.
 
+> **버전 안내 (superseded 배지)**  
+> 아래 결과는 모두 `DelegationBench-mini`(v0, 독립적 9-task vignette 9개, `bench.py`)를 기반으로 한다.  
+> v0는 **초기 탐색 pilot**이며, 이후 하나의 연속된 작은 환경(v1, `bench_single_env_v1.py`, DESIGN_NOTES.md §2)으로 대체됐다.  
+> v0는 삭제하지 않고 그대로 유지한다 — v1이 같은 정성적 패턴(Authority-only/Semantic-only 각각 unsafe 잔존, Full 조합만 0%)을 독립적으로 재현했다는 것 자체가 내부 재현(replication) 증거이기 때문이다.  
+> **논문 본문이 인용하는 건 v1 결과**이며, 아래 v0 결과는 보조 증거(초기 파일럿에서도 동일 패턴 확인)로만 인용한다.
+
 실험 구조는 최종 아키텍처와 동일한 계층을 따른다.
 
 ```text
@@ -29,12 +35,27 @@ Additional Analysis
 
 | Pilot | 함수 | 규모 | 용도 |
 |---|---|---:|---|
-| `DelegationBench-mini` | `bench.build_tasks()` | 9 tasks | Core / Semantic ablation / Robustness |
+| `DelegationBench-mini` (v0, superseded) | `bench.build_tasks()` | 9 tasks | Core / Semantic ablation / Robustness |
 | Scope negotiation mini-set | `bench.scope_negotiation_tasks()` | 3 tasks | Authority Feedback |
 | Sequential mini-set | `bench.scope_negotiation_sequence()` | 9 rounds | Adaptive Authority Feedback |
+| **Single-environment sequence (v1, 현재 canonical)** | `bench_single_env_v1.build_single_env_sequence()` | 8 steps (연속 세션) | 논문 본문 인용 대상 — laundering 제외 8개 카테고리 |
 
 서로 다른 pilot을 하나의 denominator로 합치지 않는다.  
 각 실험은 해결하려는 질문이 다르며, 9-task benchmark의 `44.4%=4/9` 같은 수치가 다른 mini-set 추가에 의해 바뀌지 않도록 유지한다.
+
+### v1 replication check (2026-09-17)
+
+v0와 완전히 같은 엔진(`framework.DelegationVerifier`)으로 v1 8-step 환경을 `evaluate()`(독립 평가) 기준으로 돌린 결과:
+
+| 설정 | unsafe ↓ | benign ↑ | over-rej ↓ |
+|---|---:|---:|---:|
+| Authority only | 12.5% | 80.0% | 20.0% |
+| Semantic only | 37.5% | 60.0% | 20.0% |
+| **Full (v1)** | **0.0%** | 80.0% | 20.0% |
+
+v0의 Full Core(0.0% / 80.0% / 20.0%)와 benign/over-rej가 정확히 일치하고, 단일 축만으로는 불안전하다는 v0의 핵심 주장(Authority-only/Semantic-only 각각 nonzero unsafe, 서로 다른 실패 이유)도 새 환경에서 독립적으로 재현됐다 — 내부 replication 증거로 채택한다. `run_sequence()`(연속 세션)로 돌리면 8개 중 7개가 `ideal_decision()`과 일치하고, `v1_misread_risk` 하나만 의도적으로 불일치한다(Joint Verification이 B의 확신에 찬 오역을 안전하게 차단 — over-rejection이지 결함이 아니다). 관련 테스트: `tests/test_bench_single_env_v1.py`.
+
+전체 실험 재작성(§3~§8을 v1 기준으로 재구성)은 아직 진행 전이며, 이 replication check는 "엔진이 동일하고 패턴이 재현된다"는 것만 확정한다.
 
 ### Metrics
 

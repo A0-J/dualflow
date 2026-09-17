@@ -1,5 +1,12 @@
 """
-DelegationBench-mini — 각 트랙이 잡아야 할 실패 모드를 하나씩 담은 소형 벤치마크.
+DelegationBench-mini (v0) — 각 트랙이 잡아야 할 실패 모드를 하나씩 담은 소형 벤치마크.
+
+**superseded**: 이 9-task 벤치마크는 독립적 vignette 9개로 구성된 초기 탐색
+pilot이다. 이후 하나의 연속된 작은 환경으로 재설계된
+`bench_single_env_v1.build_single_env_sequence()`(v1)가 논문 본문이 인용하는
+canonical 결과다 — 자세한 사유는 DESIGN_NOTES.md §2, EXPERIMENTS.md §1 참고.
+여기(v0)는 삭제하지 않는다: v1이 같은 정성적 패턴을 독립적으로 재현했다는 것
+자체가 내부 replication 증거이기 때문이다.
 
 카테고리
   clear          명세가 이미 충분히 구체적 → 역질의도 LLM 도 필요 없음
