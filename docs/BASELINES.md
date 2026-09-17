@@ -285,6 +285,10 @@ ChainCaps가 manifest quality를 주요 deployment bottleneck으로 보고한 �
 
 즉 Authority Flow는 잘못 작성된 정책을 자동으로 정답 정책으로 바꾸는 메커니즘이 아니다.
 
+### Why `chain_laundering`은 별도 mini-set으로 유지하는가
+
+ChainCaps가 다루는 non-amplification 위반은 본질적으로 **3자 이상**(A → B → C)의 delegation chain에서만 의미가 성립한다 — 2자(A-B) 관계에는 "합성으로 되찾을 상위 hop"이 애초에 존재하지 않는다. `DelegationBench-mini`의 단일환경 시나리오(§2, DESIGN_NOTES.md)는 의도적으로 A-B 2자 관계로 범위를 좁혔으므로, laundering을 그 안에 욱여넣으면 "A의 요청"과 "A는 원치 않음"이 동시에 성립해야 하는 모순이 생긴다. 따라서 `chain_laundering`은 `bench.build_tasks()`의 9-task 안에 그대로 남기고, 단일환경 재설계에는 포함하지 않는다 — `scope_negotiation_tasks()`/`scope_negotiation_sequence()`가 이미 특정 실패 모드만 따로 떼어 보는 mini-set으로 존재하는 것과 같은 원칙이다.
+
 ---
 
 ## 6. Positioning of DualFlow
@@ -346,11 +350,31 @@ valid             → continue
 
 ---
 
+## 8. Adjacent Contemporary Work (2026)
+
+아래 세 편은 DualFlow의 핵심 메커니즘과 직접 경쟁하지는 않지만, 인접한 문제를 다루므로 관련 연구로 명시한다. 셋 다 DualFlow의 어느 한 축과도 정확히 겹치지 않는다는 걸 직접 원문을 확인해 검증했다 — 인용 누락으로 인한 novelty 지적을 막기 위한 선제 조치다.
+
+**Knowlton, Guha, Miikkulainen — Semantic Uncertainty-Guided Orchestration in Hierarchical Multi-Agent Systems (2026).**
+semantic entropy/density를 계층적 multi-agent 오케스트레이션(재질문·추가 숙고·응답 선택)의 라우팅 신호로 사용한다. Authority/capability 검증은 다루지 않는다. DualFlow의 Semantic Flow 전제("entropy가 clarification 여부를 가를 신호로 쓸 만하다")를 **다른 연구 그룹이 독립적으로 채택**했다는 동시대 외부 검증으로 인용한다 — Kuhn/Farquhar의 semantic entropy 계열과 별개로, 우리 전제가 고립된 가정이 아님을 보여준다.
+
+**Sun, Y. — Safe Bilevel Delegation (SBD): A Formal Framework for Runtime Delegation Safety in Multi-Agent Systems (2026).**
+연속값 "delegation degree"(0~1)를 이중레벨 최적화로 학습해 human oversight ↔ autonomous execution 사이를 조절한다. 의료(MIMIC-III)/금융(S&P 500)/교육(ASSISTments) 도메인에서 검증된 **학습 기반** 접근이라, DualFlow의 학습-불필요·이산적(no_grant/scope_exceeded/valid) authority taxonomy와는 메커니즘도 도메인도 다르다. "runtime delegation safety"라는 문제 설정 자체가 겹치므로 인용은 필요하되, 접근 방식의 차이를 명시한다.
+
+**Prakash, S. — The Provenance Paradox in Multi-Agent LLM Routing: Delegation Contracts and Attested Identity in LDP (2026).**
+delegate의 자기신고 품질 점수가 라우팅을 오염시키는 문제(quality-based routing이 오히려 최악의 delegate를 고르는 역설)를 다루고, claimed-vs-attested identity 모델로 해결한다. 이건 DualFlow의 authority budget intersection/scope 검사와는 다른 축이다 — **"품질을 누가 보증하는가"(attestation)**를 다루지 **"권한 범위가 얼마나 넓은가"(capability budget)**를 다루지 않는다. Authority Feedback Loop의 신뢰 경계(§13, DESIGN_NOTES.md — Principal feedback channel이 trusted라는 가정)와 개념적으로 인접하므로 인용한다.
+
+---
+
 ## References
 
 - Suri, M. et al. **Structured Uncertainty guided Clarification for LLM Agents.** arXiv:2511.08798, 2025.
 - Shi, L. et al. **SAGE: A Service Agent Graph-guided Evaluation Benchmark.** arXiv:2604.09285, 2026.
 - Jiang, X. et al. **ChainCaps: Composition-Safe Tool-Using Agents via Monotonic Capability Attenuation.** arXiv:2605.26542, 2026.
+- Knowlton, J., Guha, A., Miikkulainen, R. **Semantic Uncertainty-Guided Orchestration in Hierarchical Multi-Agent Systems.** arXiv:2608.14707, 2026.
+- Sun, Y. **Safe Bilevel Delegation (SBD): A Formal Framework for Runtime Delegation Safety in Multi-Agent Systems.** arXiv:2604.27358, 2026.
+- Prakash, S. **The Provenance Paradox in Multi-Agent LLM Routing: Delegation Contracts and Attested Identity in LDP.** arXiv:2603.18043, 2026.
+- Kuhn, L., Gal, Y., Farquhar, S. **Semantic Uncertainty: Linguistic Invariances for Uncertainty Estimation in Natural Language Generation.** ICLR, 2023.
+- Farquhar, S. et al. **Detecting hallucinations in large language models using semantic entropy.** Nature, 2024.
 
 ---
 
