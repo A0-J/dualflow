@@ -41,6 +41,18 @@ class TestEnvironmentIntegrity:
         assert kind("v1_scope_exceeded") is None
         assert kind("v1_escalation") is None  # 승인 필요는 authority 가 아니라 SOP 레이어
 
+    def test_finance_is_not_an_authority_block(self):
+        """"/finance/"는 이제 no_grant 근거가 아니다 — authority 상으로는 통과
+        하고(root 단위 read grant), 잘못 선택되면 Joint Verification 이 잡아야
+        하는 semantic distractor 역할만 한다. no_grant 는 delete 로만 입증한다."""
+        from dualflow.capability import check_authority
+        from dualflow.semantic import Interpretation as I
+
+        tasks = {t.name: t for t in build_single_env_sequence()}
+        eb = tasks["v1_ambiguous_clarifiable"].effective_budget()
+        finance_read = I("read", "file", "/finance/", label="회계 자료를 열람")
+        assert check_authority(eb, finance_read.privilege()).allowed is True
+
     def test_ideal_decision_matches_truth_and_budget(self):
         for t in build_single_env_sequence():
             expected = "EXECUTE" if t.name not in {
