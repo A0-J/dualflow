@@ -195,7 +195,7 @@ scope negotiation 자체가 트리거되지 않는다(자세한 건
 ```bash
 pip install -e ".[dev]"
 
-pytest -q                 # 테스트 169개
+pytest -q                 # 테스트 173개
 dualflow-demo              # 실험 11개 전체 (텍스트)
 dualflow-plots             # 그림 8장을 figures/ 에 저장
 ```
@@ -230,7 +230,7 @@ dualflow-plots careless --trials 50   # 논문용 오차범위 (기본 10회는 
 | `bench.py` | 파일럿 시나리오: 9개 과제 벤치마크, 공격 변형, scope 협상·순차 실험 mini-set |
 | `llm.py` | LLM 인터페이스 — 실험용은 스크립트, 실제 모델용 어댑터 골격 포함 |
 | `demo.py` / `plots.py` | 모든 실험의 텍스트/그림 출력 |
-| `tests/` | 169개 — 안전 invariant, 엔트로피 성질, 종료성, ablation, 공격 시나리오 |
+| `tests/` | 173개 — 안전 invariant, 엔트로피 성질, 종료성, ablation, 공격 시나리오 |
 
 ## 현재 범위와 한계
 

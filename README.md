@@ -205,7 +205,7 @@ Full round-by-round data is in [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md).
 ```bash
 pip install -e ".[dev]"
 
-pytest -q                 # 169 tests
+pytest -q                 # 173 tests
 dualflow-demo              # all 11 experiments, as text
 dualflow-plots             # 8 figures into figures/
 ```
@@ -242,7 +242,7 @@ like a shortcut and turned out to be an evaluation oracle instead.
 | `bench.py` | Pilot scenarios: the 9-task benchmark, its attack variants, scope-negotiation and sequential mini-sets |
 | `llm.py` | LLM interface — scripted for experiments, adapter skeleton for a real model |
 | `demo.py` / `plots.py` | Text and figure output for every experiment |
-| `tests/` | 169 tests — safety invariants, entropy properties, termination, ablations, attack scenarios |
+| `tests/` | 173 tests — safety invariants, entropy properties, termination, ablations, attack scenarios |
 
 ## Current Scope and Limitations
 

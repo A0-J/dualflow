@@ -9,8 +9,8 @@ from __future__ import annotations
 import math
 
 from dualflow.entropy_probe import (
-    FILE_INVENTORY, make_deterministic_mock, objective_referent_count,
-    run_probe, run_probe_suite,
+    FILE_INVENTORY, SPEC_OBJECTIVE_REFERENTS, make_deterministic_mock,
+    objective_referent_count, run_probe, run_probe_suite,
 )
 from dualflow.semantic import Interpretation as I
 
@@ -64,6 +64,43 @@ class TestProbePlumbing:
         results = run_probe_suite(cases, mock, n=10)
         assert [r.hypothesis_label for r in results] == ["명확(가설)", "모호(가설)"]
         assert all(r.n_requested == 10 for r in results)
+
+
+class TestObjectiveReferentsAreDecoupledFromModelOutput:
+    """회귀 방지: 최초 구현은 objective_referent_count(_dominant_scope(parsed))
+    로 모델이 가장 많이 고른 답에서 거꾸로 참조 개수를 셌다 — "entropy가
+    objective referent count와 상관있는가"를 주장할 수 없게 만드는 순환이었다.
+    이제 referent count는 spec 문장에 미리 등록된 값만 쓰고, 모델이 뭘
+    답했는지는 전혀 참조하지 않는다는 걸 고정한다."""
+
+    def test_referent_count_ignores_model_answer_entirely(self):
+        spec = "지난달 매출 리포트 읽고 요약해줘"  # 등록값 1
+        # 모델이 무엇을 답하든(여기서는 완전히 다른 넓은 scope) referent count는
+        # spec 하나로만 결정되고 변하지 않는다.
+        wide = I("read", "file", "*", label="전체")
+        mock = make_deterministic_mock({wide: 1.0})
+        r = run_probe(spec, mock, n=10)
+        assert r.objective_referent_count == SPEC_OBJECTIVE_REFERENTS[spec] == 1
+
+    def test_context_dependent_specs_are_explicitly_undefined(self):
+        """"이번에도"/"이 요약"처럼 이전 턴을 전제하는 spec은 단일턴 probe로는
+        참조 개수가 정의되지 않는다 — 억지로 숫자를 매기지 않고 None."""
+        for spec, ref in SPEC_OBJECTIVE_REFERENTS.items():
+            if "이번에도" in spec or spec.startswith("이 요약"):
+                assert ref is None, spec
+
+    def test_explicit_override_takes_precedence_over_registry(self):
+        target = I("read", "file", "/reports/2026-08/", label="8월")
+        mock = make_deterministic_mock({target: 1.0})
+        r = run_probe("지난달 매출 리포트 읽고 요약해줘", mock, n=5,
+                       objective_referents=999)
+        assert r.objective_referent_count == 999
+
+    def test_unregistered_spec_defaults_to_none_not_a_guess(self):
+        target = I("read", "file", "/reports/2026-08/", label="8월")
+        mock = make_deterministic_mock({target: 1.0})
+        r = run_probe("등록되지 않은 새 spec", mock, n=5)
+        assert r.objective_referent_count is None
 
 
 class TestAnthropicSamplerIsLazy:

@@ -27,6 +27,7 @@ plot = ["matplotlib>=3.6"]
 [project.scripts]
 dualflow-demo = "dualflow.demo:main"
 dualflow-plots = "dualflow.plots:main"
+dualflow-entropy-probe = "dualflow.entropy_probe:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/dualflow"]
