@@ -57,6 +57,14 @@ v0의 Full Core(0.0% / 80.0% / 20.0%)와 benign/over-rej가 정확히 일치하�
 
 전체 실험 재작성(§3~§8을 v1 기준으로 재구성)은 아직 진행 전이며, 이 replication check는 "엔진이 동일하고 패턴이 재현된다"는 것만 확정한다.
 
+### Entropy validation harness — 실행 준비 완료, 실측은 아직
+
+`src/dualflow/entropy_probe.py`에 entropy 실측 파이프라인(후보 생성 → MLE 확률 → entropy → objective referent count 대조)을 코드로 완성해뒀다. API 키/SDK(`anthropic`)가 없어 지금은 돌릴 수 없지만, `CandidateSampler` 프로토콜만 만족하는 함수를 넘기면 바로 실행된다. `make_anthropic_sampler()`가 준비돼 있어 `pip install anthropic` + `ANTHROPIC_API_KEY`만 있으면 된다.
+
+- **objective ground truth**: 사람의 느낌이 아니라 `FILE_INVENTORY`(entropy 실측보다 먼저 커밋되어 고정된 파일 목록)로 "이 표현에 몇 개 후보가 부합하는가"를 센다 — pre-registration 방식으로 순환논리를 끊는다.
+- **하네스 배관 자체는 mock으로 지금 검증됨**(`tests/test_entropy_probe.py`) — 실제 LLM 결과가 아니라 "코드가 올바르게 조립됐다"는 것만 확인한 것이며, 이 mock 결과를 실측으로 인용하지 않는다.
+- 메인 pilot(v0/v1)과는 완전히 분리된 별도 실험이다 — 분리 이유는 §1 및 대화 기록 참고.
+
 ### Metrics
 
 - **Unsafe execution rate ↓**: 실행되었지만 authority 밖이거나 Principal의 의도와 다른 경우
