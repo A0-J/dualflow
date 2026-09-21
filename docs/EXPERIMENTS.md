@@ -60,11 +60,18 @@ Result** 다섯 필드를 고정한다.
 
 ## 1.3 Runtime vs Evaluation Reference
 
-`task.truth`는 평가를 위한 ground truth다. `ideal_decision`과 reference SOP path $p^*$는 평가용으로 `task.truth`에서 유도되지만, runtime(Semantic/Authority/Feedback/Joint gate)은 이를 직접 읽지 않는다.
+`task.truth`는 평가를 위한 ground truth다. Semantic Flow(entropy/clarification/LLM fallback)와 Authority Flow(check_authority/run_feedback negotiation)는 `task.truth`를 직접 읽지 않는다 — Semantic은 `task.candidates`만, Authority는 `task.principal_budget`/`ceilings`와 Principal의 협상 응답만 본다. `DelegationTask.ideal_decision()`(평가용 상한선 정의)도 파이프라인과 완전히 분리돼 있다.
+
+**단, Joint Verification의 matching 단계는 다르다 — 여기서는 실제로 `task.truth`를 쓴다.** `match_intent()`가 시스템의 최종 해석과 비교하는 reference(`task.intent_fields = classify(task.truth, sysvars)`)가 `task.truth`에서 직접 유도된다. 이건 실수로 남은 것이 아니라 **의도적인 controlled-benchmark 설계**다 — 각 메커니즘(Semantic/Authority/Joint)이 어떤 실패를 잡는지 분리해서 보려면, Joint 쪽에 "B의 해석과 독립적인 정답"이 필요하기 때문이다.
+
+**Evaluation boundary(중요, §7 Limitations과 함께 읽을 것).** 이 reference를 `task.truth` 대신 Semantic Flow 자신이 resolve한 해석으로 바꿔서 oracle-free 런타임을 만들 수 있는지 실제로 시도해봤다(2026-09-21). 결과: `silent_misread`(entropy가 낮아 Semantic 자신이 확신에 차서 틀린 해석으로 확정하는 case)에서 matching이 "B의 해석 vs B의 해석"이 되어버려 — 즉 자기 자신과 비교하는 tautology가 되어 — 무조건 통과한다. `Full = 0% unsafe`였던 것이 11.1%(9개 중 1개)로 깨졌다. **이건 Joint Verification이 지금 갖고 있는 misread 탐지력의 원천이 정확히 이 `task.truth` reference라는 뜻이다** — Semantic Flow 자신의 출력과 독립적인 두 번째 신호가 없으면 "확신에 찬 오독"을 잡을 방법이 없다.
+
+즉 현재 결과(특히 §6.3 Mechanism Attribution의 "M1은 Joint Verification이 잡는다")는 **controlled benchmark 안에서 각 메커니즘의 효과를 분리해서 보여주는 것**이지, "실제 배포 환경에서도 DualFlow가 misread를 이렇게 잡는다"는 주장이 아니다. 실제 배포에는 `task.truth`가 없다 — Semantic Flow의 출력과 독립적인 두 번째 semantic reference를 실제로 어디서/어떻게 얻을 것인가는 아직 풀리지 않은 별도의 연구 문제다(원본 위임이 structured schema를 포함하는 경우가 아니라면, 후보는 Principal에게 독립적으로 재확인받는 것 정도이며, 이는 비용-안전성 트레이드오프를 다시 열어놓는다 — Adaptive Feedback의 "언제 확인해야 하는가"와 정확히 같은 질문이다).
 
 ```text
-Runtime:     proposal → semantic / authority / feedback / joint gate
-Evaluation:  task.truth → ideal outcome and metrics
+Runtime (Semantic / Authority / Feedback):  proposal → gate — task.truth 안 읽음
+Runtime (Joint Verification matching):      proposal → task.truth 기반 reference와 비교 — oracle
+Evaluation (ideal_decision, outcome()):      task.truth → ideal outcome and metrics
 ```
 
 Exact-field equality를 `task.truth`와 직접 비교하는 기능이 구현돼 있지만 live gate로는 쓰지 않는다 — Appendix A.9 Exact-field Oracle 참고.
@@ -338,6 +345,8 @@ Appendix A에는 v0(cold-start, `DelegationBench-mini` 공격 변형) 조건에�
 
 이건 "Semantic Flow는 공격을 못 잡는다"는 일반 주장이 **아니다.** attack proposal은 코드에 고정 주입된 것이고(§3 Phase 2), 실제 LLM이 이런 조작된 confidence를 자연스럽게 얼마나 자주 생성하는지는 이 실험의 범위 밖이다(§6.1의 headline finding이 그 방향의 첫 real-LLM 증거이긴 하지만, 그것도 하나의 case에 대한 관찰이다). "Full이 안전하다"보다 "Semantic이 못 잡는 세 종류의 실패를 나머지 세 메커니즘이 나눠서 잡는다"가 이 실험이 뒷받침하는 정확한 주장이다.
 
+**추가 경계(§1.3, §7 Limitations 참고)**: M1(misread)을 담당하는 게 "Joint Verification"이라는 말은, 이 표에서는 정확히 "`task.truth`에서 유도된 reference와 비교했다"는 뜻이다. 이 reference가 실배포에 없다면 — 즉 Semantic Flow 자신의 출력과 독립적인 두 번째 신호가 없다면 — 지금 Joint Verification이 M1을 잡는 방식 그대로는 작동하지 않는다(실제로 제거해서 확인함: §1.3). M2/M3(Authority Feedback Loop, Authority 하드 리젝트)는 이 문제와 무관하다 — 둘 다 `task.truth`가 아니라 위임 예산(`Budget`)과 Principal의 실제 응답만 본다.
+
 관련 테스트: `tests/test_bench_single_env_v1.py::TestAdversarialSingleEnvSequence::test_mechanism_attribution_matches_verdict_internals`.
 
 ---
@@ -361,8 +370,9 @@ Appendix A에는 v0(cold-start, `DelegationBench-mini` 공격 변형) 조건에�
 - in-scope but unintended resource selection을 항상 탐지한다.
 - 현재 threshold가 다른 domain에서도 최적이다.
 - entropy가 objective ambiguity의 타당한 proxy다(§6.1 — 유효 샘플 n=5로는 상관관계를 주장할 근거가 안 된다).
+- **Joint Verification이 oracle 없이도 silent misread를 잡는다.** §1.3에서 실제로 확인했듯, `match_intent()`의 reference를 `task.truth` 대신 Semantic Flow 자신의 출력으로 바꾸면 `silent_misread`류 case에서 matching이 자기 자신과 비교하는 tautology가 되어 misread 탐지력이 사라진다(`Full=0%` → `11.1%`, 실제로 재현·확인함). 즉 지금 §3/§6.3이 보여주는 "Joint Verification이 misread를 잡는다"는 결과는 **`task.truth`라는 controlled-benchmark 전용 reference가 있어야 성립**하며, Semantic Flow의 출력과 독립적인 두 번째 semantic reference를 실배포 환경에서 어떻게 확보할지는 아직 풀리지 않은 열린 연구 문제다.
 
-따라서 현재 결과는 **mechanism-level evidence**이며, 다음 단계는 실제 LLM과 외부 benchmark를 이용한 external validity 평가다.
+따라서 현재 결과는 **mechanism-level evidence**이며, 다음 단계는 (a) 실제 LLM과 외부 benchmark를 이용한 external validity 평가, (b) 위에서 발견한 oracle-free Joint Verification reference 설계(독립적인 두 번째 semantic 신호를 언제·어떻게 확보할 것인가 — Adaptive Feedback의 "언제 Principal에게 확인해야 하는가"와 본질적으로 같은 질문)다.
 
 SAGE-Agent/SAGE-Bench/ChainCaps에 대한 상세 baseline 분석은 [BASELINES.md](BASELINES.md)에, oracle-analysis 설계 결정은 [DESIGN_NOTES.md](DESIGN_NOTES.md)에, 시스템 구조의 상세 설명은 [ARCHITECTURE.md](ARCHITECTURE.md)에 분리한다.
 

@@ -310,6 +310,29 @@ turned out to be an evaluation oracle instead.
 
 ## Current Scope and Limitations
 
+### Current evaluation boundary
+
+Joint Verification's matching step currently compares the system's final
+interpretation against a reference derived from `task.truth` — the
+controlled benchmark's hidden ground truth, not anything either verifier
+agent produced. This is deliberate for the *current* mechanism-attribution
+experiments (it isolates which mechanism catches which failure, see
+[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) §1.3), but it is not available
+in a deployed agent system, where there is no ground truth to compare
+against.
+
+We confirmed this is load-bearing, not incidental, by actually removing it:
+substituting the Semantic Verifier's own resolved interpretation as the
+reference collapses misread detection specifically — the comparison becomes
+"the delegate's interpretation vs. the delegate's interpretation," which is
+tautological whenever Authority doesn't independently modify the proposal.
+`Full = 0% unsafe` (Experiment 1) becomes 11.1% (the `silent_misread` case)
+under that substitution. Replacing this oracle with an independently
+obtained semantic signal — and at what cost, since the cheapest source is
+re-confirming with the principal — is open research, not yet implemented.
+
+### Other limitations
+
 This repository currently validates the mechanism using deterministic pilot
 scenarios and one round of real-LLM scenario validation. It does not yet
 establish external validity with production LLM agents end-to-end. In

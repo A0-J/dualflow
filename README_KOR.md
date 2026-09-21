@@ -291,6 +291,26 @@ Authority Flow, Authority Feedback, Joint Verification, Optimization Layer)을
 
 ## 현재 범위와 한계
 
+### 현재 평가의 경계
+
+Joint Verification의 매칭 단계는 지금 시스템의 최종 해석을 `task.truth`(통제된
+벤치마크의 숨겨진 ground truth)에서 유도된 reference와 비교한다 — 두 verifier
+agent 중 어느 쪽도 만들어내지 않은 값이다. 이건 *현재* mechanism-attribution
+실험을 위한 의도적 설계다(어떤 메커니즘이 어떤 실패를 잡는지 분리해서 보여준다,
+[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) §1.3 참고) — 하지만 실제 배포된 agent
+시스템에는 비교할 ground truth 자체가 없다.
+
+이게 부수적인 게 아니라 실제로 그 탐지력의 근원이라는 것을, 직접 제거해봐서
+확인했다. Semantic Verifier 자신이 resolve한 해석으로 이 reference를 대체하면
+misread 탐지가 정확히 무너진다 — "delegate의 해석 vs delegate의 해석"이 되어,
+Authority가 제안을 독립적으로 바꾸지 않는 한 무조건 tautology가 된다. Experiment
+1의 `Full = 0% unsafe`가 이 대체 아래에서는 11.1%(`silent_misread` 케이스)가
+된다. 이 oracle을 독립적으로 얻은 semantic 신호로 대체하는 것 — 그리고 그 비용을
+어떻게 감당할지(가장 싼 방법은 principal에게 다시 확인받는 것) — 는 아직
+구현되지 않은 열린 연구 문제다.
+
+### 그 외 한계
+
 이 저장소는 현재 결정론적 파일럿 시나리오와 한 차례의 real-LLM 시나리오 검증으로
 메커니즘을 검증한다. 실제 운영되는 LLM agent 전체에 대한 외부 타당성은 아직
 end-to-end로 확립하지 못했다. 구체적으로:
