@@ -144,6 +144,8 @@ stage6 ApprovalRequired(sysvar) false→EXECUTE | true→ESCALATE
 
 `match_intent()`는 `matched = sim ≥ tau and action == ref_action and fields_ok`로 두 조건을 결합한다([rule_engine.py:157-193](../src/dualflow/rule_engine.py#L157-L193)). `fields_ok`는 `require_fields`(=`Config.use_field_match`) 인자로 제어되며 **기본값은 `False`**다 — exact-field 매칭은 `task.truth`에서 유도된 reference와 직접 비교하는 oracle/ablation 기능이라 live gate에는 쓰지 않는다([DESIGN_NOTES.md](DESIGN_NOTES.md) §4·§8, [framework.py:429-430](../src/dualflow/framework.py#L429-L430)). 기본 live gate는 `Sim_path ≥ τ` **AND** `Terminal(p) = Terminal(p*)`(EXECUTE/ESCALATE/REJECT) 두 조건이다.
 
+**단 이 "기본 live gate" 자체도 이미 오라클을 쓴다** — `p*`/`ref_action`을 계산하는 `intent`(=`task.intent_fields`)가 `classify(task.truth, sysvars)`다(§2 참고). `use_field_match`만 껐다고 오라클이 없어지는 게 아니라, 매칭 전체(Sim_path 비교 포함)가 `task.truth` 기반이다 — 실제로 이 reference를 Semantic Verifier 자신의 출력으로 바꿔서 확인한 결과, silent-misread 탐지력이 정확히 사라졌다(`EXPERIMENTS.md` §1.3, §7 Limitations). §11의 `_semantic()`/`match_intent()` 호출 순서 설명은 현재 구현을 정확히 반영하지만, 이 reference 소스 자체가 배포 불가능한 controlled-benchmark 전용 설계라는 점은 반드시 §1.3과 함께 읽을 것.
+
 `sim_path`만으로는 잡지 못하는 구멍(같은 SOP 버킷 안의 자원 치환)을 필드 매칭이 메우도록 설계됐지만, 그 필드 매칭 자체가 기본 비활성이라는 점이 §3 Experiment 1의 misread(M1) 사례가 Authority Feedback이 아니라 Joint Verification의 `action` 필드 불일치(경로 유사도 기반이 아니라 `action == ref_action`)로 잡히는 이유다(`docs/EXPERIMENTS.md` §6.3).
 
 ---
