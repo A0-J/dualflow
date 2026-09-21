@@ -48,10 +48,6 @@ class Fields:
     scope: str = ""
     condition: frozenset[str] = frozenset()
 
-    def as_dict(self) -> dict:
-        return {"ActionType": self.action_type, "Sensitivity": self.sensitivity,
-                "ScopeBreadth": self.scope_breadth, "ConditionMet": self.condition_met}
-
 
 def classify(interp: Interpretation, sysvars: dict) -> Fields:
     """해석 → 분류 필드. sysvars 는 자원 민감도/필수조건 같은 백엔드 정보."""
@@ -148,10 +144,6 @@ class MatchResult:
 
     def __bool__(self) -> bool:
         return self.matched
-
-    @property
-    def fields_ok(self) -> bool:
-        return all(self.field_match.values()) if self.field_match else True
 
 
 def match_intent(interp: Interpretation, intent: Fields, sysvars: dict,
