@@ -227,3 +227,95 @@ def run_feedback(proposal: Interpretation, effective: Budget, principal: Authori
 
     log.append(f"[authority-feedback] 반복 한도 소진 → 미해결")
     return NegotiationResult(False, None, asked, FeedbackDecision.REJECT, log)
+
+
+# --------------------------------------------------------------------------
+# AUTHORITY VERIFIER — Authority Flow를 독립적으로 호출 가능한 단위로 묶는다.
+#
+# B의 제안이 위임된 권한 범위 안에 있는지만 판단한다 — 그게 A의 의도와 맞는지는
+# 모른다(Semantic Flow의 책임, semantic.SemanticVerifierAgent). check_authority()
+# (capability.py, 결정론적 규칙)와 run_feedback()(이 파일, bounded negotiation)를
+# 그대로 호출한다 — 알고리즘은 추출 이전과 동일하고, 옮긴 것은 "이 판단이 어디서
+# 내려지는지"뿐이다.
+# --------------------------------------------------------------------------
+@dataclass
+class AuthorityVerdict:
+    """Authority Flow 한 번의 결과.
+
+    `interpretation`은 협상으로 수정됐다면 그 최종본이다 — 원래 제안이 아니다.
+    Joint Verification의 매칭은 이 값을 기준으로 한다.
+    """
+    interpretation: Interpretation
+    allowed: bool
+    reason: str
+    n_feedback: int = 0            # A 에게 실제로 물어본 횟수
+    negotiated: bool = False       # scope_exceeded 가 협상(자동 포함)으로 살아났는가
+    auto_restricted: bool = False  # A 에게 묻지 않고 검증된 이력으로 풀렸는가
+
+    @property
+    def status(self) -> str:
+        """SemanticVerdict.status(resolved/unresolved) 와의 서술적 대구 —
+        저장된 새 상태가 아니라 allowed 의 별칭이다."""
+        return "allow" if self.allowed else "deny"
+
+
+class AuthorityVerifierAgent:
+    """Authority Flow, 독립 단위. "B 의 제안이 위임된 권한 범위 안인가" 만
+    판단한다 — 그게 A 의 의도와 맞는지는 모른다(Authority Verification 이
+    아니라 Joint Verification/Semantic Flow 의 책임).
+
+    scope_exceeded(범위만 넘음)는 하드 리젝트가 아니라 bounded negotiation
+    (`run_feedback`)으로 회복을 시도한다. no_grant/condition_missing 은
+    협상 대상이 아니다(capability.check_authority 참고).
+    """
+
+    def __init__(self, *, use_authority: bool = True,
+                 use_authority_feedback: bool = True,
+                 authority_feedback_max_rounds: int = 2,
+                 use_verified_experience: bool = True,
+                 verified_experience_n_min: int = 3,
+                 verified_experience_sigma: float = 0.8,
+                 verified_authority: VerifiedAuthorityStore | None = None):
+        self.use_authority = use_authority
+        self.use_authority_feedback = use_authority_feedback
+        self.authority_feedback_max_rounds = authority_feedback_max_rounds
+        self.use_verified_experience = use_verified_experience
+        self.verified_experience_n_min = verified_experience_n_min
+        self.verified_experience_sigma = verified_experience_sigma
+        self.verified_authority = (verified_authority if verified_authority is not None
+                                   else VerifiedAuthorityStore())
+
+    def verify(self, interpretation: Interpretation, budget: Budget,
+               principal: AuthorityPrincipal, log: list[str], key: str
+               ) -> AuthorityVerdict:
+        auth = check_authority(budget, interpretation.privilege())
+        if self.use_authority:
+            log.append(f"[joint] Authority: {'통과' if auth.allowed else '차단'} — {auth.reason}")
+
+        interp = interpretation
+        n_feedback = 0
+        negotiated = False
+        auto_restricted = False
+
+        # scope_exceeded 는 하드 리젝트가 아니라 협상 대상. task.truth 는 여기서
+        # 전혀 보지 않는다 — principal.review_authority 의 응답만 본다.
+        if (self.use_authority and not auth.allowed
+                and auth.failure_kind == "scope_exceeded" and self.use_authority_feedback):
+            neg = run_feedback(interp, budget, principal,
+                               self.authority_feedback_max_rounds, log,
+                               verified=(self.verified_authority
+                                        if self.use_verified_experience else None),
+                               key=key,
+                               verified_n_min=self.verified_experience_n_min,
+                               verified_sigma=self.verified_experience_sigma)
+            n_feedback = neg.rounds
+            if neg.resolved and neg.confirmed is not None:
+                interp = neg.confirmed.interpretation
+                negotiated = True
+                auto_restricted = neg.auto_restricted
+                auth = check_authority(budget, interp.privilege())
+                log.append(f"[joint] Authority(재검사): {'통과' if auth.allowed else '차단'} — "
+                           f"{auth.reason}")
+
+        return AuthorityVerdict(interp, auth.allowed, auth.reason,
+                                n_feedback, negotiated, auto_restricted)

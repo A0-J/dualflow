@@ -26,8 +26,8 @@ from collections import Counter
 
 from typing import Callable
 
-from .authority_feedback import VerifiedAuthorityStore, run_feedback
-from .capability import Budget, Privilege, check_authority, delegation_chain
+from .authority_feedback import AuthorityVerifierAgent, VerifiedAuthorityStore
+from .capability import Budget, Privilege, delegation_chain
 from .llm import LLMJudge, TopBeliefJudge
 from .rule_engine import Fields, MatchResult, RuleEngine, classify, match_intent
 from .semantic import (
@@ -179,6 +179,14 @@ class DelegationVerifier:
             consistency_sigma=self.cfg.consistency_sigma,
             adaptive_sigma=self.cfg.adaptive_sigma,
             experience=self.experience, judge=self.judge)
+        self.authority_verifier = AuthorityVerifierAgent(
+            use_authority=self.cfg.use_authority,
+            use_authority_feedback=self.cfg.use_authority_feedback,
+            authority_feedback_max_rounds=self.cfg.authority_feedback_max_rounds,
+            use_verified_experience=self.cfg.use_verified_experience,
+            verified_experience_n_min=self.cfg.verified_experience_n_min,
+            verified_experience_sigma=self.cfg.verified_experience_sigma,
+            verified_authority=self.verified_authority)
 
     def _semantic(self, task: DelegationTask, log: list[str]):
         """Semantic Flow 진입점. 알고리즘 자체(Fast/Slow/AND/Adaptive)는
@@ -209,47 +217,29 @@ class DelegationVerifier:
         interp, route = sem.interpretation, sem.route
         semantic_ok = sem.confirmed
 
-        # JOINT VERIFICATION — E = Authority ∩ Semantic
-        auth = check_authority(effective, interp.privilege())
-        if cfg.use_authority:
-            log.append(f"[joint] Authority: {'통과' if auth.allowed else '차단'} — {auth.reason}")
+        # AUTHORITY FLOW — 권한 검사와 bounded negotiation은 전부
+        # authority_feedback.AuthorityVerifierAgent 가 소유한다. framework 는
+        # 그 구현 방법(정책 검사 함수, 협상 절차)을 알지 못한다. task.truth 는
+        # 여기서 전혀 보지 않는다 — principal.review_authority 의 응답만 본다.
+        auth_verdict = self.authority_verifier.verify(interp, effective, principal, log, task.key)
+        interp = auth_verdict.interpretation
+        n_authority_feedback = auth_verdict.n_feedback
+        authority_negotiated = auth_verdict.negotiated
+        authority_auto_restricted = auth_verdict.auto_restricted
 
-        # AUTHORITY FEEDBACK LOOP — scope_exceeded 는 하드 리젝트가 아니라 협상 대상.
-        # task.truth 는 여기서 전혀 보지 않는다 — principal.review_authority 의
-        # 응답(ConfirmedAuthority)만 본다. use_verified_experience 가 켜져 있으면
-        # 검증된 이력으로 A 에게 묻지 않고 풀 수도 있다(§7-4, adaptive).
-        n_authority_feedback = 0
-        authority_negotiated = False
-        authority_auto_restricted = False
-        if (cfg.use_authority and not auth.allowed and auth.failure_kind == "scope_exceeded"
-                and cfg.use_authority_feedback):
-            neg = run_feedback(interp, effective, principal,
-                               cfg.authority_feedback_max_rounds, log,
-                               verified=self.verified_authority if cfg.use_verified_experience else None,
-                               key=task.key,
-                               verified_n_min=cfg.verified_experience_n_min,
-                               verified_sigma=cfg.verified_experience_sigma)
-            n_authority_feedback = neg.rounds
-            if neg.resolved and neg.confirmed is not None:
-                interp = neg.confirmed.interpretation
-                authority_negotiated = True
-                authority_auto_restricted = neg.auto_restricted
-                auth = check_authority(effective, interp.privilege())
-                log.append(f"[joint] Authority(재검사): {'통과' if auth.allowed else '차단'} — "
-                           f"{auth.reason}")
-
+        # JOINT VERIFICATION — E = Authority ∩ Semantic, 협상으로 수정된 interp 기준
         m = match_intent(interp, task.intent_fields, task.sysvars, self.engine, cfg.tau,
                          require_fields=cfg.use_field_match)
         if cfg.use_matching:
             log.append(f"[joint] 매칭: p={m.path} vs p*={m.reference_path} "
                        f"Sim_path={m.sim:.2f} — {m.reason}")
 
-        authority_ok = auth.allowed or not cfg.use_authority
+        authority_ok = auth_verdict.allowed or not cfg.use_authority
         matching_ok = (m.matched and m.executable) or not cfg.use_matching
         semantic_gate = semantic_ok or not cfg.use_semantic
 
         if not authority_ok:
-            decision, reason = REJECT, f"권한 위반 — {auth.reason}"
+            decision, reason = REJECT, f"권한 위반 — {auth_verdict.reason}"
         elif not semantic_gate:
             decision, reason = REJECT, f"의미 확정 실패 — {route}"
         elif not matching_ok:
@@ -271,7 +261,7 @@ class DelegationVerifier:
 
         return Verdict(decision, reason, route, interp, sem.h_initial, sem.h_final,
                        sem.n_questions, sem.n_llm, sem.n_reviews,
-                       auth.allowed, semantic_ok, m, effective,
+                       auth_verdict.allowed, semantic_ok, m, effective,
                        n_authority_feedback, authority_negotiated,
                        authority_auto_restricted, log)
 
