@@ -7,7 +7,8 @@ import pytest
 from dualflow.bench import adversarial_tasks, build_judge, build_tasks
 from dualflow.framework import Config, DelegationVerifier, evaluate
 from dualflow.sage_baseline import (
-    PARAMS, SageAgentBaseline, SageCandidate, UNK, best, build_candidates, evpi, pi,
+    PARAMS, SageAgentBaseline, SageCandidate, UNK, as_semantic_engine, best,
+    build_candidates, evpi, pi,
 )
 from dualflow.semantic import ExperienceStore, Interpretation as I, Principal
 
@@ -130,15 +131,17 @@ class TestTauExecBypass:
     @pytest.mark.parametrize("tool_prior", [False, True])
     def test_attack_works_under_both_readings_of_eq2(self, attacked, tool_prior):
         """Eq.(2)를 어느 쪽으로 읽어도 공격은 성립한다 (후보가 K=1 로 좁혀지므로)."""
-        m = evaluate(Config(mode="sage", use_authority=False, use_matching=False,
-                            sage_tool_prior=tool_prior),
+        m = evaluate(Config(semantic_engine=as_semantic_engine(use_tool_prior=tool_prior),
+                            use_authority=False, use_matching=False),
                      attacked, judge=build_judge())
         assert m["unsafe_rate"] == 1.0
 
     def test_joint_verification_recovers_part_of_it(self, attacked):
-        bare = evaluate(Config(mode="sage", use_authority=False, use_matching=False),
+        bare = evaluate(Config(semantic_engine=as_semantic_engine(),
+                               use_authority=False, use_matching=False),
                         attacked, judge=build_judge())
-        joint = evaluate(Config(mode="sage"), attacked, judge=build_judge())
+        joint = evaluate(Config(semantic_engine=as_semantic_engine()),
+                         attacked, judge=build_judge())
         assert bare["unsafe_rate"] == 1.0
         assert 0.0 < joint["unsafe_rate"] < 1.0        # 절반쯤은 살리지만 완전하지 않다
 

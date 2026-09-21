@@ -26,8 +26,9 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Iterable, Sequence
+from typing import Callable, Iterable, Sequence
 
+from .framework import DelegationTask, SemanticOutcome
 from .semantic import DIMENSIONS, Interpretation, Principal, Question
 
 UNK = "<UNK>"
@@ -221,3 +222,22 @@ class SageAgentBaseline:
         log.append(f"[sage] 최대 스텝 소진 → 실행")
         return SageTrace(c.to_interpretation(), "sage:maxsteps", n_q, n_llm,
                          max_pi(cands, self.epsilon, prior), evpi_done, log)
+
+
+# --------------------------------------------------------------------------
+# framework.Config.semantic_engine 어댑터 — Authority Flow/Joint Verification은
+# DualFlow 그대로 두고 semantic 단계만 SAGE-Agent 원 알고리즘으로 대체하고 싶을
+# 때 쓴다("SAGE + Joint" 비교). framework.py는 이 함수의 존재를 모른다 — 반대로
+# 이 모듈이 framework.SemanticOutcome 에 맞춰 결과를 포장한다.
+# --------------------------------------------------------------------------
+def as_semantic_engine(epsilon: float = 1e-4, use_tool_prior: bool = False
+                       ) -> Callable[[DelegationTask, Principal, list[str]], SemanticOutcome]:
+    baseline = SageAgentBaseline(epsilon=epsilon, use_tool_prior=use_tool_prior)
+
+    def _engine(task: DelegationTask, principal: Principal, log: list[str]) -> SemanticOutcome:
+        tr = baseline.run(task.candidates, principal)
+        log.extend(tr.log)
+        return SemanticOutcome(tr.interpretation, True, tr.route,
+                               tr.max_pi, tr.max_pi, tr.n_questions, tr.n_llm)
+
+    return _engine
