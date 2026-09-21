@@ -18,7 +18,7 @@ from dualflow.bench_single_env_v1 import (
     adversarial_single_env_sequence, build_single_env_sequence,
 )
 from dualflow.capability import check_authority
-from dualflow.framework import Config, evaluate, run_sequence
+from dualflow.framework import Config, DelegationVerifier, evaluate, run_sequence
 from dualflow.llm import ScriptedJudge
 
 
@@ -167,6 +167,39 @@ class TestAdversarialSingleEnvSequence:
         judge = ScriptedJudge({t.key: t.truth for t in build_single_env_sequence()})
         m = evaluate(Config(name="Semantic only", use_authority=False), tasks, judge=judge)
         assert m["unsafe_rate"] > 0
+
+    def test_mechanism_attribution_matches_verdict_internals(self):
+        """EXPERIMENTS.md "Mechanism attribution" 표를 그대로 고정한다 —
+        세 attack 모두 semantic_ok=True(Semantic Flow 자신은 못 잡음)이고,
+        각각 다른 메커니즘이 담당한다: M1=Joint Verification(match 불일치),
+        M2=Authority Feedback Loop(협상 후 복구), M3=Authority Flow의
+        하드 리젝트(condition_missing, 비협상)."""
+        tasks = build_single_env_sequence()
+        attacked = adversarial_single_env_sequence()
+        judge = ScriptedJudge({t.key: t.truth for t in tasks})
+        v = DelegationVerifier(Config(), judge=judge)
+        by_name = {t.name.removesuffix("@attack"): v.run(t) for t in attacked}
+
+        misread = by_name["v1_misread_risk"]
+        assert misread.decision == "REJECT"
+        assert misread.semantic_ok is True
+        assert misread.authority_ok is True          # Authority 는 통과시킨다
+        assert misread.match.matched is False         # Joint 만 잡는다
+        assert misread.n_authority_feedback == 0
+
+        scoped = by_name["v1_scope_exceeded"]
+        assert scoped.decision == "EXECUTE"
+        assert scoped.semantic_ok is True
+        assert scoped.authority_negotiated is True     # Authority Feedback 이 담당
+        assert scoped.n_authority_feedback == 1
+        assert scoped.interpretation == next(
+            t for t in tasks if t.name == "v1_scope_exceeded").truth
+
+        cond = by_name["v1_condition_missing"]
+        assert cond.decision == "REJECT"
+        assert cond.semantic_ok is True
+        assert cond.authority_ok is False              # Authority 하드 리젝트가 담당
+        assert cond.n_authority_feedback == 0          # 비협상 — feedback 자체가 안 걸림
 
 
 class TestReplicatesV0Pattern:
