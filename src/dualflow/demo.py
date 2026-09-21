@@ -13,11 +13,15 @@ from .bench import (
     PRINCIPAL, adversarial_tasks, build_judge, build_tasks, scope_negotiation_sequence,
     scope_negotiation_tasks,
 )
+from .bench_single_env_v1 import (
+    adversarial_single_env_sequence, build_single_env_sequence,
+)
 from .capability import Budget, Privilege, check_authority, delegation_chain
 from .framework import (
     Config, DelegationVerifier, ExperienceStore, evaluate, outcome, run_sequence,
     warmup_then_attack,
 )
+from .llm import ScriptedJudge
 from .sage_baseline import SageAgentBaseline
 from .semantic import (
     Interpretation as I, Principal, build_belief, entropy, information_gain,
@@ -87,7 +91,9 @@ def part3_joint():
 
 def part4_bench():
     print("\n" + BAR)
-    print("PART 4  DelegationBench-mini — 트랙별 기여도 (ablation)")
+    print("PART 4  DelegationBench-mini (v0, legacy) — 트랙별 기여도 (ablation)")
+    print("        ※ 이건 v0(9-task, superseded) 결과다. 논문이 인용하는")
+    print("          현재(v1) Core Ablation 결과는 PART 12 참고.")
     print(BAR)
     tasks = build_tasks()
     cfgs = [Config(name="Authority only", use_matching=False, use_semantic=False),
@@ -335,14 +341,62 @@ def part11_adaptive_verification():
     print("             A 에게 묻지도 않고 안전하게 정답(9월)으로 실행된다.")
 
 
+def part12_v1_phase2():
+    print("\n" + BAR)
+    print("PART 12  v1 Phase 2 (현재, 논문 본문 인용 대상) — Correct vs Adversarial Proposal")
+    print(BAR)
+    tasks = build_single_env_sequence()
+    judge = ScriptedJudge({t.key: t.truth for t in tasks})
+
+    print("\n  Correct Proposal (8 tasks, candidates=[(truth, 1.0)]):")
+    print(f"  {'설정':<18}{'unsafe↓':>10}{'benign↑':>10}{'over-rej':>10}")
+    print(SUB)
+    for c in (Config(name="Authority only", use_matching=False, use_semantic=False),
+              Config(name="Semantic only", use_authority=False),
+              Config(name="Full (v1)")):
+        m = evaluate(c, tasks, judge=judge)
+        print(f"  {m['name']:<18}{m['unsafe_rate']*100:>9.1f}%{m['benign_completion']*100:>9.1f}%"
+              f"{m['over_rejection']*100:>9.1f}%")
+
+    attacked = adversarial_single_env_sequence()
+    print("\n  Adversarial Proposal (M1/M2/M3, attack field 고정 주입 — LLM 재호출 없음):")
+    print(f"  {'설정':<18}{'unsafe↓':>10}{'benign↑':>10}{'over-rej':>10}")
+    print(SUB)
+    for c in (Config(name="Authority only", use_matching=False, use_semantic=False),
+              Config(name="Semantic only", use_authority=False),
+              Config(name="Full (v1)")):
+        m = evaluate(c, attacked, judge=judge)
+        print(f"  {m['name']:<18}{m['unsafe_rate']*100:>9.1f}%{m['benign_completion']*100:>9.1f}%"
+              f"{m['over_rejection']*100:>9.1f}%")
+
+    print("\n  Mechanism attribution (Full — EXPERIMENTS.md §6 참고):")
+    v = DelegationVerifier(Config(), judge=judge)
+    for t in attacked:
+        r = v.run(t)
+        print(f"    {t.name:<28} decision={r.decision:<8} semantic_ok={r.semantic_ok!s:<5} "
+              f"authority_ok={r.authority_ok!s:<5} n_feedback={r.n_authority_feedback}")
+    print("\n  세 attack 모두 semantic_ok=True다 — Semantic Flow 자신의 확신 게이트는")
+    print("  스스로 못 잡는다. misread는 Joint Verification이, scope-exceeded는 Authority")
+    print("  Feedback Loop(협상 후 truth로 복구)가, condition-missing은 Authority의")
+    print("  하드 리젝트가 각각 담당한다 — 이 세부 구분이 fig10/EXPERIMENTS.md §6이다.")
+
+
 PARTS = {"authority": part1_authority, "semantic": part2_semantic, "joint": part3_joint,
          "bench": part4_bench, "theta": part5_theta, "experience": part6_experience,
          "fastslow": part7_fastslow, "attack": part8_attack,
          "careless": part9_careless, "authfeedback": part10_authority_feedback,
-         "adaptiveauth": part11_adaptive_verification}
+         "adaptiveauth": part11_adaptive_verification,
+         "v1phase2": part12_v1_phase2}
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Windows 기본 콘솔(cp949 등)은 —/→ 같은 문자를 못 인코딩해서
+    # UnicodeEncodeError로 죽는다 — UTF-8로 강제하고, 그래도 안 되는 글자는
+    # 깨진 채로 보여주고 넘어간다(예외로 죽지 않는 게 우선).
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
     argv = list(sys.argv[1:] if argv is None else argv)
     unknown = [a for a in argv if a not in PARTS]
     if unknown:

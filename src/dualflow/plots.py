@@ -1,15 +1,18 @@
 """
 실험 결과를 그림으로 저장한다.
 
-    dualflow-plots                        # figures/ 에 현재(v1) 그림 4장 +
-                                           # figures/legacy/ 에 v0 그림 6장
+    dualflow-plots                        # figures/{main,optimization,appendix,legacy}/ 에 10장
     dualflow-plots careless --trials 50   # 논문용 — 밴드가 좁아진다
     python -m dualflow.plots --outdir 어디에 --dpi 300
 
-figures/(fig7~10)가 논문 본문이 인용하는 현재 결과다. figures/legacy/
-(fig1~6)는 v0(superseded) 결과 — 삭제하지 않고 "내부 재현 증거/legacy"로
-남긴다(EXPERIMENTS.md Appendix 참고). fig 번호는 만들어진 순서를 그대로
-유지한다 — legacy로 옮겨도 재번호를 매기지 않는다.
+그림은 어느 layer/역할을 뒷받침하는지로 4개 하위 폴더에 나눠 저장한다:
+
+    figures/main/          fig7, fig9, fig10   — Core Safety 근거(논문 본문 인용)
+    figures/optimization/  fig8                — Optimization Layer 근거(Core와 분리)
+    figures/appendix/      fig3, fig4, fig5, fig6 — v1 로 대체되지 않은 parameter-sensitivity 분석
+    figures/legacy/        fig1, fig2          — v0(superseded) pilot 자체, 내부 재현 증거로만 유지
+
+fig 번호는 만들어진 순서를 그대로 유지한다 — 폴더를 옮겨도 재번호를 매기지 않는다.
 
 라벨은 영문이다. matplotlib 기본 폰트에 한글 글리프가 없어 한글로 쓰면 네모로
 깨지기 때문이고, 논문 그림도 어차피 영문이라 그대로 쓸 수 있다.
@@ -19,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import pathlib
+import sys
 
 import matplotlib
 matplotlib.use("Agg")
@@ -117,7 +121,7 @@ def fig_theta(outdir, dpi, **_):
     ax.legend(lines, [l.get_label() for l in lines], fontsize=8, loc="center right")
     ax.set_title("Safety is flat in θ; only utility and cost move", fontsize=11)
     fig.tight_layout()
-    fig.savefig(outdir / "legacy" / "fig3_theta_sweep.png", dpi=dpi)
+    fig.savefig(outdir / "appendix" / "fig3_theta_sweep.png", dpi=dpi)
     plt.close(fig)
 
 
@@ -152,7 +156,7 @@ def fig_experience(outdir, dpi, **_):
     ax.legend(lines, [l.get_label() for l in lines], fontsize=8, loc="lower left")
     ax.set_title("Accumulated experience removes the clarification loop", fontsize=11)
     fig.tight_layout()
-    fig.savefig(outdir / "legacy" / "fig4_experience.png", dpi=dpi)
+    fig.savefig(outdir / "appendix" / "fig4_experience.png", dpi=dpi)
     plt.close(fig)
 
 
@@ -199,7 +203,7 @@ def fig_careless(outdir, dpi, trials=10, warmup=5, **_):
     fig.suptitle(f"Experiment ③ — when the reviewer is not perfect "
                  f"(mean ± s.e., {trials} trials)", fontsize=12)
     fig.tight_layout()
-    fig.savefig(outdir / "legacy" / "fig5_careless_reviewer.png", dpi=dpi)
+    fig.savefig(outdir / "appendix" / "fig5_careless_reviewer.png", dpi=dpi)
     plt.close(fig)
 
 
@@ -246,7 +250,7 @@ def fig_consistency_sweep(outdir, dpi, trials=10, warmup=5, sweep_c=1.0, **_):
     fig.suptitle(f"consistency_sigma sweep at carelessness={sweep_c:.2f}  "
                 f"(mean ± s.e., {trials} trials)", fontsize=12)
     fig.tight_layout()
-    fig.savefig(outdir / "legacy" / "fig6_consistency_sweep.png", dpi=dpi)
+    fig.savefig(outdir / "appendix" / "fig6_consistency_sweep.png", dpi=dpi)
     plt.close(fig)
 
 
@@ -290,7 +294,7 @@ def fig_authority_feedback(outdir, dpi, **_):
     fig.suptitle("Authority Feedback Loop — scope negotiation (experiment 5)",
                 fontsize=12)
     fig.tight_layout()
-    fig.savefig(outdir / "fig7_authority_feedback.png", dpi=dpi)
+    fig.savefig(outdir / "main" / "fig7_authority_feedback.png", dpi=dpi)
     plt.close(fig)
 
 
@@ -344,7 +348,7 @@ def fig_adaptive_verification(outdir, dpi, **_):
     fig.suptitle("Adaptive Verification — stable reuse, drift, and manipulation "
                 "in one sequence (experiment 6)", fontsize=12)
     fig.tight_layout()
-    fig.savefig(outdir / "fig8_adaptive_verification.png", dpi=dpi)
+    fig.savefig(outdir / "optimization" / "fig8_adaptive_verification.png", dpi=dpi)
     plt.close(fig)
 
 
@@ -430,7 +434,7 @@ def fig_entropy_probe(outdir, dpi, **_):
     fig.suptitle("Entropy Validation — first real-LLM results (gpt-4o-mini, "
                 "N=20, 2026-09-17)", fontsize=12)
     fig.tight_layout()
-    fig.savefig(outdir / "fig9_entropy_probe.png", dpi=dpi)
+    fig.savefig(outdir / "main" / "fig9_entropy_probe.png", dpi=dpi)
     plt.close(fig)
 
 
@@ -542,13 +546,18 @@ def fig_v1_phase2(outdir, dpi, **_):
              "entropy gate never objects. Safety comes from the other three "
              "mechanisms shown below.",
              fontsize=8, color="#555555", ha="center")
-    fig.savefig(outdir / "fig10_v1_phase2.png", dpi=dpi)
+    fig.savefig(outdir / "main" / "fig10_v1_phase2.png", dpi=dpi)
     plt.close(fig)
 
 
-#: fig1~6은 v0(superseded) 실험 — figures/legacy/에 저장된다. fig7~10이
-#: 논문 본문이 인용하는 현재(v1) 결과다 — figures/에 그대로 저장.
-LEGACY_FIGURES = {"pilot", "attack", "theta", "experience", "careless", "consistency"}
+#: 각 그림이 어느 하위 폴더(figures/<group>/)에 저장되는지 — savefig 호출부의
+#: 실제 경로와 반드시 일치해야 한다(FIGURE_GROUPS 자체는 mkdir 목적으로만 쓰임).
+FIGURE_GROUPS = {
+    "main": {"authfeedback", "entropyprobe", "v1phase2"},
+    "optimization": {"adaptiveauth"},
+    "appendix": {"theta", "experience", "careless", "consistency"},
+    "legacy": {"pilot", "attack"},
+}
 
 FIGURES = {"pilot": fig_pilot, "attack": fig_attack, "theta": fig_theta,
            "experience": fig_experience, "careless": fig_careless,
@@ -560,6 +569,10 @@ FIGURES = {"pilot": fig_pilot, "attack": fig_attack, "theta": fig_theta,
 
 
 def main(argv=None) -> int:
+    try:  # Windows 기본 콘솔(cp949 등)의 UnicodeEncodeError 방지
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
     ap = argparse.ArgumentParser(description="dualflow 실험 그림 생성")
     ap.add_argument("figures", nargs="*", choices=list(FIGURES) or None,
                     help="생략하면 전부 생성")
@@ -573,7 +586,8 @@ def main(argv=None) -> int:
 
     outdir = pathlib.Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-    (outdir / "legacy").mkdir(parents=True, exist_ok=True)
+    for sub in ("main", "optimization", "appendix", "legacy"):
+        (outdir / sub).mkdir(parents=True, exist_ok=True)
     for key in (args.figures or list(FIGURES)):
         FIGURES[key](outdir, args.dpi, trials=args.trials,
                      warmup=args.warmup)

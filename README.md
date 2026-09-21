@@ -36,6 +36,40 @@ The implementation is deterministic (no LLM calls required to run the
 experiments below); a real model plugs in behind three interfaces — see
 [Current Scope and Limitations](#current-scope-and-limitations).
 
+## Research Questions and Current Validation
+
+| # | Research Question | Mechanism | Evidence |
+|---|---|---|---|
+| RQ1 | Are Semantic and Authority verification both necessary? | Semantic Flow + Authority Flow | Experiment 1 — Core Ablation |
+| RQ2 | Can a scope violation be recovered without widening authority? | Authority Feedback Loop | Experiment 2 — Authority Feedback |
+| RQ3 | Can repeated principal feedback be reduced without weakening safety? | Verified Authority Store *(Optimization Layer)* | Experiment 3 — Adaptive Authority |
+| RQ4 | Can a confidently wrong proposal bypass entropy alone? | Joint Verification / Authority checks | Experiment 4 — Semantic Robustness |
+
+All four run on a single controlled 8-step delegation environment
+(`bench_single_env_v1`) plus two dedicated mini-sets — **a controlled
+mechanism-level benchmark**, not a production LLM deployment (see
+[Current Scope and Limitations](#current-scope-and-limitations)).
+
+**Representative result** (Experiment 1, controlled benchmark, proposals are
+either the correct interpretation or a fixed adversarial one — not sampled
+from a real model):
+
+| Method | Unsafe ↓ (adversarial) |
+|---|---:|
+| Authority only | 33.3% |
+| Semantic only | 66.7% |
+| **Full DualFlow** | **0.0%** |
+
+Full detail — including *which specific mechanism* catches each of the three
+attacks — is in [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md), Experiment 1 and
+Mechanism Attribution. Full per-experiment results, figures, and reasoning
+are below in [Current Validation — Detailed Results](#current-validation--detailed-results).
+
+**Historical / legacy validation.** An earlier 9-task pilot (`bench.py`, "v0")
+was used during initial development; it is superseded by the environment
+above but kept — not deleted — as internal replication evidence in
+[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)'s Appendix.
+
 ## Why DualFlow?
 
 A delegated action can fail in two different ways.
@@ -140,34 +174,25 @@ C_adaptive ⊆ C_current_budget ⊆ C_A
 **Verified experience can narrow the current authority; it can never create
 or widen it.**
 
-## Current Validation
+## Current Validation — Detailed Results
 
-Four experiments, each answering one research question, run on a single
-controlled 8-step delegation environment (`bench_single_env_v1`) plus two
-dedicated mini-sets:
+Full evidence for the four experiments introduced above. Figures split by
+which layer they support — mixing them would suggest Adaptive Authority
+carries a safety guarantee it doesn't: it is an **Optimization Layer**
+component (cost only), not part of the Core Safety Mechanism.
 
-| # | Experiment | Question |
-|---|---|---|
-| 1 | Core Ablation | Do Semantic and Authority verification catch different failures? |
-| 2 | Authority Feedback | Does bounded negotiation recover utility without widening authority? |
-| 3 | Adaptive Authority | Does verified history reduce principal calls, safely? |
-| 4 | Semantic Robustness | Is entropy a valid uncertainty signal, and is it safe under a confidently wrong proposal? |
-
-**Representative result** (Experiment 1, controlled benchmark, proposals are either the correct interpretation or a fixed adversarial one — not sampled from a real model):
-
-| Method | Unsafe ↓ (adversarial) |
-|---|---:|
-| Authority only | 33.3% |
-| Semantic only | 66.7% |
-| **Full DualFlow** | **0.0%** |
-
-Full detail — including *which specific mechanism* catches each of the three attacks (Joint Verification, Authority Feedback Loop, or Authority's hard reject — Semantic Flow's own confidence gate catches none of them by itself) — is in [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md), Experiment 1 and Mechanism Attribution.
+```
+Core Safety evidence         Optimization Layer evidence
+  fig7  Authority Feedback     fig8  Adaptive Authority Feedback
+  fig9  Entropy validation     (reduces principal calls; Core's
+  fig10 Mechanism attribution   safety holds identically with it off)
+```
 
 ### 1. Both verification axes are necessary
 
-![v1 Phase 2 — Correct vs. Adversarial Proposal](figures/fig10_v1_phase2.png)
+![v1 Phase 2 — Correct vs. Adversarial Proposal](figures/main/fig10_v1_phase2.png)
 
-Each axis alone lets a different failure class through, for a different reason: Authority-only misses a semantic mismatch (misread) because the proposed action is itself permitted; Semantic-only misses a scope/condition violation because it never checks the budget. Full detail in [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) §2.
+Each axis alone lets a different failure class through, for a different reason: Authority-only misses a semantic mismatch (misread) because the proposed action is itself permitted; Semantic-only misses a scope/condition violation because it never checks the budget. Full detail in [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) §3.
 
 ### 2. Authority Feedback converts safe rejection into safe completion
 
@@ -176,7 +201,7 @@ Each axis alone lets a different failure class through, for a different reason: 
 | No feedback | 0.0% | 0.0% | 0.0% |
 | **Feedback (proposed)** | 0.0% | **100.0%** | 66.7% |
 
-![Authority Feedback Loop — normal and under-attack conditions](figures/fig7_authority_feedback.png)
+![Authority Feedback Loop — normal and under-attack conditions](figures/main/fig7_authority_feedback.png)
 
 Without feedback, every negotiable scope violation is safely rejected but
 never completed. With feedback, the same cases complete safely — and stay
@@ -184,11 +209,11 @@ safe even as principal carelessness rises to 1.0, because every revised
 proposal is revalidated regardless of what the principal said. This holds
 only as long as the authority budget and the principal feedback channel
 themselves are trusted (see [Current Scope and Limitations](#current-scope-and-limitations)).
-Detail in [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) §3.
+Detail in [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) §4.
 
-### 3. Adaptive reuse survives repetition, drift, and manipulation
+### 3. Adaptive reuse survives repetition, drift, and manipulation *(Optimization Layer)*
 
-![Adaptive Verification — 9-round timeline](figures/fig8_adaptive_verification.png)
+![Adaptive Verification — 9-round timeline](figures/optimization/fig8_adaptive_verification.png)
 
 - **Stable repetition**: after 3 consistent principal confirmations, DualFlow
   reuses verified authority without another principal call — feedback rate
@@ -202,25 +227,32 @@ Detail in [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) §3.
   delegate's candidate, only at principal-confirmed history intersected with
   the current budget.
 
-Full round-by-round data in [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) §4.
+Full round-by-round data in [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) §5.
 
 ### 4. Entropy is a real signal, and it is not sufficient alone
 
-![Entropy validation — first real-LLM results](figures/fig9_entropy_probe.png)
+![Entropy validation — first real-LLM results](figures/main/fig9_entropy_probe.png)
 
 The first real-LLM run (GPT-4o-mini, N=20) found a request the model answered
 with 100% confidence (H=0) — pointed at an *unauthorized* scope. Authority
 Flow catches what the confidence gate alone would have let through. Detail
-in [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) §5.
+in [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) §6.
 
 ## Quick Start
 
 ```bash
 pip install -e ".[dev]"
 
-dualflow-demo              # all 11 experiments, as text
+dualflow-demo              # demo suite: 12 runnable routines, as text
 dualflow-plots             # current figures into figures/, legacy ones into figures/legacy/
 ```
+
+`dualflow-demo`'s 12 routines are a finer-grained *walkthrough* of the
+implementation (one per mechanism/ablation) — they are not the same thing as
+the 4 research experiments above; several routines correspond to a single
+experiment (e.g. the Core Ablation experiment is `dualflow-demo v1phase2`; the
+legacy v0 ablation is `dualflow-demo bench`), and a few cover legacy/diagnostic
+material that isn't cited as a main result.
 
 ### Software Validation vs. Experimental Validation
 
@@ -248,8 +280,12 @@ is hand-transcribed. [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) walks through
 each experiment in full, in the order it's cited above, with the reasoning
 behind each result — plus an Appendix of earlier (v0) exploratory experiments,
 kept as internal replication evidence rather than deleted.
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) describes each mechanism (Semantic
+Flow, Authority Flow, Authority Feedback, Joint Verification, and the
+Optimization Layer) in implementation detail.
 [docs/BASELINES.md](docs/BASELINES.md) documents the SAGE-Agent baseline
-reproduction and issues found in its formulas along the way.
+reproduction and issues found in its formulas along the way — supporting,
+exploratory analysis, not a main result.
 [docs/DESIGN_NOTES.md](docs/DESIGN_NOTES.md) covers implementation decisions
 that didn't make the cut for the main results — including one approach
 (matching against ground truth directly) that looked like a shortcut and

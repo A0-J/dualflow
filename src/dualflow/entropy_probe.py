@@ -30,6 +30,7 @@ Farquhar(semantic entropy 선행연구)와 같은 패턴: "entropy가 실제 의
 
 from __future__ import annotations
 
+import sys
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Protocol
@@ -426,6 +427,10 @@ def main(argv: list[str] | None = None) -> int:
         validation)를 돌려 각 spec이 ≥90%로 ground truth에 수렴하는지
         PASS/FAIL로 판정해 출력한다.
     """
+    try:  # Windows 기본 콘솔(cp949 등)의 UnicodeEncodeError 방지
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
     import argparse
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--backend", choices=["openai", "anthropic"], default="openai")

@@ -34,6 +34,37 @@ experience)은 반복되는 principal 확인 비용을 줄이는 최적화 계�
 구현은 결정론적이다(아래 실험을 돌리는 데 LLM 호출이 필요 없다). 실제 모델은
 인터페이스 세 곳 뒤에 그대로 꽂힌다 — [현재 범위와 한계](#현재-범위와-한계) 참고.
 
+## 연구 질문과 현재까지의 검증
+
+| # | 연구 질문(RQ) | 메커니즘 | 근거 |
+|---|---|---|---|
+| RQ1 | Semantic과 Authority 검증은 둘 다 필요한가? | Semantic Flow + Authority Flow | Experiment 1 — Core Ablation |
+| RQ2 | scope 위반을 권한을 넓히지 않고 복구할 수 있는가? | Authority Feedback Loop | Experiment 2 — Authority Feedback |
+| RQ3 | 안전성을 약화하지 않으면서 반복되는 principal 확인을 줄일 수 있는가? | Verified Authority Store *(Optimization Layer)* | Experiment 3 — Adaptive Authority |
+| RQ4 | 확신에 찬 틀린 제안이 entropy만으로는 통과할 수 있는가? | Joint Verification / Authority 검사 | Experiment 4 — Semantic Robustness |
+
+네 실험 모두 하나의 통제된 8단계 위임 환경(`bench_single_env_v1`)과 두 개의
+별도 mini-set 위에서 돈다 — **통제된 mechanism-level benchmark**이지 실제
+production LLM 배포가 아니다([현재 범위와 한계](#현재-범위와-한계) 참고).
+
+**대표 결과** (Experiment 1, 통제된 benchmark, proposal은 정답 해석 또는
+코드에 고정 주입한 adversarial 값 중 하나다 — 실제 모델에서 샘플링한 게 아니다):
+
+| 방식 | Unsafe ↓ (adversarial) |
+|---|---:|
+| Authority only | 33.3% |
+| Semantic only | 66.7% |
+| **Full DualFlow** | **0.0%** |
+
+세 attack 각각을 **정확히 어떤 메커니즘이** 잡는지까지 포함한 전체 내용은
+[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) 의 Experiment 1과 Mechanism
+Attribution에 있다. 실험별 상세 결과·그림은 아래
+[현재까지의 검증 — 상세 결과](#현재까지의-검증--상세-결과)에 있다.
+
+**Historical / legacy 검증.** 초기 개발 단계에서 쓰인 9-task 파일럿(`bench.py`,
+"v0")은 위 환경으로 대체됐지만, 삭제하지 않고 내부 replication 증거로
+[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) 의 Appendix에 남겨뒀다.
+
 ## 왜 DualFlow 인가?
 
 위임된 행동은 두 가지 서로 다른 방식으로 실패할 수 있다.
@@ -132,39 +163,27 @@ C_adaptive ⊆ C_current_budget ⊆ C_A
 
 **검증된 이력은 현재 권한을 좁힐 수 있을 뿐, 절대 새로 만들거나 넓히지 못한다.**
 
-## 현재까지의 검증
+## 현재까지의 검증 — 상세 결과
 
-하나의 통제된 8단계 위임 환경(`bench_single_env_v1`)과 두 개의 별도 mini-set
-위에서, 각각 하나의 연구 질문에 답하는 4개 실험을 돌렸다:
+위에서 소개한 4개 실험의 전체 근거. 그림은 어느 layer를 뒷받침하는지로
+나눴다 — 섞으면 Adaptive Authority가 실제로는 없는 안전성 보장을 갖는 것처럼
+보인다: 이건 **Optimization Layer** 구성요소(비용만 담당)이지 Core Safety
+Mechanism의 일부가 아니다.
 
-| # | 실험 | 질문 |
-|---|---|---|
-| 1 | Core Ablation | Semantic과 Authority 검증은 서로 다른 실패를 잡는가? |
-| 2 | Authority Feedback | Bounded negotiation이 권한을 넓히지 않고 utility를 회복하는가? |
-| 3 | Adaptive Authority | 검증된 이력이 principal 호출을 안전하게 줄이는가? |
-| 4 | Semantic Robustness | Entropy는 타당한 불확실성 신호인가, 그리고 확신에 찬 틀린 제안에도 안전한가? |
-
-**대표 결과** (Experiment 1, 통제된 benchmark, proposal은 정답 해석 또는 코드에
-고정 주입한 adversarial 값 중 하나다 — 실제 모델에서 샘플링한 게 아니다):
-
-| 방식 | Unsafe ↓ (adversarial) |
-|---|---:|
-| Authority only | 33.3% |
-| Semantic only | 66.7% |
-| **Full DualFlow** | **0.0%** |
-
-세 attack 각각을 **정확히 어떤 메커니즘이** 잡는지(Joint Verification, Authority
-Feedback Loop, Authority의 하드 리젝트 — Semantic Flow 자신의 확신 게이트는
-셋 다 스스로 못 잡는다)까지 포함한 전체 내용은 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)
-의 Experiment 1과 Mechanism Attribution에 있다.
+```
+Core Safety 근거                 Optimization Layer 근거
+  fig7  Authority Feedback         fig8  Adaptive Authority Feedback
+  fig9  Entropy validation         (principal 호출을 줄일 뿐 — 꺼도
+  fig10 Mechanism attribution       Core의 안전성은 그대로 유지된다)
+```
 
 ### 1. 두 검증 축 모두 필요하다
 
-![v1 Phase 2 — Correct vs. Adversarial Proposal](figures/fig10_v1_phase2.png)
+![v1 Phase 2 — Correct vs. Adversarial Proposal](figures/main/fig10_v1_phase2.png)
 
 각 축을 단독으로 빼면 서로 다른 이유로 서로 다른 실패가 통과한다 — Authority-only는
 misread(제안된 행동 자체가 허용돼 있어서)를 놓치고, Semantic-only는 scope/condition
-위반(예산 자체를 안 보므로)을 놓친다. 상세는 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) §2.
+위반(예산 자체를 안 보므로)을 놓친다. 상세는 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) §3.
 
 ### 2. Authority Feedback 은 안전한 거절을 안전한 완료로 바꾼다
 
@@ -173,7 +192,7 @@ misread(제안된 행동 자체가 허용돼 있어서)를 놓치고, Semantic-o
 | Feedback 없음 | 0.0% | 0.0% | 0.0% |
 | **Feedback(제안)** | 0.0% | **100.0%** | 66.7% |
 
-![Authority Feedback Loop — 정상/공격 조건](figures/fig7_authority_feedback.png)
+![Authority Feedback Loop — 정상/공격 조건](figures/main/fig7_authority_feedback.png)
 
 Feedback 이 없으면 협상 가능한 모든 scope 위반이 안전하게 거절되지만 끝내
 완료되지 않는다. Feedback 을 켜면 같은 사례가 안전하게 완료되고, principal 의
@@ -181,11 +200,11 @@ Feedback 이 없으면 협상 가능한 모든 scope 위반이 안전하게 거�
 제안이 principal 이 뭐라고 답했든 매 라운드 재검증되기 때문이다. 단 이건
 위임 예산과 principal feedback 채널 자체가 신뢰 가능하다는 전제에서만 성립한다
 (자세한 건 [현재 범위와 한계](#현재-범위와-한계)). 상세는
-[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) §3.
+[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) §4.
 
-### 3. Adaptive 재사용은 반복·변경·조작을 모두 견딘다
+### 3. Adaptive 재사용은 반복·변경·조작을 모두 견딘다 *(Optimization Layer)*
 
-![Adaptive Verification — 9라운드 타임라인](figures/fig8_adaptive_verification.png)
+![Adaptive Verification — 9라운드 타임라인](figures/optimization/fig8_adaptive_verification.png)
 
 - **안정적 반복**: principal 확인이 3회 일관되게 쌓이면, 더 묻지 않고 검증된
   권한을 재사용한다 — 같은 위임 유형에서 feedback률이 100% 에서 0% 로 떨어진다.
@@ -196,24 +215,30 @@ Feedback 이 없으면 협상 가능한 모든 scope 위반이 안전하게 거�
   **정답** scope 로 해결된다 — delegate 의 후보를 전혀 보지 않고, principal 이
   확인해준 이력과 현재 예산의 교집합만 보기 때문이다.
 
-라운드별 전체 데이터는 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) §4.
+라운드별 전체 데이터는 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) §5.
 
 ### 4. Entropy는 실제 신호이지만, 그것만으로는 부족하다
 
-![Entropy validation — first real-LLM results](figures/fig9_entropy_probe.png)
+![Entropy validation — first real-LLM results](figures/main/fig9_entropy_probe.png)
 
 첫 real-LLM 실행(GPT-4o-mini, N=20)에서, 모델이 100% 확신(H=0)으로 답한 요청
 하나가 **미승인 스코프**를 가리켰다. 확신 게이트 혼자였으면 통과시켰을 것을
-Authority Flow가 잡는다. 상세는 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) §5.
+Authority Flow가 잡는다. 상세는 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) §6.
 
 ## 빠른 시작
 
 ```bash
 pip install -e ".[dev]"
 
-dualflow-demo              # 실험 11개 전체 (텍스트)
+dualflow-demo              # 데모 모음: 실행 가능한 루틴 12개 (텍스트)
 dualflow-plots             # 현재 그림은 figures/ 에, legacy 그림은 figures/legacy/ 에 저장
 ```
+
+`dualflow-demo`의 12개 루틴은 구현을 더 세밀하게(메커니즘/ablation 하나당
+하나씩) 훑어보는 것이지, 위의 연구 실험 4개와 같은 게 아니다 — 실험 하나가
+루틴 여러 개에 대응하는 경우도 있고(예: Core Ablation 실험은
+`dualflow-demo v1phase2`, legacy v0 ablation은 `dualflow-demo bench`),
+legacy/진단용이라 본문 결과로 안 쓰는 루틴도 있다.
 
 ### 소프트웨어 검증 vs 실험적 검증
 
@@ -238,8 +263,12 @@ OPENAI_API_KEY=... dualflow-entropy-probe --cases redesign   # real-LLM 시나�
 적은 값은 없다. [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) 는 위에 인용한 순서
 그대로 각 실험을 그 결과가 나온 이유까지 전부 설명하고, 맨 끝 Appendix에는
 초기(v0) 탐색 실험을 삭제하지 않고 내부 replication 증거로 남겨뒀다.
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 는 각 메커니즘(Semantic Flow,
+Authority Flow, Authority Feedback, Joint Verification, Optimization Layer)을
+구현 수준까지 자세히 설명한다.
 [docs/BASELINES.md](docs/BASELINES.md) 는 SAGE-Agent 베이스라인 재현과 그 과정에서
-발견한 결함들을 다룬다. [docs/DESIGN_NOTES.md](docs/DESIGN_NOTES.md) 는
+발견한 결함들을 다룬다 — 보조적/탐색적 분석이며 본문 핵심 결과가 아니다.
+[docs/DESIGN_NOTES.md](docs/DESIGN_NOTES.md) 는
 최종 결과에는 안 들어간 구현 결정들을 다룬다 — 지름길처럼 보였다가 알고 보니
 평가용 오라클이었던 접근(정답과 직접 비교하는 매칭) 하나를 포함해서.
 

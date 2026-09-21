@@ -1,5 +1,9 @@
 # Design Notes
 
+> **Status.** 이 문서는 폐기된 접근, 구현 결정, 방법론적 교훈을 기록한다 —
+> **본문 평가(primary evaluation)의 일부가 아니다.** 실험 결과 자체는
+> [EXPERIMENTS.md](EXPERIMENTS.md), 시스템 구조는 [ARCHITECTURE.md](ARCHITECTURE.md)를 참고할 것.
+
 이 문서는 DualFlow의 **최종 설계 원칙과 구현 경계**를 정리한다.  
 연구 과정의 시간순 기록보다, 현재 `main` 코드가 왜 이런 구조를 갖는지와 무엇을 안전성의 핵심으로 보는지를 설명하는 데 목적이 있다.
 
@@ -81,7 +85,7 @@ Delegate의 실행 제안이 현재 위임된 capability budget 안에 있는지
 | clear | clear_read, narrow_scope_ok | 기준선 + scope 경계 정밀도 |
 | escalation | sensitive_escalation | 자동 실행 게이트 자체가 닫히는 경우 |
 
-각 task의 `ideal_decision`은 손으로 적지 않고 `truth`로부터 자동 유도한다 — 판정 기준을 파이프라인 구현과 독립적으로 두기 위해서다([bench.py:14-15](../src/dualflow/bench.py#L14-L15)). `docs/EXPERIMENTS.md` §1의 모든 퍼센트 수치(예: 44.4% = 4/9)는 이 9개 task를 분모로 한다 — `scope_negotiation_tasks()`(Authority Feedback 전용 mini-set)를 섞지 않는 것도 같은 이유다.
+각 task의 `ideal_decision`은 손으로 적지 않고 `truth`로부터 자동 유도한다 — 판정 기준을 파이프라인 구현과 독립적으로 두기 위해서다([bench.py:14-15](../src/dualflow/bench.py#L14-L15)). `docs/EXPERIMENTS.md` Appendix A(v0)의 모든 퍼센트 수치(예: 44.4% = 4/9)는 이 9개 task를 분모로 한다 — `scope_negotiation_tasks()`(Authority Feedback 전용 mini-set)를 섞지 않는 것도 같은 이유다.
 
 ---
 
