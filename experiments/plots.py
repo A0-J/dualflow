@@ -5,22 +5,28 @@
 package를 사용하는 외부 코드다. 저장소 루트에서 `pip install -e .`로
 editable install 한 뒤 실행한다:
 
-    python experiments/plots.py                        # figures/{main,optimization,appendix,legacy}/ 에 7장
+    python experiments/plots.py                        # figures/{main,optimization,appendix}/ 에 5장
     python experiments/plots.py --outdir 어디에 --dpi 300
 
-그림은 어느 layer/역할을 뒷받침하는지로 4개 하위 폴더에 나눠 저장한다:
+그림은 어느 layer/역할을 뒷받침하는지로 하위 폴더에 나눠 저장한다:
 
     figures/main/          fig7, fig9, fig10   — Core Safety 근거(논문 본문 인용)
     figures/optimization/  fig8                — Optimization Layer 근거(Core와 분리)
     figures/appendix/      fig3                — v1 로 대체되지 않은 parameter-sensitivity 분석
-    figures/legacy/        fig1, fig2          — v0(superseded) pilot 자체, 내부 재현 증거로만 유지
 
 fig 번호는 만들어진 순서를 그대로 유지한다 — 폴더를 옮겨도 재번호를 매기지 않는다.
 
-fig4(experience)/fig5(careless reviewer)/fig6(consistency sweep)는 논문
-본문에서 쓰지 않는 diagnostic 그림이라 이 스크립트에서 제거했다 — 수치와
-분석 자체는 삭제하지 않고 `docs/EXPERIMENTS.md` Appendix A.5/A.7/A.8에
-그대로 남아 있다.
+fig1(pilot)/fig2(attack)는 v0(`dualflow.bench`) 전용 그림이라 이 스크립트에서
+제거했다. fig4(experience)/fig5(careless reviewer)/fig6(consistency sweep)도
+논문 본문에서 쓰지 않는 diagnostic 그림이라 앞서 제거했다 — 다섯 그림 모두
+수치와 분석 자체는 삭제하지 않고 `docs/EXPERIMENTS.md` Appendix A에 그대로
+남아 있다(A.1/A.3 = pilot/attack, A.5/A.7/A.8 = experience/careless/consistency).
+
+fig3/fig7/fig8은 여전히 `dualflow.bench`의 task fixture(`build_tasks`,
+`scope_negotiation_tasks`, `scope_negotiation_sequence` 등)를 쓴다 — v0
+모듈이 아직 살아 있는 이유는 이 파일이 아니라 `dualflow.bench_single_env_v1`
+자체가 `dualflow.bench.adversarial_tasks`에 의존하기 때문이다. `bench.py`
+정리는 v1 구조 정리·test cleanup이 끝난 뒤 별도 단계에서 한다.
 
 라벨은 영문이다. matplotlib 기본 폰트에 한글 글리프가 없어 한글로 쓰면 네모로
 깨지기 때문이고, 논문 그림도 어차피 영문이라 그대로 쓸 수 있다.
@@ -65,53 +71,6 @@ def _save_figure(fig, path: pathlib.Path, dpi: int, *, tight: bool = True) -> pa
     fig.savefig(path, dpi=dpi)
     plt.close(fig)
     return path
-
-
-def _configs():
-    return [Config(name="SAGE-Agent\n(Eq.2+Def.4)", mode="sage",
-                   use_authority=False, use_matching=False),
-            Config(name="SAGE\n+ Joint", mode="sage"),
-            Config(name="Fast\n+ Joint", mode="fast"),
-            Config(name="Slow\n+ Joint", mode="slow"),
-            Config(name="AND\n(proposed)", mode="and")]
-
-
-def _pilot_panel(ax, tasks, title):
-    rows = [evaluate(c, tasks, judge=build_judge()) for c in _configs()]
-    x = range(len(rows))
-    w = 0.38
-    ax.bar([i - w / 2 for i in x], [r["unsafe_rate"] * 100 for r in rows], w,
-           label="Unsafe execution", color=PALETTE["unsafe"])
-    ax.bar([i + w / 2 for i in x], [r["benign_completion"] * 100 for r in rows], w,
-           label="Benign completion", color=PALETTE["benign"])
-    for i, r in enumerate(rows):
-        ax.text(i - w / 2, r["unsafe_rate"] * 100 + 2,
-                f"{r['unsafe_rate']*100:.0f}", ha="center", fontsize=8)
-        ax.text(i + w / 2, r["benign_completion"] * 100 + 2,
-                f"{r['benign_completion']*100:.0f}", ha="center", fontsize=8)
-    ax.set_xticks(list(x))
-    ax.set_xticklabels([c.name for c in _configs()], fontsize=8)
-    ax.set_ylabel("%")
-    ax.set_ylim(0, 124)
-    ax.set_title(title, fontsize=11)
-    ax.legend(fontsize=8, loc="upper left", framealpha=0.9)
-    ax.grid(axis="y", alpha=0.25)
-    return rows
-
-
-def fig_pilot(outdir, dpi, **_):
-    """Fig.1 — 정상 조건에서의 Fast/Slow/AND 파일럿."""
-    fig, ax = plt.subplots(figsize=(7.5, 4))
-    _pilot_panel(ax, build_tasks(), "Normal condition")
-    _save_figure(fig, outdir / "legacy" / "fig1_pilot_normal.png", dpi)
-
-
-def fig_attack(outdir, dpi, **_):
-    """Fig.2 — belief 조작 공격 하에서의 동일 비교."""
-    fig, axes = plt.subplots(1, 2, figsize=(13, 4.2))
-    _pilot_panel(axes[0], build_tasks(), "Normal condition")
-    _pilot_panel(axes[1], adversarial_tasks(), "Under belief manipulation")
-    _save_figure(fig, outdir / "legacy" / "fig2_attack.png", dpi)
 
 
 def fig_theta(outdir, dpi, **_):
@@ -436,10 +395,9 @@ FIGURE_GROUPS = {
     "main": {"authfeedback", "entropyprobe", "v1phase2"},
     "optimization": {"adaptiveauth"},
     "appendix": {"theta"},
-    "legacy": {"pilot", "attack"},
 }
 
-FIGURES = {"pilot": fig_pilot, "attack": fig_attack, "theta": fig_theta,
+FIGURES = {"theta": fig_theta,
            "authfeedback": fig_authority_feedback,
            "adaptiveauth": fig_adaptive_verification,
            "entropyprobe": fig_entropy_probe,
