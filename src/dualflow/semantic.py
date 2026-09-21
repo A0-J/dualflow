@@ -22,9 +22,12 @@ import math
 import random
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from typing import Iterable, Sequence
+from typing import TYPE_CHECKING, Iterable, Protocol, Sequence
 
 from .capability import Privilege, scope_leq
+
+if TYPE_CHECKING:  # 순환 참조 방지 — 타입 힌트용으로만, 런타임에는 import 안 됨.
+    from .framework import DelegationTask
 
 DIMENSIONS = ("action", "resource", "scope", "condition")
 
@@ -331,3 +334,262 @@ class Principal:
 
         self.transcript.append((summary, f"아니요, 정확히는: {truth}"))
         return AuthorityFeedback(FeedbackDecision.CORRECT, truth)
+
+
+# --------------------------------------------------------------------------
+# SEMANTIC VERIFIER AGENT — Semantic Flow를 독립적으로 호출 가능한 단위로 묶는다.
+#
+# B의 제안이 실제로 A의 의도와 맞는지 판단하는 게 이 클래스의 유일한 책임이다 —
+# 그 제안이 허용된 권한 범위 안인지는 Authority Flow 가 별도로 본다(framework.py
+# 의 Joint Verification 에서 둘을 합친다). 아래 알고리즘(Fast/Slow/AND/Adaptive)
+# 자체는 framework.DelegationVerifier 에서 그대로 옮겨온 것으로, 동작에 변화가
+# 없다 — 옮긴 목적은 "이 판단이 어디서 어떻게 내려지는지" 를 하나의 클래스 밖에서
+# 도 재사용/단독 테스트 가능하게 만드는 것뿐이다.
+# --------------------------------------------------------------------------
+class _JudgeProtocol(Protocol):
+    """`llm.LLMJudge` 와 동일한 형태 — 여기서 `llm.py` 를 import하면 순환
+    참조가 된다(llm.py 가 이미 semantic.py 를 import한다). `authority_feedback.
+    AuthorityPrincipal` 이 `semantic.Principal` 을 구체 타입으로 참조하지 않고
+    프로토콜만 보는 것과 같은 이유로, 여기서도 형태만 복제한다."""
+    calls: int
+
+    def judge(self, spec: str, belief: "Belief",
+              transcript: Sequence[tuple[str, str]]) -> "Interpretation": ...
+
+
+@dataclass
+class SemanticVerdict:
+    """Semantic Flow 한 번의 결과. Fast/Slow/AND 가 공통으로 돌려준다."""
+    interpretation: Interpretation
+    confirmed: bool
+    route: str
+    h_initial: float = 0.0
+    h_final: float = 0.0
+    n_questions: int = 0
+    n_llm: int = 0
+    n_reviews: int = 0
+
+    @property
+    def status(self) -> str:
+        """AuthorityVerdict.status(allow/deny/unknown) 와의 서술적 대구 —
+        저장된 새 상태가 아니라 confirmed 의 별칭이다."""
+        return "resolved" if self.confirmed else "unresolved"
+
+
+class SemanticVerifierAgent:
+    """Semantic Flow, 독립 단위. "B 의 제안이 실제로 무엇을 의미하는가" 만
+    판단한다 — 그게 허용되는지는 모른다(Authority Flow 의 책임).
+
+    Fast(entropy+역질의) / Slow(A 검토) / AND(둘 다) / Adaptive(평소엔 Fast,
+    경험과 모순되거나 미확정일 때만 Slow 에스컬레이션) 네 전략을 지원한다.
+    알고리즘은 추출 이전과 동일하다 — DelegationVerifier 가 갖고 있던
+    _fast/_slow/_adaptive/_consistent/_experience_conflict 를 그대로 옮겼다.
+    """
+
+    def __init__(self, *, mode: str = "fast", theta: float = 0.5, k: int = 2,
+                 sigma: float = 0.8, lam: float = 0.1,
+                 experience_weight: float = 1.0, always_llm: bool = False,
+                 use_experience: bool = True, use_llm: bool = True,
+                 use_consistency_check: bool = False,
+                 consistency_sigma: float | None = None,
+                 adaptive_sigma: float | None = None,
+                 experience: ExperienceStore | None = None,
+                 judge: _JudgeProtocol | None = None):
+        self.mode = mode
+        self.theta, self.k, self.sigma, self.lam = theta, k, sigma, lam
+        self.experience_weight = experience_weight
+        self.always_llm = always_llm
+        self.use_experience, self.use_llm = use_experience, use_llm
+        self.use_consistency_check = use_consistency_check
+        self.consistency_sigma = consistency_sigma
+        self.adaptive_sigma = adaptive_sigma
+        self.experience = experience if experience is not None else ExperienceStore()
+        self.judge = judge
+
+    def verify(self, task: DelegationTask, principal: "Principal",
+               log: list[str]) -> SemanticVerdict:
+        """mode 에 따라 분기한다 — fast | slow | and | adaptive."""
+        if self.mode == "fast":
+            return self._fast(task, principal, log)
+        if self.mode == "slow":
+            return self._slow(task, principal, log)
+        if self.mode == "adaptive":
+            return self._adaptive(task, principal, log)
+
+        # AND 결합 — Fast 로 해석을 좁힌 뒤 그 결과를 A 에게 확인받는다.
+        fast = self._fast(task, principal, log)
+        slow = self._slow(task, principal, log, proposed=fast.interpretation, strict=True)
+        agreed = fast.confirmed and slow.confirmed
+        log.append(f"[and] Fast={'확정' if fast.confirmed else '미확정'} · "
+                   f"Slow={'승인' if slow.confirmed else '불일치'} → "
+                   f"{'통과' if agreed else '차단'}")
+        return SemanticVerdict(
+            fast.interpretation, agreed,
+            f"and({fast.route}+{slow.route.split(':')[-1]})",
+            fast.h_initial, fast.h_final,
+            fast.n_questions, fast.n_llm, slow.n_reviews)
+
+    # ---- SEMANTIC FLOW (Fast) — Experience → Entropy → Clarification → LLM
+    def _fast(self, task: DelegationTask, principal: "Principal", log: list[str]):
+        prior = self.experience.prior(task.key) if self.use_experience else {}
+        belief = build_belief(task.candidates, prior, self.experience_weight)
+        h0 = entropy(belief)
+        log.append(f"[fast] |Ω|={len(belief)}  H={h0:.3f} bits "
+                   f"(정규화 {normalized_entropy(belief):.2f})")
+
+        # 1) Experience Score 게이트 — 충분하면 자율 판단
+        if self.use_experience and not self.always_llm:
+            s = self.experience.score(task.key)
+            if s >= self.sigma:
+                best = self.experience.best(task.key)
+                if best is not None:
+                    log.append(f"[fast] Experience Score={s:.2f} ≥ σ={self.sigma} "
+                               f"→ 자율 판단: {best}")
+                    return SemanticVerdict(best, True, "experience", h0, 0.0)
+
+            elif s > 0:
+                log.append(f"[fast] Experience Score={s:.2f} < σ={self.sigma} → 엔트로피 경로")
+
+        # SAGE-Agent 식 프로파일: 게이팅 없이 항상 LLM
+        if self.always_llm:
+            interp = self.judge.judge(task.spec, belief, principal.transcript)
+            log.append(f"[fast] (always-LLM) → {interp}")
+            return SemanticVerdict(interp, True, "llm", h0, entropy(belief), n_llm=1)
+
+        # 2) Entropy 게이트 + 3) Clarification 루프
+        asked: Counter[str] = Counter()
+        n_q = 0
+        h = h0
+        for _ in range(self.k):
+            if h <= self.theta:
+                break
+            q, scored = select_question(belief, asked, self.lam)
+            for cand, ig, sc in scored[:3]:
+                log.append(f"         IG={ig:+.3f} score={sc:+.3f} | {cand.dimension}")
+            if q is None:
+                log.append("[fast] 정보이득이 남은 질문이 없음 → 역질의 중단")
+                break
+            n_q += 1
+            asked[q.dimension] += 1
+            ans = principal.answer(q)
+            belief = apply_answer(belief, ans)
+            h = entropy(belief)
+            log.append(f"[fast] 역질의 {n_q}회차 ({q.dimension}) → "
+                       f"{'무응답' if ans.value is None else ans.value}, H={h:.3f}")
+
+        if h <= self.theta:
+            interp = top(belief)
+            route = "clarify" if n_q else "rule"
+            log.append(f"[fast] H={h:.3f} ≤ θ={self.theta} → 확정: {interp}  (LLM 미호출)")
+            ok = self._consistent(task, interp, log)
+            return SemanticVerdict(interp, ok, route if ok else route + ":inconsistent",
+                                   h0, h, n_q)
+
+        # 4) LLM fallback
+        if not self.use_llm:
+            log.append(f"[fast] H={h:.3f} > θ 이고 LLM 비활성 → 의미 판단 실패")
+            return SemanticVerdict(top(belief), False, "unresolved", h0, h, n_q)
+        interp = self.judge.judge(task.spec, belief, principal.transcript)
+        log.append(f"[fast] k={self.k} 소진, H={h:.3f} > θ → LLM 호출 → {interp}")
+        ok = self._consistent(task, interp, log)
+        return SemanticVerdict(interp, ok, "llm" if ok else "llm:inconsistent",
+                               h0, h, n_q, n_llm=1)
+
+    def _consistent(self, task, interp, log) -> bool:
+        """경험과 정면으로 모순되는 해석은 Fast 가 확정하지 않는다 (opt-in, Fast 전용).
+
+        H 만으로는 후보 집합이 조작됐는지 알 수 없다. 하지만 같은 유형의 위임이
+        반복해서 X 로 확정돼 왔는데 갑자기 Y 를 확신한다면, 그 불일치 자체가
+        신호다. ExperienceStore 에 이미 필요한 통계가 들어 있다.
+        """
+        if not self.use_consistency_check:
+            return True
+        return self._experience_conflict(task, interp, log, self.consistency_sigma,
+                                          tag="fast") is None
+
+    def _experience_conflict(self, task, interp, log, thr: float | None = None,
+                             tag: str = "adaptive") -> str | None:
+        """경험과 모순되면 그 사유를, 아니면 None 을 돌려준다.
+
+        `_consistent` (Fast 의 opt-in 게이트) 와 `_adaptive` (Slow 에스컬레이션
+        트리거) 가 공유하는 판정 로직이다. 임계치를 지정하지 않으면 self.sigma.
+        """
+        thr = self.sigma if thr is None else thr
+        s = self.experience.score(task.key)
+        best_ = self.experience.best(task.key)
+        if best_ is None or s < thr or best_ == interp:
+            return None
+        reason = (f"경험 불일치 — 누적 {self.experience.n(task.key)}회는 "
+                  f"{best_} 였는데 {interp} 를 확신함 (Score={s:.2f})")
+        log.append(f"[{tag}] {reason}")
+        return reason
+
+    # ---- SEMANTIC FLOW (Slow) — 해석 전체를 A 에게 제시하고 승인받기 ------
+    def _slow(self, task: DelegationTask, principal: "Principal", log: list[str],
+              proposed: Interpretation | None = None, strict: bool = False):
+        """B 가 정리한 해석을 A 가 검토한다.
+
+        strict=True (AND 결합용) 이면 A 의 교정은 '불일치' 로 처리해 확정하지 않는다.
+        오탐을 0 으로 유지하는 대신 미탐을 감내하는 보수적 결합이다.
+        """
+        prior = self.experience.prior(task.key) if self.use_experience else {}
+        belief = build_belief(task.candidates, prior, self.experience_weight)
+        h0 = entropy(belief)
+        if proposed is None:
+            proposed = top(belief)
+        log.append(f"[slow] A 에게 해석 제시: {proposed}")
+
+        review = principal.review(proposed)
+        if review.approved:
+            log.append("[slow] A 승인")
+            return SemanticVerdict(proposed, True, "slow:approve", h0, h0, n_reviews=1)
+        if review.status == "correct":
+            if strict:
+                log.append(f"[slow] A 교정 요구({review.interpretation}) → AND 결합에서는 불일치 처리")
+                return SemanticVerdict(proposed, False, "slow:correct", h0, h0, n_reviews=1)
+            log.append(f"[slow] A 교정: {review.interpretation}")
+            return SemanticVerdict(review.interpretation, True, "slow:correct",
+                                   h0, h0, n_reviews=1)
+        log.append("[slow] A 도 확정하지 못함 → 의미 판단 실패")
+        return SemanticVerdict(proposed, False, "slow:unsure", h0, h0, n_reviews=1)
+
+    # ---- SEMANTIC FLOW (Adaptive) — 평소엔 Fast 만, 필요할 때만 Slow ----------
+    def _adaptive(self, task: DelegationTask, principal: "Principal", log: list[str]):
+        """README §7-1 이 다음 단계로 지목한 안 — Slow 를 매번이 아니라 선별적으로.
+
+        AND 는 안전하지만 모든 위임에서 A 를 호출한다(검토율 1.00). Fast 단독은
+        저렴하지만 belief 조작에 44.4% 가 뚫린다. 둘 사이의 신호로 쓸 수 있는 것이
+        '경험과의 불일치' 다 — H 는 후보 집합만 오염시키면 위조되지만, 누적 이력은
+        공격자가 손댈 수 없다(§실험③).
+
+        트리거 조건 (둘 중 하나면 Slow 에스컬레이션):
+          1. Fast 가 아예 확정하지 못함 (역질의도 LLM 도 답을 못 냄)
+          2. Fast 의 확정 결과가 누적 경험과 정면으로 모순됨 — use_consistency_check
+             설정과 무관하게 여기서는 항상 검사한다(이게 adaptive 의 핵심 판단 기준이므로).
+
+        그 외(경험 자체로 판단했거나, 역질의/규칙으로 확정됐고 경험과 일치)에는
+        Slow 를 생략한다 — 정상 운영에서는 review_rate 가 0 에 가까워야 한다.
+        """
+        fast = self._fast(task, principal, log)
+
+        conflict = None
+        if fast.confirmed:
+            conflict = self._experience_conflict(task, fast.interpretation, log,
+                                                  self.adaptive_sigma)
+        escalate = (not fast.confirmed) or (conflict is not None)
+
+        if not escalate:
+            log.append(f"[adaptive] Fast 확정({fast.route}), 경험과 일치 → Slow 생략")
+            return fast
+
+        why = conflict or f"Fast 미확정({fast.route})"
+        log.append(f"[adaptive] {why} → Slow 에스컬레이션")
+        slow = self._slow(task, principal, log, proposed=fast.interpretation, strict=True)
+        agreed = slow.confirmed
+        log.append(f"[adaptive] Slow={'승인' if agreed else '불일치'} → "
+                   f"{'통과' if agreed else '차단'}")
+        return SemanticVerdict(
+            fast.interpretation, agreed,
+            f"adaptive({fast.route}+{slow.route.split(':')[-1]})",
+            fast.h_initial, fast.h_final,
+            fast.n_questions, fast.n_llm, slow.n_reviews)

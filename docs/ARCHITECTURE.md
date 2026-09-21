@@ -46,7 +46,7 @@ Optimization Layer ── principal 호출 비용만 줄임, 안전성 자체는
 
 위임 대상 권한은 4-튜플 `(action, resource, scope, condition)`으로 표현되는 `Privilege`다([capability.py:56-88](../src/dualflow/capability.py#L56-L88)). `condition`이 많을수록 더 약한(좁은) 권한이며, `scope`는 경로 접두사(`/reports/`)나 도메인 접미사(`*.corp.com`) 두 형태를 지원하는 `scope_leq()`로 순서관계를 판단한다([capability.py:28-40](../src/dualflow/capability.py#L28-L40)).
 
-`Budget`은 downward-closed privilege 집합을 극대 원소(generators)만으로 표현한 정규형이다([capability.py:104-135](../src/dualflow/capability.py#L104-L135)). 빈 예산 `TOP = Budget.of()`가 fail-closed 기본값이다([capability.py:138](../src/dualflow/capability.py#L138)) — 아무것도 위임하지 않으면 아무것도 못 한다.
+`Budget`은 downward-closed privilege 집합을 극대 원소(generators)만으로 표현한 정규형이다([capability.py:104-135](../src/dualflow/capability.py#L104-L135)). `generators`의 기본값은 빈 집합이라 `Budget()`이 곧 fail-closed 기본값이다 — 아무것도 위임하지 않으면 아무것도 못 한다.
 
 위임 체인은 `Agent(name, budget)`들의 연쇄이고, 한 홉의 위임은 `delegate(principal, spec_ceiling)`가 `principal.meet(spec_ceiling)`으로 계산한다 — 명세가 아무리 넓은 권한을 요구해도 결과는 `principal`을 넘지 못한다([capability.py:150-158](../src/dualflow/capability.py#L150-L158)). `delegation_chain(principal, ceilings)`는 다홉 위임의 각 단계별 유효 예산을 리스트로 반환한다([capability.py:161-166](../src/dualflow/capability.py#L161-L166)).
 
