@@ -23,10 +23,11 @@ fig1(pilot)/fig2(attack)는 v0(`dualflow.bench`) 전용 그림이라 이 스크�
 남아 있다(A.1/A.3 = pilot/attack, A.5/A.7/A.8 = experience/careless/consistency).
 
 fig3/fig7/fig8은 여전히 `dualflow.bench`의 task fixture(`build_tasks`,
-`scope_negotiation_tasks`, `scope_negotiation_sequence` 등)를 쓴다 — v0
-모듈이 아직 살아 있는 이유는 이 파일이 아니라 `dualflow.bench_single_env_v1`
-자체가 `dualflow.bench.adversarial_tasks`에 의존하기 때문이다. `bench.py`
-정리는 v1 구조 정리·test cleanup이 끝난 뒤 별도 단계에서 한다.
+`scope_negotiation_tasks`, `scope_negotiation_sequence` 등)를 쓴다 — 이
+셋은 tests/도 아직 `dualflow.bench`를 직접 참조하고 있어서(test cleanup
+단계로 미뤄둠) 같이 정리하지 않았다. `benchmark.py`(canonical v1)는 이제
+`dualflow.bench`에 의존하지 않는다 — `adversarial_tasks`를 자체적으로
+정의한다.
 
 라벨은 영문이다. matplotlib 기본 폰트에 한글 글리프가 없어 한글로 쓰면 네모로
 깨지기 때문이고, 논문 그림도 어차피 영문이라 그대로 쓸 수 있다.
@@ -46,10 +47,14 @@ from dualflow.bench import (
     adversarial_tasks, build_judge, build_tasks, scope_negotiation_sequence,
     scope_negotiation_tasks,
 )
-from dualflow.bench_single_env_v1 import (
-    adversarial_single_env_sequence, build_single_env_sequence,
-)
 from dualflow.framework import Config, evaluate, run_sequence
+
+# benchmark.py is this file's sibling, not part of the installed dualflow
+# package — Python puts a script's own directory on sys.path, so this works
+# when run directly (`python experiments/plots.py`) or via the compatibility
+# shim (runpy.run_path also runs from this file's location).
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import benchmark
 from dualflow.llm import ScriptedJudge
 
 PALETTE = {"unsafe": "#c0392b", "benign": "#27ae60", "cost": "#2980b9",
@@ -340,8 +345,8 @@ def fig_v1_phase2(outdir, dpi, **_):
     막대그래프만으로 끝내지 않는다(EXPERIMENTS.md "Mechanism attribution"과
     같은 내용을 그림으로 옮긴 것).
     """
-    tasks = build_single_env_sequence()
-    attacked = adversarial_single_env_sequence()
+    tasks = benchmark.TASKS
+    attacked = benchmark.adversarial_tasks(tasks)
     judge = ScriptedJudge({t.key: t.truth for t in tasks})
 
     fig = plt.figure(figsize=(13, 8.5))

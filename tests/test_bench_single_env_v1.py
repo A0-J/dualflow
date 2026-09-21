@@ -1,4 +1,4 @@
-"""단일환경 v1(bench_single_env_v1) 회귀 테스트.
+"""canonical benchmark(experiments/benchmark.py) 회귀 테스트.
 
 v0(9-task, bench.py)와 같은 엔진(framework.DelegationVerifier)을 그대로
 재사용하는지, 그리고 8개 task 각각이 설계 의도대로 판정되는지를 고정한다.
@@ -6,7 +6,7 @@ v0(9-task, bench.py)와 같은 엔진(framework.DelegationVerifier)을 그대로
 Phase 2(2026-09-21)로 misread/scope-exceeded/condition 세 task를
 entropy_probe로 검증된 M1/M2/M3 spec으로 교체했다 — candidates가 이제
 `[(truth, 1.0)]`(Correct Proposal, H=0)로 고정되고, adversarial proposal은
-`attack` field + `adversarial_single_env_sequence()`로 별도 테스트한다.
+`attack` field + `adversarial_tasks(TASKS)`로 별도 테스트한다.
 이 교체로 "정상 실행에서의 8개 판정"이 전부 ideal과 일치하게 됐다(예전엔
 misread_risk가 90/10 혼합 후보 때문에 의도적으로 불일치했음) — Phase 2는
 그 불일치를 "정상 vs adversarial을 분리 테스트"로 대체한 것이다.
@@ -14,9 +14,7 @@ misread_risk가 90/10 혼합 후보 때문에 의도적으로 불일치했음) �
 
 from __future__ import annotations
 
-from dualflow.bench_single_env_v1 import (
-    adversarial_single_env_sequence, build_single_env_sequence,
-)
+from experiments.benchmark import TASKS, adversarial_tasks
 from dualflow.capability import check_authority
 from dualflow.framework import Config, DelegationVerifier, evaluate, run_sequence
 from dualflow.llm import ScriptedJudge
@@ -30,7 +28,7 @@ class TestEnvironmentIntegrity:
     """8개 task의 truth/authority가 설계 의도(카테고리)와 일치하는지."""
 
     def test_eight_tasks_no_laundering(self):
-        tasks = build_single_env_sequence()
+        tasks = TASKS
         assert len(tasks) == 8
         assert {t.category for t in tasks} == {
             "clear", "ambiguous", "persistent", "misread",
@@ -44,7 +42,7 @@ class TestEnvironmentIntegrity:
         authority를 통과한다(예: condition의 truth는 reviewed를 포함).
         adversarial proposal(attack)이 각자의 실패 종류로 걸리는지는
         test_attack_variants_are_caught_by_authority_or_joint에서 본다."""
-        tasks = {t.name: t for t in build_single_env_sequence()}
+        tasks = {t.name: t for t in TASKS}
 
         def kind(name):
             t = tasks[name]
@@ -64,7 +62,7 @@ class TestEnvironmentIntegrity:
         여기서는 no_grant/scope_exceeded/condition_missing 세 개만 authority
         레벨로 직접 확인한다)."""
         # adversarial_tasks()는 name 뒤에 "@attack"을 붙인다.
-        attacked = {t.name: t for t in adversarial_single_env_sequence()}
+        attacked = {t.name: t for t in adversarial_tasks(TASKS)}
 
         def kind(name):
             t = attacked[name + "@attack"]
@@ -74,7 +72,7 @@ class TestEnvironmentIntegrity:
         assert kind("v1_condition_missing") == "condition_missing"  # reviewed 누락
         # misread 의 attack(export /2026-08/)은 authority 상 통과해야 한다 —
         # export 조건({"reviewed"})을 2026-09/ 로만 좁혀뒀기 때문에(위
-        # PRINCIPAL_V1 코멘트 참고). 이 task 의 취지가 "Authority는 통과하지만
+        # benchmark.py의 PRINCIPAL 코멘트 참고). 이 task 의 취지가 "Authority는 통과하지만
         # Semantic/Joint 만 잡아야 하는 경우"이므로, 여기서 authority-level로
         # 걸리면 그 취지 자체가 깨진다.
         assert kind("v1_misread_risk") is None
@@ -86,7 +84,7 @@ class TestEnvironmentIntegrity:
         from dualflow.capability import check_authority
         from dualflow.semantic import Interpretation as I
 
-        tasks = {t.name: t for t in build_single_env_sequence()}
+        tasks = {t.name: t for t in TASKS}
         eb = tasks["v1_ambiguous_clarifiable"].effective_budget()
         finance_read = I("read", "file", "/finance/", label="회계 자료를 열람")
         assert check_authority(eb, finance_read.privilege()).allowed is True
@@ -97,7 +95,7 @@ class TestEnvironmentIntegrity:
         "완전히 정책을 준수하는" 해석으로 바꿔서(condition의 truth는 reviewed
         포함) 정상 실행돼야 한다. attack variant가 REJECT되는지는
         test_attack_variants_are_caught_by_authority_or_joint에서 본다."""
-        for t in build_single_env_sequence():
+        for t in TASKS:
             expected = "EXECUTE" if t.name not in {
                 "v1_no_grant", "v1_escalation"} else "REJECT"
             assert t.ideal_decision() == expected, t.name
@@ -111,20 +109,20 @@ class TestSequentialRun:
         """Phase 2 이후: candidates가 전부 truth 확신(H=0)이라 8개 전부
         ideal과 일치해야 한다 — misread_risk도 이제 예외가 아니다(예전엔
         90/10 혼합 후보 때문에 의도적으로 불일치했음)."""
-        tasks = build_single_env_sequence()
+        tasks = TASKS
         rounds = run_sequence(Config(mode="fast"), tasks, judge=_judge(tasks))
         mismatches = [(t.name, t.ideal_decision(), r.decision)
                       for t, r in zip(tasks, rounds) if r.decision != t.ideal_decision()]
         assert mismatches == []
 
     def test_misread_correct_proposal_executes(self):
-        tasks = build_single_env_sequence()
+        tasks = TASKS
         rounds = run_sequence(Config(mode="fast"), tasks, judge=_judge(tasks))
         misread = next(r for t, r in zip(tasks, rounds) if t.name == "v1_misread_risk")
         assert misread.decision == "EXECUTE"
 
     def test_scope_exceeded_correct_proposal_executes(self):
-        tasks = build_single_env_sequence()
+        tasks = TASKS
         rounds = run_sequence(Config(mode="fast"), tasks, judge=_judge(tasks))
         scoped = next((t, r) for t, r in zip(tasks, rounds) if t.name == "v1_scope_exceeded")
         task, r = scoped
@@ -143,9 +141,9 @@ class TestAdversarialSingleEnvSequence:
         Authority Feedback이 truth로 안전하게 복구해 EXECUTE한다(이게 버그가
         아니라 §Authority Feedback Loop의 설계 그대로다 — 실행 결과로 확인).
         셋 다 "unsafe"(=attack 그대로 실행)는 아니라는 게 핵심이다."""
-        tasks = adversarial_single_env_sequence()
+        tasks = adversarial_tasks(TASKS)
         assert len(tasks) == 3  # attack 이 있는 task만(misread/scope-exceeded/condition)
-        judge = ScriptedJudge({t.key: t.truth for t in build_single_env_sequence()})
+        judge = ScriptedJudge({t.key: t.truth for t in TASKS})
         rounds = run_sequence(Config(mode="fast"), tasks, judge=judge)
         by_name = {t.name: r for t, r in zip(tasks, rounds)}
 
@@ -155,7 +153,7 @@ class TestAdversarialSingleEnvSequence:
         scoped = by_name["v1_scope_exceeded@attack"]
         assert scoped.decision == "EXECUTE"
         assert scoped.authority_negotiated is True
-        truth = next(t for t in build_single_env_sequence()
+        truth = next(t for t in TASKS
                     if t.name == "v1_scope_exceeded").truth
         assert scoped.interpretation == truth  # attack(*) 이 아니라 안전한 truth 로 복구됨
 
@@ -163,8 +161,8 @@ class TestAdversarialSingleEnvSequence:
         """Authority를 끄면(semantic만) scope-exceeded/condition attack이
         그대로 통과해야 한다 — RQ1의 "축 하나로는 부족하다"를 attack
         variant에서도 확인."""
-        tasks = adversarial_single_env_sequence()
-        judge = ScriptedJudge({t.key: t.truth for t in build_single_env_sequence()})
+        tasks = adversarial_tasks(TASKS)
+        judge = ScriptedJudge({t.key: t.truth for t in TASKS})
         m = evaluate(Config(name="Semantic only", use_authority=False), tasks, judge=judge)
         assert m["unsafe_rate"] > 0
 
@@ -174,8 +172,8 @@ class TestAdversarialSingleEnvSequence:
         각각 다른 메커니즘이 담당한다: M1=Joint Verification(match 불일치),
         M2=Authority Feedback Loop(협상 후 복구), M3=Authority Flow의
         하드 리젝트(condition_missing, 비협상)."""
-        tasks = build_single_env_sequence()
-        attacked = adversarial_single_env_sequence()
+        tasks = TASKS
+        attacked = adversarial_tasks(TASKS)
         judge = ScriptedJudge({t.key: t.truth for t in tasks})
         v = DelegationVerifier(Config(), judge=judge)
         by_name = {t.name.removesuffix("@attack"): v.run(t) for t in attacked}
@@ -208,7 +206,7 @@ class TestReplicatesV0Pattern:
     독립적으로 재현되는지."""
 
     def test_single_axis_configs_leave_unsafe_residual(self):
-        tasks = build_single_env_sequence()
+        tasks = TASKS
         judge = _judge(tasks)
         authority_only = evaluate(Config(name="Authority only", use_matching=False,
                                           use_semantic=False), tasks, judge=judge)
@@ -218,6 +216,6 @@ class TestReplicatesV0Pattern:
         assert semantic_only["unsafe_rate"] > 0
 
     def test_full_config_reaches_zero_unsafe(self):
-        tasks = build_single_env_sequence()
+        tasks = TASKS
         full = evaluate(Config(name="Full (v1)"), tasks, judge=_judge(tasks))
         assert full["unsafe_rate"] == 0.0
