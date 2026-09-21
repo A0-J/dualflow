@@ -197,7 +197,7 @@ pip install -e ".[dev]"
 
 pytest -q                 # 테스트 173개
 dualflow-demo              # 실험 11개 전체 (텍스트)
-dualflow-plots             # 그림 8장을 figures/ 에 저장
+dualflow-plots             # 그림 9장을 figures/ 에 저장
 ```
 
 ### 특정 실험만

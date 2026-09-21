@@ -207,7 +207,7 @@ pip install -e ".[dev]"
 
 pytest -q                 # 173 tests
 dualflow-demo              # all 11 experiments, as text
-dualflow-plots             # 8 figures into figures/
+dualflow-plots             # 9 figures into figures/
 ```
 
 ### Selected experiments

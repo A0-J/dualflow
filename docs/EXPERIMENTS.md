@@ -69,6 +69,8 @@ v0의 Full Core(0.0% / 80.0% / 20.0%)와 benign/over-rej가 정확히 일치하�
 
 모델은 설계자가 준비한 후보(`/reports/`, `/finance/`) 중 어느 것도 고르지 않고, 20번 전부 `scope="*"`(전체 파일시스템 읽기)로 확신에 차 있었다. `entropy`만 보는 게이트라면 "H=0 → 확실함 → 자율 실행"으로 판단해 역질의 없이 통과시켰을 것이다. 이 proposal을 `PRINCIPAL_V1`(read는 `/`에서 허용되므로 authority 자체는 통과하지만, write/export/삭제 등 다른 연산과 결합되면 scope가 위임 상한을 넘는 case에서 반드시 `scope_exceeded`로 걸린다)과 대조하면, **Semantic Flow의 entropy gate 혼자서는 통과시켰을 과잉 확신을, Authority Flow가 별도로 잡아야 한다**는 DESIGN_NOTES.md §1의 `H≈0 ⇏ correct delegation` 논지가 시뮬레이션이 아니라 실제 GPT-4o-mini 응답으로 실증됐다. 이는 Fig.1의 콜아웃이 아니라 논문 결과 섹션의 독립 headline으로 인용한다.
 
+![Entropy validation — first real-LLM results](../figures/fig9_entropy_probe.png)
+
 #### 전체 8-case 결과
 
 | spec (가설) | H (bits) | objective referents | 지배적 응답 |
