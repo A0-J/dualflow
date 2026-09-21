@@ -86,6 +86,14 @@ v0의 Full Core(0.0% / 80.0% / 20.0%)와 benign/over-rej가 정확히 일치하�
 
 **objective referent count는 모델 응답과 완전히 무관하게 `SPEC_OBJECTIVE_REFERENTS`(spec 문장에 미리 등록, entropy_probe.py)에서 조회한 값이다.** N/A로 표시된 3개는 "이번에도"/"이 요약"처럼 이전 턴을 전제하는 spec이라, 대화 이력이 없는 단일턴 probe로는 참조 개수 자체가 정의되지 않는다 — 억지로 숫자를 매기지 않았다.
 
+#### Panel B(H vs. objective referent count)는 상관관계 근거가 아니다
+
+Fig.9 Panel B의 "illustrative only" 주석은 그림에만 있고 본문에 없었다 — 여기서 명시한다.
+
+유효한 점은 5개뿐이다(8개 중 3개는 "이번에도"/"이 요약"처럼 대화 맥락을 전제해 단일턴 probe로는 참조 개수 자체가 정의되지 않아 제외). 이 5개도 referent count가 `{1, 1, 1, 2, 5}`로 거의 1에 몰려 있어 값의 범위 자체가 좁다. 더 결정적으로, **referent=1인 세 case만 봐도 H가 0.000(escalation) / 0.469(condition) / 0.971(clear)로 이미 거의 최대 관측폭을 다 쓴다** — "referent가 많을수록 H가 크다"는 방향성이 n=5 안에서조차 뚜렷하지 않다. 이래서 이 패널에 상관계수(r)나 p-value를 계산해 넣지 않았다: n=5로 계산한 어떤 상관계수도 신뢰구간이 0을 포함할 만큼 넓어 무의미하다.
+
+이 실험이 실제로 보여주는 것은 (1) 하네스가 real LLM에서 서로 다른 H 값(0.000~1.766)을 측정해낸다는 것과 (2) 위의 headline finding 뿐이다. "entropy가 objective ambiguity의 타당한 proxy다"라는 주장은 이 n으로 하지 않는다. 그 주장을 하려면 referent count가 1~5 이상 구간에 고르게 분산된 spec을 최소 15~20개 준비하고 각각 N≥20으로 샘플링해, 상관계수의 신뢰구간이 0을 포함하지 않는지 확인해야 한다 — 아직 하지 않은 후속 작업으로 남긴다.
+
 **버그 수정 이력**: 최초 구현은 `objective_referent_count(_dominant_scope(parsed))`로, 모델이 가장 많이 고른 답의 scope에서 거꾸로 참조 개수를 셌다 — 답을 보고 정답 개수를 매기는 순환이었다(파일 인벤토리 pre-registration 원칙이 구현 단계에서 새는 지점이었다). entropy 값 자체(모델 샘플 분포에서 직접 계산, referent count와 무관)는 이 버그와 상관없이 그대로 유효해 재실행 없이 유지했고, referent count 계산만 spec-고정 테이블 조회로 교체했다(API 재호출 없음). 회귀 테스트: `tests/test_entropy_probe.py::TestObjectiveReferentsAreDecoupledFromModelOutput`.
 
 #### 손으로 만든 candidates와 실제 분포의 격차 — 별도 발견으로 기록

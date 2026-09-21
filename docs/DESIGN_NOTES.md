@@ -479,13 +479,14 @@ H → 0
 
 주요 한계:
 
-1. semantic candidate generation이 scripted다.
+1. semantic candidate generation이 scripted다(단, `entropy_probe.py`로 별도의 real-LLM entropy 실측을 시작함 — 8번 참고. 메인 pilot 자체는 여전히 scripted).
 2. Principal response가 simulated다.
 3. 작은 controlled pilot benchmark를 사용한다.
 4. 후보 집합 $\Omega$ 안에 올바른 interpretation이 존재한다고 가정한다.
 5. current authority state와 verified authority history를 trusted state로 본다.
 6. policy상 허용되지만 Principal이 의도하지 않은 in-scope resource selection은 별도 문제다.
 7. $\theta, \sigma, k, \lambda$ 등 주요 threshold는 외부 domain에서 재튜닝이 필요하다.
+8. entropy가 objective ambiguity의 타당한 proxy라는 주장은 아직 못 한다 — 첫 real-LLM 실측(gpt-4o-mini, EXPERIMENTS.md)의 유효 샘플이 n=5(referent count `{1,1,1,2,5}`)뿐이라 상관관계를 계산할 근거가 안 된다. 지금까지 확인한 건 (a) 하네스가 실제로 서로 다른 H를 측정해낸다는 것과 (b) headline finding(entropy=0인데 미승인 스코프로 수렴) 하나뿐이다.
 
 따라서 현재 실험은 **mechanism correctness / safety invariant**를 검증하는 근거이며, 실제 LLM 환경에서의 external validity는 별도 평가가 필요하다.
 
