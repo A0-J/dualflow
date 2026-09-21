@@ -1,9 +1,15 @@
 """
 실험 결과를 그림으로 저장한다.
 
-    dualflow-plots                        # figures/ 에 PNG 10장
+    dualflow-plots                        # figures/ 에 현재(v1) 그림 4장 +
+                                           # figures/legacy/ 에 v0 그림 6장
     dualflow-plots careless --trials 50   # 논문용 — 밴드가 좁아진다
     python -m dualflow.plots --outdir 어디에 --dpi 300
+
+figures/(fig7~10)가 논문 본문이 인용하는 현재 결과다. figures/legacy/
+(fig1~6)는 v0(superseded) 결과 — 삭제하지 않고 "내부 재현 증거/legacy"로
+남긴다(EXPERIMENTS.md Appendix 참고). fig 번호는 만들어진 순서를 그대로
+유지한다 — legacy로 옮겨도 재번호를 매기지 않는다.
 
 라벨은 영문이다. matplotlib 기본 폰트에 한글 글리프가 없어 한글로 쓰면 네모로
 깨지기 때문이고, 논문 그림도 어차피 영문이라 그대로 쓸 수 있다.
@@ -72,7 +78,7 @@ def fig_pilot(outdir, dpi, **_):
     fig, ax = plt.subplots(figsize=(7.5, 4))
     _pilot_panel(ax, build_tasks(), "Normal condition")
     fig.tight_layout()
-    fig.savefig(outdir / "fig1_pilot_normal.png", dpi=dpi)
+    fig.savefig(outdir / "legacy" / "fig1_pilot_normal.png", dpi=dpi)
     plt.close(fig)
 
 
@@ -82,7 +88,7 @@ def fig_attack(outdir, dpi, **_):
     _pilot_panel(axes[0], build_tasks(), "Normal condition")
     _pilot_panel(axes[1], adversarial_tasks(), "Under belief manipulation")
     fig.tight_layout()
-    fig.savefig(outdir / "fig2_attack.png", dpi=dpi)
+    fig.savefig(outdir / "legacy" / "fig2_attack.png", dpi=dpi)
     plt.close(fig)
 
 
@@ -111,7 +117,7 @@ def fig_theta(outdir, dpi, **_):
     ax.legend(lines, [l.get_label() for l in lines], fontsize=8, loc="center right")
     ax.set_title("Safety is flat in θ; only utility and cost move", fontsize=11)
     fig.tight_layout()
-    fig.savefig(outdir / "fig3_theta_sweep.png", dpi=dpi)
+    fig.savefig(outdir / "legacy" / "fig3_theta_sweep.png", dpi=dpi)
     plt.close(fig)
 
 
@@ -146,7 +152,7 @@ def fig_experience(outdir, dpi, **_):
     ax.legend(lines, [l.get_label() for l in lines], fontsize=8, loc="lower left")
     ax.set_title("Accumulated experience removes the clarification loop", fontsize=11)
     fig.tight_layout()
-    fig.savefig(outdir / "fig4_experience.png", dpi=dpi)
+    fig.savefig(outdir / "legacy" / "fig4_experience.png", dpi=dpi)
     plt.close(fig)
 
 
@@ -193,7 +199,7 @@ def fig_careless(outdir, dpi, trials=10, warmup=5, **_):
     fig.suptitle(f"Experiment ③ — when the reviewer is not perfect "
                  f"(mean ± s.e., {trials} trials)", fontsize=12)
     fig.tight_layout()
-    fig.savefig(outdir / "fig5_careless_reviewer.png", dpi=dpi)
+    fig.savefig(outdir / "legacy" / "fig5_careless_reviewer.png", dpi=dpi)
     plt.close(fig)
 
 
@@ -240,7 +246,7 @@ def fig_consistency_sweep(outdir, dpi, trials=10, warmup=5, sweep_c=1.0, **_):
     fig.suptitle(f"consistency_sigma sweep at carelessness={sweep_c:.2f}  "
                 f"(mean ± s.e., {trials} trials)", fontsize=12)
     fig.tight_layout()
-    fig.savefig(outdir / "fig6_consistency_sweep.png", dpi=dpi)
+    fig.savefig(outdir / "legacy" / "fig6_consistency_sweep.png", dpi=dpi)
     plt.close(fig)
 
 
@@ -456,40 +462,93 @@ def _v1_panel(ax, tasks, judge, title):
     ax.grid(axis="y", alpha=0.25)
 
 
+def _flow_panel(ax, title, steps, box_colors):
+    """steps: [(label, color_key), ...] 위에서 아래로 이어지는 박스 흐름도.
+    color_key 는 PALETTE 키 또는 None(중립 회색)."""
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.axis("off")
+    ax.set_title(title, fontsize=9.5, fontweight="bold")
+    n = len(steps)
+    ys = [1 - (i + 0.5) / n for i in range(n)]
+    for (label, color_key), y in zip(steps, ys):
+        color = PALETTE.get(color_key, "#dddddd") if color_key else "#e8e8e8"
+        text_color = "white" if color_key else "#333333"
+        ax.text(0.5, y, label, ha="center", va="center", fontsize=8,
+                color=text_color, wrap=True,
+                bbox=dict(boxstyle="round,pad=0.4", facecolor=color,
+                         edgecolor="none"))
+    for y_from, y_to in zip(ys[:-1], ys[1:]):
+        ax.annotate("", xy=(0.5, y_to + 0.10), xytext=(0.5, y_from - 0.10),
+                    arrowprops=dict(arrowstyle="->", color="#888888", lw=1.2))
+
+
 def fig_v1_phase2(outdir, dpi, **_):
     """Fig.10 — v1 Phase 2: Correct Proposal vs Adversarial Proposal
     (2026-09-21). misread/scope-exceeded/condition의 candidates가 이제
     `[(truth, 1.0)]`(Correct)로 고정돼 있고, `attack` field가 별도
     Adversarial Proposal이다 — 둘을 각각 독립적으로 evaluate() 해서
-    나란히 비교한다. Panel B 아래에는 Mechanism attribution(어느
-    메커니즘이 각 attack을 담당했는지, EXPERIMENTS.md 참고)을 텍스트로
-    함께 표시한다.
+    나란히 비교한다.
+
+    위 두 칸은 막대그래프(unsafe/benign 비교), 아래 세 칸은 M1/M2/M3 각각의
+    Attack → Failure → Detection/Recovery Mechanism 흐름도다 — "Full=0%"라는
+    숫자 하나보다 "어느 메커니즘이 담당했는가"가 더 중요하다는 지적을 반영해
+    막대그래프만으로 끝내지 않는다(EXPERIMENTS.md "Mechanism attribution"과
+    같은 내용을 그림으로 옮긴 것).
     """
     tasks = build_single_env_sequence()
     attacked = adversarial_single_env_sequence()
     judge = ScriptedJudge({t.key: t.truth for t in tasks})
 
-    fig, axes = plt.subplots(1, 2, figsize=(12.5, 4.8))
-    _v1_panel(axes[0], tasks, judge, "Correct Proposal (8 tasks)")
-    _v1_panel(axes[1], attacked, judge, "Adversarial Proposal (M1/M2/M3, 3 tasks)")
+    fig = plt.figure(figsize=(13, 8.5))
+    gs = fig.add_gridspec(2, 3, height_ratios=[1.15, 1], hspace=0.55, wspace=0.35)
 
-    fig.text(
-        0.5, 0.045,
-        "Mechanism attribution (Full):  M1 misread → Joint Verification   |   "
-        "M2 scope-exceeded → Authority Feedback Loop (recovered to truth)",
-        fontsize=8, color="#555555", ha="center")
-    fig.text(
-        0.5, 0.015,
-        "M3 condition-missing → Authority hard-reject   "
-        "(all three: semantic_ok=True — Semantic Flow alone never catches these)",
-        fontsize=8, color="#555555", ha="center")
+    ax_a = fig.add_subplot(gs[0, 0:2])
+    _v1_panel(ax_a, tasks, judge, "Correct Proposal (8 tasks)")
+    ax_b = fig.add_subplot(gs[0, 2])
+    _v1_panel(ax_b, attacked, judge, "Adversarial\n(M1/M2/M3)")
 
-    fig.suptitle("v1 Phase 2 — Correct vs. Adversarial Proposal, and which "
-                "mechanism catches each attack", fontsize=12)
-    fig.tight_layout(rect=(0, 0.10, 1, 1))
+    # 색 규칙: 회색=B의(공격) 제안, 파랑=Authority/Joint의 판정 단계,
+    # 보라=Authority Feedback Loop(M2만), 초록=최종 결과(REJECT든 EXECUTE든
+    # Full 기준으로는 전부 "안전한" 결과라 동일하게 초록 — REJECT를 빨강으로
+    # 칠하면 "안전한 차단"이 "나쁜 결과"처럼 보이는 오해를 부른다).
+    _flow_panel(
+        fig.add_subplot(gs[1, 0]), "M1 — misread\n(export vs summarize)",
+        [("B proposes: export\n(semantic_ok=True)", None),
+         ("Authority: PASS\n(export is granted)", "cost"),
+         ("Joint Verification:\nSim_path=0.67 ✗", "cost"),
+         ("REJECT (safe)", "benign")],
+        None)
+    _flow_panel(
+        fig.add_subplot(gs[1, 1]), "M2 — scope-exceeded\n(* vs *.corp.com)",
+        [("B proposes: send *\n(semantic_ok=True)", None),
+         ("Authority: scope_exceeded\n(negotiable)", "cost"),
+         ("Authority Feedback Loop:\nrestrict → *.corp.com", "and"),
+         ("EXECUTE (= truth, safe)", "benign")],
+        None)
+    _flow_panel(
+        fig.add_subplot(gs[1, 2]), "M3 — condition-missing\n(reviewed absent)",
+        [("B proposes: export,\nno condition (semantic_ok=True)", None),
+         ("Authority: condition_missing\n(non-negotiable)", "cost"),
+         ("Hard reject\n(no feedback attempted)", "cost"),
+         ("REJECT (safe)", "benign")],
+        None)
+
+    fig.text(0.5, 0.965,
+             "v1 Phase 2 — Correct vs. Adversarial Proposal, and which "
+             "mechanism catches each attack", fontsize=13, ha="center")
+    fig.text(0.5, 0.005,
+             "All three attacks: semantic_ok=True — Semantic Flow's own "
+             "entropy gate never objects. Safety comes from the other three "
+             "mechanisms shown below.",
+             fontsize=8, color="#555555", ha="center")
     fig.savefig(outdir / "fig10_v1_phase2.png", dpi=dpi)
     plt.close(fig)
 
+
+#: fig1~6은 v0(superseded) 실험 — figures/legacy/에 저장된다. fig7~10이
+#: 논문 본문이 인용하는 현재(v1) 결과다 — figures/에 그대로 저장.
+LEGACY_FIGURES = {"pilot", "attack", "theta", "experience", "careless", "consistency"}
 
 FIGURES = {"pilot": fig_pilot, "attack": fig_attack, "theta": fig_theta,
            "experience": fig_experience, "careless": fig_careless,
@@ -514,6 +573,7 @@ def main(argv=None) -> int:
 
     outdir = pathlib.Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
+    (outdir / "legacy").mkdir(parents=True, exist_ok=True)
     for key in (args.figures or list(FIGURES)):
         FIGURES[key](outdir, args.dpi, trials=args.trials,
                      warmup=args.warmup)
