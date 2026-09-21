@@ -75,6 +75,8 @@ Validated Request (Phase 1)
 
 Adversarial proposal은 LLM을 다시 호출하지 않는다 — `attack` field에 고정된 값이고, `bench.adversarial_tasks()`(v0가 이미 쓰던 패턴, §6.1)를 그대로 재사용한다. 이렇게 "LLM이 자연발생적으로 얼마나 자주 틀리는가"(Phase 1의 질문)와 "일단 틀린 proposal이 들어왔을 때 메커니즘이 잡는가"(여기, Phase 2의 질문)를 완전히 분리했다.
 
+![v1 Phase 2 — Correct vs. Adversarial Proposal](../figures/fig10_v1_phase2.png)
+
 #### Correct Proposal (8 tasks)
 
 | 설정 | unsafe ↓ | benign ↑ | over-rej ↓ | 실패 task |

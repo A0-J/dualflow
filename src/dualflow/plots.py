@@ -1,7 +1,7 @@
 """
 실험 결과를 그림으로 저장한다.
 
-    dualflow-plots                        # figures/ 에 PNG 9장
+    dualflow-plots                        # figures/ 에 PNG 10장
     dualflow-plots careless --trials 50   # 논문용 — 밴드가 좁아진다
     python -m dualflow.plots --outdir 어디에 --dpi 300
 
@@ -22,10 +22,14 @@ from .bench import (
     adversarial_tasks, build_judge, build_tasks, scope_negotiation_sequence,
     scope_negotiation_tasks,
 )
+from .bench_single_env_v1 import (
+    adversarial_single_env_sequence, build_single_env_sequence,
+)
 from .framework import (
     Config, DelegationVerifier, ExperienceStore, evaluate, run_sequence,
     warmup_then_attack,
 )
+from .llm import ScriptedJudge
 
 PALETTE = {"unsafe": "#c0392b", "benign": "#27ae60", "cost": "#2980b9",
            "slow": "#e67e22", "and": "#8e44ad", "cons": "#16a085"}
@@ -424,12 +428,76 @@ def fig_entropy_probe(outdir, dpi, **_):
     plt.close(fig)
 
 
+def _v1_configs():
+    return [Config(name="Authority\nonly", use_matching=False, use_semantic=False),
+            Config(name="Semantic\nonly", use_authority=False),
+            Config(name="Full\n(v1)")]
+
+
+def _v1_panel(ax, tasks, judge, title):
+    rows = [evaluate(c, tasks, judge=judge) for c in _v1_configs()]
+    x = range(len(rows))
+    w = 0.38
+    ax.bar([i - w / 2 for i in x], [r["unsafe_rate"] * 100 for r in rows], w,
+           label="Unsafe execution", color=PALETTE["unsafe"])
+    ax.bar([i + w / 2 for i in x], [r["benign_completion"] * 100 for r in rows], w,
+           label="Benign completion", color=PALETTE["benign"])
+    for i, r in enumerate(rows):
+        ax.text(i - w / 2, r["unsafe_rate"] * 100 + 2, f"{r['unsafe_rate']*100:.0f}",
+                ha="center", fontsize=8)
+        ax.text(i + w / 2, r["benign_completion"] * 100 + 2, f"{r['benign_completion']*100:.0f}",
+                ha="center", fontsize=8)
+    ax.set_xticks(list(x))
+    ax.set_xticklabels([c.name for c in _v1_configs()], fontsize=8)
+    ax.set_ylabel("%")
+    ax.set_ylim(0, 124)
+    ax.set_title(title, fontsize=10.5)
+    ax.legend(fontsize=8, loc="upper left", framealpha=0.9)
+    ax.grid(axis="y", alpha=0.25)
+
+
+def fig_v1_phase2(outdir, dpi, **_):
+    """Fig.10 — v1 Phase 2: Correct Proposal vs Adversarial Proposal
+    (2026-09-21). misread/scope-exceeded/condition의 candidates가 이제
+    `[(truth, 1.0)]`(Correct)로 고정돼 있고, `attack` field가 별도
+    Adversarial Proposal이다 — 둘을 각각 독립적으로 evaluate() 해서
+    나란히 비교한다. Panel B 아래에는 Mechanism attribution(어느
+    메커니즘이 각 attack을 담당했는지, EXPERIMENTS.md 참고)을 텍스트로
+    함께 표시한다.
+    """
+    tasks = build_single_env_sequence()
+    attacked = adversarial_single_env_sequence()
+    judge = ScriptedJudge({t.key: t.truth for t in tasks})
+
+    fig, axes = plt.subplots(1, 2, figsize=(12.5, 4.8))
+    _v1_panel(axes[0], tasks, judge, "Correct Proposal (8 tasks)")
+    _v1_panel(axes[1], attacked, judge, "Adversarial Proposal (M1/M2/M3, 3 tasks)")
+
+    fig.text(
+        0.5, 0.045,
+        "Mechanism attribution (Full):  M1 misread → Joint Verification   |   "
+        "M2 scope-exceeded → Authority Feedback Loop (recovered to truth)",
+        fontsize=8, color="#555555", ha="center")
+    fig.text(
+        0.5, 0.015,
+        "M3 condition-missing → Authority hard-reject   "
+        "(all three: semantic_ok=True — Semantic Flow alone never catches these)",
+        fontsize=8, color="#555555", ha="center")
+
+    fig.suptitle("v1 Phase 2 — Correct vs. Adversarial Proposal, and which "
+                "mechanism catches each attack", fontsize=12)
+    fig.tight_layout(rect=(0, 0.10, 1, 1))
+    fig.savefig(outdir / "fig10_v1_phase2.png", dpi=dpi)
+    plt.close(fig)
+
+
 FIGURES = {"pilot": fig_pilot, "attack": fig_attack, "theta": fig_theta,
            "experience": fig_experience, "careless": fig_careless,
            "consistency": fig_consistency_sweep,
            "authfeedback": fig_authority_feedback,
            "adaptiveauth": fig_adaptive_verification,
-           "entropyprobe": fig_entropy_probe}
+           "entropyprobe": fig_entropy_probe,
+           "v1phase2": fig_v1_phase2}
 
 
 def main(argv=None) -> int:
