@@ -61,7 +61,8 @@ class Config:
     # 그대로 둔 채 semantic 단계만 다른 알고리즘(예: baseline 재현)으로 대체하고
     # 싶을 때만 쓴다. 설정하면 mode 는 무시된다. framework.py는 이 훅을 호출할 뿐,
     # 어떤 baseline 이 꽂히는지 전혀 모른다 — 예를 들어
-    # sage_baseline.as_semantic_engine()이 이 시그니처로 SAGE-Agent 를 감싼다.
+    # experiments/baselines/sage.py의 as_semantic_engine()이 이 시그니처로
+    # SAGE-Agent 를 감싼다(예 — framework.py는 이 모듈의 존재도 모른다).
     semantic_engine: Callable[["DelegationTask", Principal, list[str]],
                               SemanticVerdict] | None = None
     adaptive_sigma: float | None = None  # adaptive 의 경험 불일치 임계치 (기본은 sigma)

@@ -6,7 +6,7 @@ import pytest
 
 from experiments.bench import adversarial_tasks, build_judge, build_tasks
 from dualflow.framework import Config, DelegationVerifier, evaluate
-from dualflow.sage_baseline import (
+from experiments.baselines.sage import (
     PARAMS, SageAgentBaseline, SageCandidate, UNK, as_semantic_engine, best,
     build_candidates, evpi, pi,
 )
