@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 
-from dualflow.entropy_probe import (
+from experiments.entropy_probe import (
     FILE_INVENTORY, SCENARIO_REDESIGN_CASES, SPEC_OBJECTIVE_REFERENTS,
     ScenarioCase, judge_scenario_validation, make_deterministic_mock,
     objective_referent_count, run_probe, run_probe_suite,
@@ -183,6 +183,6 @@ class TestAnthropicSamplerIsLazy:
     깨지지 않는다."""
 
     def test_factory_does_not_require_anthropic_installed(self):
-        from dualflow.entropy_probe import make_anthropic_sampler
+        from experiments.entropy_probe import make_anthropic_sampler
         sampler = make_anthropic_sampler()
         assert callable(sampler)
