@@ -9,8 +9,10 @@ from __future__ import annotations
 import math
 
 from dualflow.entropy_probe import (
-    FILE_INVENTORY, SPEC_OBJECTIVE_REFERENTS, make_deterministic_mock,
+    FILE_INVENTORY, SCENARIO_REDESIGN_CASES, SPEC_OBJECTIVE_REFERENTS,
+    judge_scenario_validation, make_deterministic_mock,
     objective_referent_count, run_probe, run_probe_suite,
+    run_scenario_validation,
 )
 from dualflow.semantic import Interpretation as I
 
@@ -101,6 +103,54 @@ class TestObjectiveReferentsAreDecoupledFromModelOutput:
         mock = make_deterministic_mock({target: 1.0})
         r = run_probe("등록되지 않은 새 spec", mock, n=5)
         assert r.objective_referent_count is None
+
+
+class TestScenarioValidationPhase1:
+    """M1/M2/M3(misread/scope-exceeded/condition 재설계)의 PASS/FAIL 판정
+    로직 — mock으로 배관만 검증한다. 실제 통과 여부는 real LLM으로만
+    확인 가능(여기선 안 함)."""
+
+    def test_three_redesigned_cases_registered(self):
+        assert len(SCENARIO_REDESIGN_CASES) == 3
+        labels = [c[1] for c in SCENARIO_REDESIGN_CASES]
+        assert any("misread" in l for l in labels)
+        assert any("scope-exceeded" in l for l in labels)
+        assert any("condition" in l for l in labels)
+
+    def test_judge_passes_when_dominant_meets_threshold_and_matches_truth(self):
+        truth = I("summarize", "file", "/reports/2026-08/")
+        mock = make_deterministic_mock({truth: 0.95, I("export", "file", "/reports/2026-08/"): 0.05})
+        r = run_probe("M1 spec", mock, n=20, objective_referents=1)
+        assert judge_scenario_validation(r, truth) is True
+
+    def test_judge_fails_when_dominant_does_not_match_truth(self):
+        """지난번 실측처럼 — dominant가 다른 interpretation으로 수렴하면
+        확률이 높아도(90%+) FAIL이어야 한다. '확신에 찼다'가 '맞다'를
+        보장하지 않는다는 걸 이 판정 로직 자체가 지켜야 한다."""
+        truth = I("summarize", "file", "/reports/2026-08/")
+        wrong = I("export", "file", "/reports/2026-08/")
+        mock = make_deterministic_mock({wrong: 1.0})
+        r = run_probe("M1 spec", mock, n=20)
+        assert judge_scenario_validation(r, truth) is False
+
+    def test_judge_fails_when_distribution_is_too_spread_even_if_truth_is_dominant(self):
+        truth = I("summarize", "file", "/reports/2026-08/")
+        mock = make_deterministic_mock({
+            truth: 0.5,
+            I("export", "file", "/reports/2026-08/"): 0.3,
+            I("read", "file", "/reports/2026-08/"): 0.2,
+        })
+        r = run_probe("M1 spec", mock, n=20)
+        assert judge_scenario_validation(r, truth, threshold=0.90) is False
+
+    def test_run_scenario_validation_reports_all_three_without_hiding_failures(self):
+        # 전부 틀린 답으로 수렴하는 mock — 3개 다 FAIL이어야 하고, 숨기지 않고
+        # 3개 결과가 그대로 나와야 한다.
+        wrong = I("read", "file", "*")
+        mock = make_deterministic_mock({wrong: 1.0})
+        rows = run_scenario_validation(mock, n=10)
+        assert len(rows) == 3
+        assert all(passed is False for _, _, passed in rows)
 
 
 class TestAnthropicSamplerIsLazy:
