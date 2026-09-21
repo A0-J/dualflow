@@ -138,12 +138,6 @@ class Budget:
 # --------------------------------------------------------------------------
 # 위임 체인
 # --------------------------------------------------------------------------
-@dataclass(frozen=True)
-class Agent:
-    name: str
-    budget: Budget
-
-
 def delegate(principal: Budget, spec_ceiling: Budget | None = None) -> Budget:
     """A -> B 위임 1홉. 명세가 제시한 상한선과 위임자의 권한을 교집합한다.
 

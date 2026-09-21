@@ -16,18 +16,18 @@ editable install 한 뒤 실행한다:
 
 fig 번호는 만들어진 순서를 그대로 유지한다 — 폴더를 옮겨도 재번호를 매기지 않는다.
 
-fig1(pilot)/fig2(attack)는 v0(`dualflow.bench`) 전용 그림이라 이 스크립트에서
+fig1(pilot)/fig2(attack)는 v0(`bench.py`) 전용 그림이라 이 스크립트에서
 제거했다. fig4(experience)/fig5(careless reviewer)/fig6(consistency sweep)도
 논문 본문에서 쓰지 않는 diagnostic 그림이라 앞서 제거했다 — 다섯 그림 모두
 수치와 분석 자체는 삭제하지 않고 `docs/EXPERIMENTS.md` Appendix A에 그대로
 남아 있다(A.1/A.3 = pilot/attack, A.5/A.7/A.8 = experience/careless/consistency).
 
-fig3/fig7/fig8은 여전히 `dualflow.bench`의 task fixture(`build_tasks`,
-`scope_negotiation_tasks`, `scope_negotiation_sequence` 등)를 쓴다 — 이
-셋은 tests/도 아직 `dualflow.bench`를 직접 참조하고 있어서(test cleanup
-단계로 미뤄둠) 같이 정리하지 않았다. `benchmark.py`(canonical v1)는 이제
-`dualflow.bench`에 의존하지 않는다 — `adversarial_tasks`를 자체적으로
-정의한다.
+fig3/fig7/fig8은 여전히 `bench.py`(이 파일의 sibling, `experiments/bench.py`)의
+task fixture(`build_tasks`, `scope_negotiation_tasks`,
+`scope_negotiation_sequence` 등)를 쓴다 — `scope_negotiation_*`는 legacy가
+아니라 Experiment 2/3의 현재 canonical 데이터 소스다(bench.py 자체의 모듈
+docstring 참고). `benchmark.py`(canonical v1)는 `bench.py`에 의존하지 않는다
+— `adversarial_tasks`를 자체적으로 정의한다.
 
 라벨은 영문이다. matplotlib 기본 폰트에 한글 글리프가 없어 한글로 쓰면 네모로
 깨지기 때문이고, 논문 그림도 어차피 영문이라 그대로 쓸 수 있다.
@@ -43,17 +43,14 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from dualflow.bench import (
-    adversarial_tasks, build_judge, build_tasks, scope_negotiation_sequence,
-    scope_negotiation_tasks,
-)
 from dualflow.framework import Config, evaluate, run_sequence
 
-# benchmark.py is this file's sibling, not part of the installed dualflow
-# package — Python puts a script's own directory on sys.path, so this works
+# bench.py/benchmark.py are this file's siblings, not part of the installed
+# dualflow package — Python puts a script's own directory on sys.path, so this works
 # when run directly (`python experiments/plots.py`) or via the compatibility
 # shim (runpy.run_path also runs from this file's location).
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import bench
 import benchmark
 from dualflow.llm import ScriptedJudge
 
@@ -80,9 +77,9 @@ def _save_figure(fig, path: pathlib.Path, dpi: int, *, tight: bool = True) -> pa
 
 def fig_theta(outdir, dpi, **_):
     """Fig.3 — θ 스윕. 안전성은 평평하고 유용성만 움직인다."""
-    tasks = build_tasks()
+    tasks = bench.build_tasks()
     thetas = [0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
-    rows = [evaluate(Config(theta=t), tasks, judge=build_judge()) for t in thetas]
+    rows = [evaluate(Config(theta=t), tasks, judge=bench.build_judge()) for t in thetas]
 
     fig, ax = plt.subplots(figsize=(7, 4.2))
     ax.plot(thetas, [r["benign_completion"] * 100 for r in rows], "o-",
@@ -112,9 +109,9 @@ def fig_authority_feedback(outdir, dpi, **_):
     fig1/fig2 와 같은 두 막대(unsafe/benign) 형식을, 정상 조건과 belief 조작
     공격 조건 두 패널로 나란히 그린다.
     """
-    tasks = scope_negotiation_tasks()
-    judge = build_judge(tasks)
-    adv = adversarial_tasks(tasks)
+    tasks = bench.scope_negotiation_tasks()
+    judge = bench.build_judge(tasks)
+    adv = bench.adversarial_tasks(tasks)
     cfgs = [Config(name="Feedback\noff", mode="fast", use_authority_feedback=False),
             Config(name="Feedback\non (proposed)", mode="fast")]
 
@@ -157,8 +154,8 @@ def fig_adaptive_verification(outdir, dpi, **_):
     — agreement_ratio 는 drift 리셋 직후에도 곧장 1.0 이 돼서(단일 값만 남으므로)
     "쌓이다가 끊기는" 모양을 안 보여준다. n 이 그 모양을 보여주는 지표다.
     """
-    tasks = scope_negotiation_sequence()
-    judge = build_judge(tasks)
+    tasks = bench.scope_negotiation_sequence()
+    judge = bench.build_judge(tasks)
     rounds = run_sequence(Config(mode="fast", use_experience=False), tasks, judge)
 
     xs = [r.index for r in rounds]

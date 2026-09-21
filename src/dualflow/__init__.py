@@ -5,7 +5,7 @@ Clarification → LLM) → Joint Verification (E = Authority ∩ Semantic + 매�
 """
 
 from .capability import (
-    ANY, Agent, AuthorityResult, Budget, Privilege, check_authority,
+    ANY, AuthorityResult, Budget, Privilege, check_authority,
     delegate, delegation_chain, scope_leq, scope_meet,
 )
 from .semantic import (
@@ -26,6 +26,5 @@ from .framework import (
     Config, DelegationTask, DelegationVerifier, EXECUTE, REJECT, Verdict,
     evaluate, outcome,
 )
-from .bench import PRINCIPAL, build_judge, build_tasks
 
 __version__ = "0.1.0"

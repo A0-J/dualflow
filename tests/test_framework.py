@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from dualflow.bench import build_judge, build_tasks
+from experiments.bench import build_judge, build_tasks
 from dualflow.framework import (
     Config, DelegationVerifier, EXECUTE, REJECT, evaluate, outcome,
 )
@@ -270,7 +270,7 @@ class TestBeliefManipulation:
 
     @pytest.fixture
     def attacked(self):
-        from dualflow.bench import adversarial_tasks
+        from experiments.bench import adversarial_tasks
         return adversarial_tasks()
 
     def test_attack_forges_maximum_confidence(self, attacked):
@@ -355,7 +355,7 @@ class TestImperfectReviewer:
         assert careless.review(wrong).status == "approve"
 
     def test_slow_degrades_as_the_reviewer_degrades(self, tasks):
-        from dualflow.bench import adversarial_tasks
+        from experiments.bench import adversarial_tasks
         from dualflow.framework import warmup_then_attack
         adv = adversarial_tasks()
         clean = warmup_then_attack(Config(mode="slow", carelessness=0.0),
@@ -365,7 +365,7 @@ class TestImperfectReviewer:
         assert clean["unsafe_rate"] == 0.0 < sloppy["unsafe_rate"]
 
     def test_and_is_never_worse_than_slow_alone(self, tasks):
-        from dualflow.bench import adversarial_tasks
+        from experiments.bench import adversarial_tasks
         from dualflow.framework import warmup_then_attack
         adv = adversarial_tasks()
         for c in (0.25, 0.5, 1.0):
@@ -377,7 +377,7 @@ class TestImperfectReviewer:
 
     def test_consistency_check_helps_once_the_gate_is_closed(self, tasks):
         """경험 게이트가 닫힌 엄격한 σ 에서는 일관성 검사가 그 역할을 대신한다."""
-        from dualflow.bench import adversarial_tasks
+        from experiments.bench import adversarial_tasks
         from dualflow.framework import warmup_then_attack
         adv = adversarial_tasks()
         plain = warmup_then_attack(Config(mode="and", carelessness=1.0, sigma=0.95),
@@ -390,7 +390,7 @@ class TestImperfectReviewer:
 
     def test_experience_is_what_separates_them_not_entropy(self, tasks):
         """공격은 H 를 0 으로 위조할 수 있지만 누적 이력은 위조할 수 없다."""
-        from dualflow.bench import adversarial_tasks
+        from experiments.bench import adversarial_tasks
         from dualflow.framework import warmup_then_attack
         adv = adversarial_tasks()
         no_history = warmup_then_attack(Config(mode="and", carelessness=1.0),
@@ -403,7 +403,7 @@ class TestImperfectReviewer:
 
     def test_variance_is_reported_and_shrinks_with_trials(self, tasks):
         """fig5 는 확률적이므로 시행 간 표준오차를 같이 돌려준다."""
-        from dualflow.bench import adversarial_tasks
+        from experiments.bench import adversarial_tasks
         from dualflow.framework import warmup_then_attack
         adv = adversarial_tasks()
         few = warmup_then_attack(Config(mode="slow", carelessness=0.5),
@@ -431,7 +431,7 @@ class TestAdaptive:
         이건 한계이지 버그가 아니다 — README 의 '이력이 없는 위임 유형에는
         무력하다' 캐비앗과 같은 맥락이다.
         """
-        from dualflow.bench import adversarial_tasks
+        from experiments.bench import adversarial_tasks
         adv = adversarial_tasks()
         fast = evaluate(Config(mode="fast"), adv, judge=build_judge())
         adap = evaluate(Config(mode="adaptive"), adv, judge=build_judge())
@@ -448,7 +448,7 @@ class TestAdaptive:
         review_rate 0 으로 달성한다(AND 는 항상 1.0). Fast 자신의 experience 게이트가
         이미 오염된 후보를 무시하므로, Adaptive 의 에스컬레이션 자체가 발동할 필요조차 없다.
         """
-        from dualflow.bench import adversarial_tasks
+        from experiments.bench import adversarial_tasks
         from dualflow.framework import warmup_then_attack
         adv = adversarial_tasks()
         and_ = warmup_then_attack(Config(mode="and", sigma=0.8),
@@ -464,7 +464,7 @@ class TestAdaptive:
         물려받는다) 에스컬레이션 자체가 트리거되지 않아 Fast 와 동일하게 뚫린다 —
         AND 가 consistency_sigma 를 sigma 와 별개로 둬야 했던 것과 같은 이유다.
         """
-        from dualflow.bench import adversarial_tasks
+        from experiments.bench import adversarial_tasks
         from dualflow.framework import warmup_then_attack
         adv = adversarial_tasks()
         default_thr = warmup_then_attack(Config(mode="adaptive", sigma=0.95),
@@ -483,7 +483,7 @@ class TestAdaptive:
         떨어진다. '더 안전'이 아니라 '더 싸면서 필요할 때만 Slow 를 실제로 신뢰하는'
         다른 트레이드오프임을 고정해 둔다.
         """
-        from dualflow.bench import adversarial_tasks
+        from experiments.bench import adversarial_tasks
         from dualflow.framework import warmup_then_attack
         adv = adversarial_tasks()
         cfg = dict(sigma=0.95, adaptive_sigma=0.6, carelessness=1.0)
@@ -501,7 +501,7 @@ class TestAdaptive:
 
     def test_deterministic_when_the_reviewer_is_careful(self, tasks):
         """carelessness=0 이면 난수가 개입하지 않아 분산이 0 이어야 한다."""
-        from dualflow.bench import adversarial_tasks
+        from experiments.bench import adversarial_tasks
         from dualflow.framework import warmup_then_attack
         m = warmup_then_attack(Config(mode="and", carelessness=0.0), tasks,
                                adversarial_tasks(), judge=build_judge(), trials=8)

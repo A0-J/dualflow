@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from dualflow.bench import adversarial_tasks, build_judge, build_tasks
+from experiments.bench import adversarial_tasks, build_judge, build_tasks
 from dualflow.framework import Config, DelegationVerifier, evaluate
 from dualflow.sage_baseline import (
     PARAMS, SageAgentBaseline, SageCandidate, UNK, as_semantic_engine, best,
