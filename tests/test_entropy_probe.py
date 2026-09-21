@@ -10,7 +10,7 @@ import math
 
 from dualflow.entropy_probe import (
     FILE_INVENTORY, SCENARIO_REDESIGN_CASES, SPEC_OBJECTIVE_REFERENTS,
-    judge_scenario_validation, make_deterministic_mock,
+    ScenarioCase, judge_scenario_validation, make_deterministic_mock,
     objective_referent_count, run_probe, run_probe_suite,
     run_scenario_validation,
 )
@@ -106,42 +106,66 @@ class TestObjectiveReferentsAreDecoupledFromModelOutput:
 
 
 class TestScenarioValidationPhase1:
-    """M1/M2/M3(misread/scope-exceeded/condition 재설계)의 PASS/FAIL 판정
-    로직 — mock으로 배관만 검증한다. 실제 통과 여부는 real LLM으로만
-    확인 가능(여기선 안 함)."""
+    """M1/M2/M3(misread/scope-exceeded/condition 재설계)의 field-level
+    PASS/FAIL 판정 — mock으로 배관만 검증한다. 실제 통과 여부는 real LLM
+    실측(2026-09-21, gpt-4o-mini)으로 이미 확인됨: M1 PASS(90%),
+    M2 target PASS(100%, condition은 confounder), M3 PASS(100%)."""
 
     def test_three_redesigned_cases_registered(self):
         assert len(SCENARIO_REDESIGN_CASES) == 3
-        labels = [c[1] for c in SCENARIO_REDESIGN_CASES]
+        labels = [c.label for c in SCENARIO_REDESIGN_CASES]
         assert any("misread" in l for l in labels)
         assert any("scope-exceeded" in l for l in labels)
         assert any("condition" in l for l in labels)
 
-    def test_judge_passes_when_dominant_meets_threshold_and_matches_truth(self):
-        truth = I("summarize", "file", "/reports/2026-08/")
-        mock = make_deterministic_mock({truth: 0.95, I("export", "file", "/reports/2026-08/"): 0.05})
-        r = run_probe("M1 spec", mock, n=20, objective_referents=1)
-        assert judge_scenario_validation(r, truth) is True
+    def _case(self, index: int) -> ScenarioCase:
+        return SCENARIO_REDESIGN_CASES[index]
 
-    def test_judge_fails_when_dominant_does_not_match_truth(self):
-        """지난번 실측처럼 — dominant가 다른 interpretation으로 수렴하면
-        확률이 높아도(90%+) FAIL이어야 한다. '확신에 찼다'가 '맞다'를
-        보장하지 않는다는 걸 이 판정 로직 자체가 지켜야 한다."""
-        truth = I("summarize", "file", "/reports/2026-08/")
+    def test_judge_passes_when_target_fields_meet_threshold(self):
+        case = self._case(0)  # M1, target=action/resource/scope
+        mock = make_deterministic_mock({case.truth: 0.95,
+                                        I("export", "file", "/reports/2026-08/"): 0.05})
+        r = run_probe(case.spec, mock, n=20)
+        fr = judge_scenario_validation(case, r)
+        assert fr.passed is True
+        assert fr.target_match_rate >= 0.90
+
+    def test_judge_fails_when_target_dominant_is_wrong(self):
+        """확률이 높아도(90%+) dominant가 truth와 다르면 FAIL — '확신에
+        찼다'가 '맞다'를 보장하지 않는다는 걸 판정 로직 자체가 지켜야 한다."""
+        case = self._case(0)
         wrong = I("export", "file", "/reports/2026-08/")
         mock = make_deterministic_mock({wrong: 1.0})
-        r = run_probe("M1 spec", mock, n=20)
-        assert judge_scenario_validation(r, truth) is False
+        r = run_probe(case.spec, mock, n=20)
+        fr = judge_scenario_validation(case, r)
+        assert fr.passed is False
 
-    def test_judge_fails_when_distribution_is_too_spread_even_if_truth_is_dominant(self):
-        truth = I("summarize", "file", "/reports/2026-08/")
+    def test_judge_fails_when_target_distribution_is_too_spread(self):
+        case = self._case(0)
         mock = make_deterministic_mock({
-            truth: 0.5,
+            case.truth: 0.5,
             I("export", "file", "/reports/2026-08/"): 0.3,
             I("read", "file", "/reports/2026-08/"): 0.2,
         })
-        r = run_probe("M1 spec", mock, n=20)
-        assert judge_scenario_validation(r, truth, threshold=0.90) is False
+        r = run_probe(case.spec, mock, n=20)
+        fr = judge_scenario_validation(case, r, threshold=0.90)
+        assert fr.passed is False
+
+    def test_untargeted_field_confounder_does_not_cause_fail(self):
+        """실제로 관측된 M2 패턴을 그대로 재현: action/resource/scope는
+        20/20 수렴하지만, 검증 대상이 아닌 condition 필드가 85%/15%로
+        갈린다 — target_match_rate는 100%로 PASS해야 하고, exact_match_rate
+        만 85%로 낮게 남아야 한다."""
+        case = self._case(1)  # M2, target=action/resource/scope (condition 제외)
+        with_reviewed = I("send", "email", "*.corp.com", frozenset({"reviewed"}))
+        without = I("send", "email", "*.corp.com")
+        mock = make_deterministic_mock({with_reviewed: 0.85, without: 0.15})
+        r = run_probe(case.spec, mock, n=20)
+        fr = judge_scenario_validation(case, r)
+        assert fr.passed is True                      # target fields 기준 PASS
+        assert fr.target_match_rate == 1.0             # action/resource/scope는 100% 일치
+        assert math.isclose(fr.exact_match_rate, 0.15, abs_tol=1e-9)  # 전체 일치는 낮음
+        assert fr.untargeted_distribution               # condition 분포는 참고용으로 남음
 
     def test_run_scenario_validation_reports_all_three_without_hiding_failures(self):
         # 전부 틀린 답으로 수렴하는 mock — 3개 다 FAIL이어야 하고, 숨기지 않고
@@ -150,7 +174,7 @@ class TestScenarioValidationPhase1:
         mock = make_deterministic_mock({wrong: 1.0})
         rows = run_scenario_validation(mock, n=10)
         assert len(rows) == 3
-        assert all(passed is False for _, _, passed in rows)
+        assert all(fr.passed is False for fr in rows)
 
 
 class TestAnthropicSamplerIsLazy:
