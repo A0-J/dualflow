@@ -7,6 +7,7 @@ repeated/statistical experiments.
     python experiments/agent_smoke.py --role semantic
     python experiments/agent_smoke.py --role authority
     python experiments/agent_smoke.py --role all
+    python experiments/agent_smoke.py --role runtime
 
 Role separation (do not blur these):
     experiments/agent_smoke.py     <- this file. One canned scenario,
@@ -27,11 +28,16 @@ This script makes REAL, BILLED API calls. Requires:
           PowerShell: $env:OPENAI_API_KEY="..."
 
 --role all runs PrincipalAgent -> DelegateAgent -> (SemanticVerifierAgent +
-AuthorityVerifierAgent) in sequence and prints each stage's raw output. It
-does NOT compute a final EXECUTE/REJECT decision — the deterministic
-fusion, and the oracle-free design that uses PrincipalAgent.restate_intent()
-as an independent reference, is B6's job, not this script's. This script
-exists to look at real model output before that logic gets built.
+AuthorityVerifierAgent) in sequence and prints each stage's raw output, but
+deliberately does NOT compute a final EXECUTE/REJECT decision — it exists
+to look at each stage's real output in isolation, independent of any fusion
+rule.
+
+--role runtime instead calls the real B6 oracle-free orchestrator,
+dualflow.agent_runtime.AgentDelegationRuntime.run(), and prints its full
+AgentRuntimeResult including the final EXECUTE/REJECT decision. This
+script never reimplements fusion logic itself — --role runtime is a thin
+wrapper around the actual runtime class, nothing more.
 
 This script is not part of the DualFlow core package — it uses the
 installed package like any other caller would (`pip install -e ".[agent]"`
@@ -43,6 +49,7 @@ from __future__ import annotations
 import os
 import sys
 
+from dualflow.agent_runtime import AgentDelegationRuntime, AgentRuntimeResult
 from dualflow.authority_feedback import AuthorityVerdict, AuthorityVerifierAgent
 from dualflow.capability import Budget, Privilege
 from dualflow.delegate_agent import DelegateAgent, DelegateProposal
@@ -229,9 +236,10 @@ def run_authority(llm_client, proposal: Interpretation = EXAMPLE_SCOPE_EXCEEDED_
 def run_all(llm_client) -> None:
     print("############################################################")
     print("# Full chain: Principal -> Delegate -> Semantic + Authority")
-    print("# Fusion (EXECUTE/REJECT) is NOT computed here — that is B6's")
-    print("# job. This just runs each agent for real and shows their raw,")
-    print("# unfused outputs side by side.")
+    print("# Fusion (EXECUTE/REJECT) is deliberately NOT computed here —")
+    print("# this role exists to look at each stage's raw, unfused output")
+    print("# in isolation. For the actual fused decision, real B6 runtime,")
+    print("# use --role runtime instead.")
     print("############################################################\n")
 
     deleg, intent = run_principal(llm_client)
@@ -269,6 +277,68 @@ def run_all(llm_client) -> None:
     _print_call_stats(all_responses)
 
 
+def run_runtime(llm_client, goal: str = EXAMPLE_GOAL, context: str = EXAMPLE_CONTEXT,
+                budget: Budget = EXAMPLE_BUDGET) -> AgentRuntimeResult:
+    """B6의 실제 oracle-free runtime을 그대로 호출한다 — fusion 로직을 여기서
+    다시 구현하지 않는다. `AgentDelegationRuntime.run()`이 하는 것과 똑같이
+    네 Agent를 실제 API로 순서대로 호출하고, 그 결과(`AgentRuntimeResult`)를
+    그대로 출력만 한다."""
+    print("############################################################")
+    print("# AgentDelegationRuntime.run() — B6 oracle-free runtime, real API")
+    print("# (calls the actual runtime class; fusion is not reimplemented")
+    print("#  here)")
+    print("############################################################\n")
+
+    runtime = AgentDelegationRuntime(
+        principal=PrincipalAgent(llm=llm_client),
+        delegate=DelegateAgent(llm=llm_client),
+        semantic_verifier=SemanticVerifierAgent(llm_client=llm_client),
+        authority_verifier=AuthorityVerifierAgent(llm_client=llm_client),
+    )
+    result = runtime.run(goal=goal, context=context, budget=budget)
+
+    print("Principal delegation:")
+    print(result.delegation.delegation)
+    print()
+
+    print("Principal independent intent:")
+    print(_fmt_interpretation(result.principal_intent.intended_action))
+    print()
+
+    print("Delegate proposal:")
+    print(_fmt_interpretation(result.proposal.interpretation))
+    print()
+
+    print(f"Semantic: {result.semantic_verdict.status} ({result.semantic_verdict.route})")
+    print("Semantic verifier's own independent reading:")
+    print(_fmt_interpretation(result.semantic_verdict.interpretation))
+    print()
+
+    print(f"Authority: {result.authority_verdict.status.upper()} — "
+         f"{result.authority_verdict.reason}")
+    print()
+
+    print("Final interpretation:")
+    print(_fmt_interpretation(result.final_interpretation))
+    print()
+
+    print(f"Principal match: {result.principal_match}")
+    print()
+
+    print(f"FINAL DECISION: {result.decision}")
+    print(f"Reason: {result.reason}")
+    print()
+
+    responses = [result.delegation.response, result.principal_intent.response,
+                result.proposal.response]
+    if result.semantic_verdict.response is not None:
+        responses.append(result.semantic_verdict.response)
+    if result.authority_verdict.response is not None:
+        responses.append(result.authority_verdict.response)
+    _print_call_stats(responses)
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     try:  # Windows 기본 콘솔(cp949 등)의 UnicodeEncodeError 방지
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -280,7 +350,8 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--role", required=True,
-                   choices=["principal", "delegate", "semantic", "authority", "all"])
+                   choices=["principal", "delegate", "semantic", "authority",
+                            "all", "runtime"])
     p.add_argument("--model", default="gpt-4o-mini")
     args = p.parse_args(argv)
 
@@ -294,6 +365,8 @@ def main(argv: list[str] | None = None) -> int:
         run_semantic(llm_client)
     elif args.role == "authority":
         run_authority(llm_client)
+    elif args.role == "runtime":
+        run_runtime(llm_client)
     else:
         run_all(llm_client)
     return 0
