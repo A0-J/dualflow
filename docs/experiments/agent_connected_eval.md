@@ -381,6 +381,15 @@ experience improves semantic understanding. §10's structure-only control
 reconfirms this with a second, independent 500-call diagnostic and pins the
 likely mechanism down further: concentration without correct transfer.
 
+A third lesson was added later, in §15: **prompt/context wording is itself
+an experimental variable**, not incidental scaffolding. A reconstructed
+context sentence that was only semantically equivalent to (not byte-
+identical to) the wording used in earlier real-API runs measurably changed
+the model's behavior (a fully deterministic `no_experience` baseline where
+earlier pilots had shown real variance). Scenario strings that reach the
+model now have to be treated with the same rigor as the independent
+variable being tested, not assembled fresh by each script.
+
 ## 12. Current Interpretation
 
 The current implementation successfully demonstrates:
@@ -425,6 +434,14 @@ meaningful.**
 - ~~D-condition wording confound~~ — resolved in §10: re-run with parallel
   wording still shows D diverging from B/C (P(summarize) 0.50 vs. B/C's
   0.00), so content sensitivity is real, just not correctly directed.
+- **B7d.3 pilot baseline not comparable to earlier baselines** — §15: a
+  context-wording drift (reconstructed vs. literal canonical prose) made
+  this pilot's `no_experience` baseline more deterministic than earlier
+  B7d/B7d.1/B7d.2 baselines. Fixed for future runs (scenario file now holds
+  the literal string, with a regression test and fingerprinting), but the
+  600-call B7d.3 pilot numbers reported in §15 should be read as
+  within-run (`v2` vs. `v1` vs. `no_experience`) evidence only, not as
+  directly comparable to §7/§10's absolute numbers.
 
 ## 14. Current Status
 
@@ -439,12 +456,17 @@ meaningful.**
 | Semantic-transfer diagnostic (B7d.1) | complete |
 | Structure-only control (B7d.2) | complete |
 | Experience representation | **confirmed inadequate — redesign needed** |
-| Experience representation redesign (B7d.3) | not started |
+| Experience representation redesign (B7d.3) | **pilot complete — partial evidence + context-wording confound found (§15)** |
+| Experiment reproducibility fix (canonical wording + fingerprinting) | complete (§15) |
+| B7d.3 canonical-context re-validation (600 calls) | not started |
 | Sequential experience evaluation (B7e) | not started |
 
 The sequential multi-episode experiment (B7e) stays intentionally
-postponed. The next step is B7d.3: redesign the experience representation
-so it presents ambiguity → clarification → confirmed-meaning as a
+postponed, now doubly so: B7d.3's redesign showed a real, consistent, but
+modest positive signal (§15) and still needs a canonical-context re-run
+before it can be trusted at face value. The original plan for B7d.3 was to
+redesign the experience representation so it presents ambiguity →
+clarification → confirmed-meaning as a
 relationship, not a bare action label — conceptually:
 
 ```
@@ -474,3 +496,106 @@ B. old representation, C. redesigned representation):
   instruction.
 
 B7d.3 only counts as progress if both conditions hold simultaneously.
+
+## 15. B7d.3 — Semantic-Memory Representation Redesign
+        (Pilot with Context-Wording Confound)
+
+The two-task, three-condition, N=20 × 5-runs real-API pilot (600 calls;
+`experiments/diagnostics/experience_representation.py`) against
+`render_experience_block_v2` produced:
+
+| Task | Condition | Mean H | P(summarize) | P(export) |
+| --- | --- | --- | --- | --- |
+| Ambiguous | no experience | 0.000 | 0.00 | 1.00 |
+| Ambiguous | v1 | 0.057 | 0.01 | 0.99 |
+| Ambiguous | v2 | 0.663 | 0.19 | 0.81 |
+| Explicit change | no experience | 0.000 | 0.00 | 1.00 |
+| Explicit change | v1 | 0.000 | 0.00 | 1.00 |
+| Explicit change | v2 | 0.000 | 0.00 | 1.00 |
+
+**Reading the result (entropy is secondary, per the §14 success rule):**
+`v2` produced a higher `P(summarize)` than both `no experience` and `v1` in
+**5/5 independent runs** on the ambiguous task (0.19 mean vs. 0.00/0.01) —
+a real, directionally consistent signal that `v2` is not behaving like
+`v1`'s pure-priming failure mode (§8, §10). On the explicit-change task,
+`v2` left `P(export)` at 1.00 in every run, identical to `no experience`
+and `v1` — the redesigned representation never overrode an explicit
+current instruction, in 0/15 rows across the three conditions.
+
+This is **partial evidence, not full success**: `P(summarize)=0.19` is far
+below the illustrative target used when B7d.3 was scoped (`0.85`, always an
+example, never a pass/fail threshold — §14), and `export` remained the
+top-1 candidate in every ambiguous-task run even under `v2`. The result
+does not match any single one of the four anticipated outcomes cleanly —
+it sits between "v2 shows a real but modest improvement" and "v2 is too
+weak to call the redesign solved" — and is reported as such rather than
+forced into one label.
+
+### Discovered confound: context-wording drift
+
+While reading this pilot's raw output, the `no_experience` baseline was
+noticeably *more* deterministic (P(export)=1.00, H=0.000, 5/5 runs) than
+the baselines seen in the earlier B7d/B7d.1/B7d.2 pilots. Tracing this
+down: `experiments/diagnostics/experience_transfer.py`'s
+`build_current_context()` — reused by this pilot's script — reconstructed
+the current-episode context prose from scenario fields via an f-string
+template, and that reconstruction was only semantically equivalent, not
+byte-identical, to the wording actually used in every earlier real-API
+B7a/B7b/B7d experiment (`experiments/agent_smoke.py`'s
+`EXAMPLE_CURRENT_CONTEXT`):
+
+- Earlier, real-API-validated wording:
+  `"The September 2026 report is located at /reports/2026-09/."`
+- Reconstructed wording used (unnoticed) in this pilot:
+  `"The report for the current period is located at /reports/2026-09/."`
+
+**This is not cosmetic** — the real model responded differently to the two
+versions of the sentence, exactly the kind of prompt-wording sensitivity
+this whole diagnostic arc (§7 D-condition wording confound, §10 wording
+symmetrization) already had reason to expect but had not yet controlled
+for at the *environment-context* level. Because all six conditions in this
+pilot shared the same (drifted) wording, the **relative** comparison
+between `no_experience`/`v1`/`v2` above is still internally valid, but the
+**absolute** baseline numbers are not directly comparable to B7d/B7d.1/
+B7d.2's earlier baselines.
+
+### Fix applied (reproducibility only — no representation/threshold/logic changes)
+
+- `experiments/scenarios/external_audit_finance.json` (`scenario_version`
+  bumped to `1.1`) now stores the literal, model-visible
+  `current_episode.context` / `current_episode.delegation` strings
+  directly, byte-identical to `agent_smoke.py`'s `EXAMPLE_CURRENT_CONTEXT`/
+  `EXAMPLE_CURRENT_DELEGATION` — verified by a new regression test
+  (`tests/test_scenario_reproducibility.py`) that imports both and asserts
+  equality, so the two can never silently drift apart again.
+- `build_current_context()` is now a plain passthrough (`return
+  scenario["current_episode"]["context"]`) — it no longer assembles prose
+  from vocabulary/temporal fields. Both diagnostic scripts consume the
+  scenario's exact string as-is.
+- Both diagnostic scripts now print the scenario version and a SHA256
+  fingerprint of the delegation/context strings actually used at the start
+  of every run (`experience_transfer.scenario_fingerprint()`/
+  `text_sha256()`), so a raw results file can later be checked against the
+  exact wording that produced it.
+- Nothing in `src/dualflow/experience_aware_delegate.py`
+  (`render_experience_block_v1`/`_v2`, `ExperienceAwareDelegate`),
+  sampling, entropy, Authority, or clarification logic was touched. This
+  was a scenario/harness reproducibility fix only.
+
+**Third methodological lesson, added to §11's list:** alongside (1) entropy
+≠ semantic alignment, and (2) block presence/format can prime independent
+of content, this pilot adds (3) prompt/context wording is itself an
+experimental variable that must be pinned down and version-controlled —
+"semantically equivalent" rewording is not safe to treat as identical in
+this kind of measurement.
+
+### Next step
+
+Re-run the identical 600-call B7d.3 comparison (2 tasks × 3 conditions ×
+N=20 × 5 runs) against the now-canonical, fingerprinted scenario wording,
+before drawing any final conclusion about `v2`. `render_experience_block_v1`/
+`_v2` and `ExperienceAwareDelegate` remain unchanged going into that re-run.
+A follow-up ablation (`v2`-with-summarize-history vs. `v2`-with-export-
+history, mirroring §10's B/C separation) is planned for after the canonical
+re-run, to separate "v2's format helps" from "v2 genuinely carries the
+confirmed action's content" — not before.

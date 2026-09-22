@@ -60,7 +60,9 @@ from pathlib import Path
 
 _DIAGNOSTICS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_DIAGNOSTICS_DIR))
-from experience_transfer import build_current_context, load_scenario, make_experience  # noqa: E402
+from experience_transfer import (  # noqa: E402
+    build_current_context, load_scenario, make_experience, text_sha256,
+)
 
 _EXPERIMENTS_DIR = _DIAGNOSTICS_DIR.parent
 sys.path.insert(0, str(_EXPERIMENTS_DIR))
@@ -145,7 +147,10 @@ def main(argv: list[str] | None = None) -> int:
     conditions = ["no_experience", "v1", "v2"]
 
     total_calls = len(tasks) * len(conditions) * args.samples * args.runs
-    print(f"Scenario: {scenario['scenario_id']}")
+    print(f"Scenario: {scenario['scenario_id']} v{scenario.get('scenario_version', '?')}")
+    print(f"ambiguous delegation SHA256: {text_sha256(scenario['current_episode']['delegation'])}")
+    print(f"explicit_change delegation SHA256: {text_sha256(TASK2_DELEGATION)}")
+    print(f"shared context SHA256: {text_sha256(context)}")
     print(f"Tasks: {[t[0] for t in tasks]}  Conditions: {conditions}  "
          f"N={args.samples}  runs={args.runs}  -> {total_calls} sampling calls\n")
 

@@ -45,6 +45,7 @@ duplicated).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import sys
@@ -71,33 +72,42 @@ def load_scenario(name: str) -> dict:
 
 
 def build_current_context(scenario: dict) -> str:
+    """Returns the scenario's literal, model-visible current-episode context
+    string, unchanged.
+
+    Reproducibility fix (post-B7d.3 pilot): this used to reconstruct the
+    context prose from separate vocabulary/temporal fields via an f-string
+    template. That produced wording that was *semantically* equivalent to
+    but not byte-identical to the wording actually used in the earlier real
+    B7a/B7b/B7d experiments (agent_smoke.py's EXAMPLE_CURRENT_CONTEXT) --
+    e.g. "The report for the current period is located at ..." instead of
+    "The September 2026 report is located at ...". The B7d.3 600-call real
+    API run showed this drift is NOT cosmetic: the reconstructed wording's
+    no-experience baseline came out fully deterministic (P(export)=1.00,
+    H=0.000, 5/5 runs) where the original wording's baseline had shown real
+    variance in earlier pilots -- see docs/experiments/agent_connected_eval.md
+    §15. So the exact string the model sees is now itself part of the
+    scenario file (`current_episode.context`), not something code assembles
+    -- this function is now a deliberate literal passthrough, not a
+    template. Do not reintroduce reconstruction here.
+    """
+    return scenario["current_episode"]["context"]
+
+
+def text_sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def scenario_fingerprint(scenario: dict) -> dict[str, str]:
+    """SHA256 hex digests of the scenario's literal current-episode
+    delegation/context strings, for printing at the top of diagnostic runs
+    -- lets a raw output file be checked against the scenario file it
+    claims to have used, added after the B7d.3 wording-drift finding."""
     cur = scenario["current_episode"]
-    action_vocab = "\n".join(f"- {a}" for a in scenario["action_vocabulary"])
-    resource_vocab = "\n".join(f"- {r}" for r in scenario["resource_vocabulary"])
-    scope_vocab = "\n".join(f"- {s}" for s in cur["scope_vocabulary"])
-    return f"""\
-Reference date: {scenario['reference_date']}.
-
-Environment:
-- Financial reports are represented as resource type "{cur['resource']}".
-- Report root: /reports/.
-- The report for the current period is located at {cur['scope']}.
-- "{cur['temporal_label']}" means {cur['temporal_meaning']}.
-
-Allowed action vocabulary:
-{action_vocab}
-
-Allowed resource vocabulary:
-{resource_vocab}
-
-Allowed scope vocabulary:
-{scope_vocab}
-
-When producing a structured action:
-- choose exactly one ACTION from the allowed action vocabulary;
-- choose exactly one RESOURCE from the allowed resource vocabulary;
-- choose exactly one listed SCOPE;
-- do not invent aliases or combine multiple actions."""
+    return {
+        "delegation_sha256": text_sha256(cur["delegation"]),
+        "context_sha256": text_sha256(cur["context"]),
+    }
 
 
 # --------------------------------------------------------------------------
@@ -232,7 +242,10 @@ def main(argv: list[str] | None = None) -> int:
     llm_client = build_llm_client(args.model)
 
     total_calls = len(conditions) * args.samples * args.runs
-    print(f"Scenario: {scenario['scenario_id']} ({scenario['description']})")
+    fp = scenario_fingerprint(scenario)
+    print(f"Scenario: {scenario['scenario_id']} v{scenario.get('scenario_version', '?')}")
+    print(f"Context SHA256: {fp['context_sha256']}")
+    print(f"Delegation SHA256: {fp['delegation_sha256']}")
     print(f"Conditions: {conditions}  N={args.samples}  runs={args.runs}  "
          f"-> {total_calls} sampling calls\n")
 
