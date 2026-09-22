@@ -1,5 +1,5 @@
-"""DelegateAgent — Agent B의 propose(). 전부 fake LLMClient로 검증한다:
-네트워크도, OPENAI_API_KEY도 필요 없다.
+"""DelegateAgent — Agent B의 propose()/sample_candidates(). 전부 fake
+LLMClient로 검증한다: 네트워크도, OPENAI_API_KEY도 필요 없다.
 """
 
 from __future__ import annotations
@@ -8,7 +8,7 @@ import inspect
 
 import pytest
 
-from dualflow.delegate_agent import DelegateAgent, DelegateProposal
+from dualflow.delegate_agent import CandidateDistribution, DelegateAgent, DelegateProposal
 from dualflow.llm import LLMResponse
 from dualflow.principal_agent import PrincipalAgent, PrincipalIntent
 from dualflow.semantic import Interpretation
@@ -152,3 +152,168 @@ class TestIndependenceFromPrincipal:
         # goal이나 다른 어떤 hidden 정보도 섞이지 않는다.
         assert shared_fake.calls[1]["input_text"] == \
             f"Delegation: {deleg.delegation}"
+
+
+class TestSampleCandidates:
+    """`sample_candidates()` — B7a. clarification도 experience도 아직 없다
+    — N개의 독립 completion에서 candidate distribution/entropy를 측정하는
+    것까지만 검증한다."""
+
+    def test_makes_exactly_n_independent_calls(self):
+        fake = _FakeLLMClient([_structured(action="read") for _ in range(5)])
+        agent = DelegateAgent(llm=fake)
+
+        agent.sample_candidates(delegation="x", n=5)
+
+        assert len(fake.calls) == 5
+        # 매 호출이 완전히 동일한(독립적인) 요청이다 — 한 번의 호출로 N개를
+        # 받아내는 게 아니라 진짜 N번 따로 부른다.
+        assert all(c["instructions"] == fake.calls[0]["instructions"] for c in fake.calls)
+
+    def test_default_n_is_ten(self):
+        fake = _FakeLLMClient([_structured(action="read") for _ in range(10)])
+        agent = DelegateAgent(llm=fake)
+
+        agent.sample_candidates(delegation="x")
+
+        assert len(fake.calls) == 10
+
+    def test_unanimous_samples_yield_zero_entropy(self):
+        fake = _FakeLLMClient([_structured(action="read") for _ in range(5)])
+        agent = DelegateAgent(llm=fake)
+
+        dist = agent.sample_candidates(delegation="x", n=5)
+
+        assert isinstance(dist, CandidateDistribution)
+        assert dist.entropy == 0.0
+        assert dist.top_probability == 1.0
+        assert dist.n_unique == 1
+        assert dist.n_samples == 5
+        assert dist.top == Interpretation("read", "file", "/reports/2026-08/", frozenset())
+
+    def test_mixed_samples_produce_correct_distribution_and_entropy(self):
+        from dualflow.semantic import entropy as semantic_entropy
+
+        responses = (
+            [_structured(action="summarize") for _ in range(6)]
+            + [_structured(action="read") for _ in range(3)]
+            + [_structured(action="export") for _ in range(1)]
+        )
+        fake = _FakeLLMClient(responses)
+        agent = DelegateAgent(llm=fake)
+
+        dist = agent.sample_candidates(delegation="x", n=10)
+
+        assert dist.n_samples == 10
+        assert dist.n_unique == 3
+        summarize = Interpretation("summarize", "file", "/reports/2026-08/", frozenset())
+        read = Interpretation("read", "file", "/reports/2026-08/", frozenset())
+        export = Interpretation("export", "file", "/reports/2026-08/", frozenset())
+        assert dist.belief[summarize] == pytest.approx(0.6)
+        assert dist.belief[read] == pytest.approx(0.3)
+        assert dist.belief[export] == pytest.approx(0.1)
+        assert dist.top == summarize
+        assert dist.top_probability == pytest.approx(0.6)
+        # sample_candidates()가 계산한 entropy는 기존 semantic.entropy()를
+        # 그 belief에 그대로 적용한 것과 정확히 같아야 한다 — 새 entropy
+        # 공식을 따로 만들지 않는다.
+        assert dist.entropy == pytest.approx(semantic_entropy(dist.belief))
+        assert dist.entropy > 1.0  # 세 후보로 갈렸으니 unanimous(0.0)보다 훨씬 높다
+
+    def test_unparseable_samples_are_excluded_not_counted_as_a_candidate(self):
+        fake = _FakeLLMClient([
+            _structured(action="read"),
+            LLMResponse(text="I'm not sure what this means."),  # 파싱 실패 — 제외돼야 함
+            _structured(action="read"),
+            _structured(action="read"),
+        ])
+        agent = DelegateAgent(llm=fake)
+
+        dist = agent.sample_candidates(delegation="x", n=4)
+
+        assert len(fake.calls) == 4       # 4번 다 호출은 했다
+        assert dist.n_samples == 3        # 그중 파싱 성공한 3개만 분포에 들어간다
+        assert dist.n_unique == 1
+        assert dist.entropy == 0.0
+        assert len(dist.responses) == 3
+
+    def test_raises_when_all_samples_unparseable(self):
+        fake = _FakeLLMClient([LLMResponse(text="unclear") for _ in range(3)])
+        agent = DelegateAgent(llm=fake)
+
+        with pytest.raises(ValueError):
+            agent.sample_candidates(delegation="x", n=3)
+
+    def test_no_network_or_api_key_required(self, monkeypatch):
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        fake = _FakeLLMClient([_structured(action="read") for _ in range(3)])
+        agent = DelegateAgent(llm=fake)
+
+        agent.sample_candidates(delegation="x", n=3)  # 예외 없어야 함
+
+    def test_no_forbidden_parameter_in_signature(self):
+        forbidden = ("truth", "ground_truth", "label", "verdict", "intent", "principal")
+        sig = inspect.signature(DelegateAgent.sample_candidates)
+        for name in sig.parameters:
+            lowered = name.lower()
+            assert not any(f in lowered for f in forbidden), (
+                f"sample_candidates has a suspicious parameter: {name}")
+
+
+class TestAskClarification:
+    """`ask_clarification()` — B7b. entropy 판단은 이 메서드의 책임이
+    아니다(호출하는 쪽이 이미 판단하고 부른다는 전제) — 여기서는 주어진
+    분포로 질문 하나를 만드는 것만 검증한다."""
+
+    def test_calls_llm_exactly_once(self):
+        from dualflow.delegate_agent import ClarificationQuestion
+
+        fake = _FakeLLMClient([LLMResponse(text="Internal summary or export?")])
+        agent = DelegateAgent(llm=fake)
+        dist = _distribution({"summarize": 0.6, "export": 0.4}, entropy_value=0.97)
+
+        result = agent.ask_clarification(delegation="Please prepare the report.",
+                                         distribution=dist)
+
+        assert isinstance(result, ClarificationQuestion)
+        assert result.question == "Internal summary or export?"
+        assert len(fake.calls) == 1
+        assert result.entropy == 0.97
+
+    def test_input_shows_delegation_and_candidate_frequencies(self):
+        fake = _FakeLLMClient([LLMResponse(text="?")])
+        agent = DelegateAgent(llm=fake)
+        dist = _distribution({"summarize": 0.6, "export": 0.4}, entropy_value=0.97)
+
+        agent.ask_clarification(delegation="Please prepare the report.",
+                                distribution=dist, context="my context")
+
+        input_text = fake.calls[0]["input_text"]
+        assert "Please prepare the report." in input_text
+        assert "my context" in input_text
+        assert "summarize" in input_text and "export" in input_text
+        assert "0.60" in input_text and "0.40" in input_text
+
+    def test_no_forbidden_parameter_in_signature(self):
+        forbidden = ("truth", "ground_truth", "label", "verdict",
+                     "intent", "principal", "authority", "semantic")
+        sig = inspect.signature(DelegateAgent.ask_clarification)
+        for name in sig.parameters:
+            lowered = name.lower()
+            assert not any(f in lowered for f in forbidden), (
+                f"ask_clarification has a suspicious parameter: {name}")
+
+
+def _distribution(action_probs: dict, entropy_value: float):
+    """`ask_clarification()` 단위 테스트용 최소 `CandidateDistribution`.
+    실제 sampling 없이 belief만 직접 구성한다."""
+    from dualflow.delegate_agent import CandidateDistribution
+
+    belief = {
+        Interpretation(action, "file", "/reports/2026-08/", frozenset()): p
+        for action, p in action_probs.items()
+    }
+    top = max(belief, key=lambda i: belief[i])
+    return CandidateDistribution(
+        belief=belief, entropy=entropy_value, top=top, top_probability=belief[top],
+        n_unique=len(belief), n_samples=10, responses=[])

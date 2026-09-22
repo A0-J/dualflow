@@ -421,6 +421,11 @@ action that should actually be authorized: either the full ceiling, or \
 something narrower than it if the context suggests a narrower scope is \
 more appropriate. Do not propose anything wider than the ceiling.
 
+Each field must be a single value, not a combination — do not invent \
+aliases for the action/resource, and do not combine multiple values into \
+one field (for example, never answer "read, review, summarize"; pick the \
+single best one).
+
 Respond in exactly this format, one field per line, no extra commentary:
 ACTION: <must match the ceiling's action>
 RESOURCE: <must match the ceiling's resource>

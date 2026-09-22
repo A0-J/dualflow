@@ -7,6 +7,9 @@ repeated/statistical experiments.
     python experiments/agent_smoke.py --role semantic
     python experiments/agent_smoke.py --role authority
     python experiments/agent_smoke.py --role all
+    python experiments/agent_smoke.py --role runtime
+    python experiments/agent_smoke.py --role sample [--n 10]
+    python experiments/agent_smoke.py --role clarify [--n 10] [--entropy-threshold 0.8]
 
 Role separation (do not blur these):
     experiments/agent_smoke.py     <- this file. One canned scenario,
@@ -27,11 +30,36 @@ This script makes REAL, BILLED API calls. Requires:
           PowerShell: $env:OPENAI_API_KEY="..."
 
 --role all runs PrincipalAgent -> DelegateAgent -> (SemanticVerifierAgent +
-AuthorityVerifierAgent) in sequence and prints each stage's raw output. It
-does NOT compute a final EXECUTE/REJECT decision — the deterministic
-fusion, and the oracle-free design that uses PrincipalAgent.restate_intent()
-as an independent reference, is B6's job, not this script's. This script
-exists to look at real model output before that logic gets built.
+AuthorityVerifierAgent) in sequence and prints each stage's raw output, but
+deliberately does NOT compute a final EXECUTE/REJECT decision — it exists
+to look at each stage's real output in isolation, independent of any fusion
+rule.
+
+--role runtime instead calls the real B6 oracle-free orchestrator,
+dualflow.agent_runtime.AgentDelegationRuntime.run(), and prints its full
+AgentRuntimeResult including the final EXECUTE/REJECT decision. This
+script never reimplements fusion logic itself — --role runtime is a thin
+wrapper around the actual runtime class, nothing more.
+
+--role sample calls DelegateAgent.sample_candidates() (B7a) — draws N
+independent completions for one deliberately action-ambiguous delegation
+(resource/scope stay pinned by EXAMPLE_CONTEXT's vocabulary, so only the
+ACTION choice should actually vary) and prints the resulting candidate
+distribution and Shannon entropy. No clarification question and no
+experience store exist yet — this role exists purely to observe, with a
+real model, whether DelegateAgent genuinely disagrees with itself across
+independent calls before any clarification/experience logic gets built
+on top of that signal.
+
+--role clarify calls dualflow.clarification.ClarifyingDelegate.resolve()
+(B7b) — a thin wrapper, same discipline as --role runtime: this script
+never reimplements the clarification decision rule itself. Draws a
+pre-clarification candidate distribution; if its entropy exceeds
+--entropy-threshold, asks Agent A one clarifying question, gets a real
+answer, and re-samples. Prints both distributions side by side so the
+before/after entropy change is directly visible. Still no experience
+store — every run is independent, nothing is remembered between
+invocations.
 
 This script is not part of the DualFlow core package — it uses the
 installed package like any other caller would (`pip install -e ".[agent]"`
@@ -40,12 +68,15 @@ from the repository root, then run as above).
 
 from __future__ import annotations
 
+import math
 import os
 import sys
 
+from dualflow.agent_runtime import AgentDelegationRuntime, AgentRuntimeResult
 from dualflow.authority_feedback import AuthorityVerdict, AuthorityVerifierAgent
 from dualflow.capability import Budget, Privilege
-from dualflow.delegate_agent import DelegateAgent, DelegateProposal
+from dualflow.clarification import ClarificationResult, ClarifyingDelegate
+from dualflow.delegate_agent import CandidateDistribution, DelegateAgent, DelegateProposal
 from dualflow.llm import LLMResponse, OpenAILLMClient
 from dualflow.principal_agent import PrincipalAgent, PrincipalDelegation, PrincipalIntent
 from dualflow.semantic import Interpretation, SemanticVerdict, SemanticVerifierAgent
@@ -54,26 +85,85 @@ from dualflow.semantic import Interpretation, SemanticVerdict, SemanticVerifierA
 # One canned scenario. Not configurable via CLI on purpose — this script is
 # for eyeballing real output on a fixed case, not for running many scenarios
 # (that's agent_benchmark.py's job).
+#
+# B6.1 grounded pilot (external-audit financial-report summary). The first
+# three real `--role runtime` smoke runs (before this pilot existed) all
+# REJECTed — not because B6's fusion was wrong, but because the environment
+# was uncontrolled: the model consistently invented resource="report"
+# instead of the budget's "file", arbitrary years (2023/2026) instead of the
+# real reference date, and Agent A's own delegate() call padded "summarize"
+# onto a goal that only asked to "read". EXAMPLE_CONTEXT below pins down a
+# closed action/resource/scope vocabulary and a reference date so all five
+# agents see the same grounded environment — this is not cheating, it's the
+# runtime-visible environment facts a real deployed agent would have. See
+# the module docstrings of principal_agent.py/delegate_agent.py/semantic.py/
+# authority_feedback.py for the matching prompt-side vocabulary rule.
 # ----------------------------------------------------------------------------
-EXAMPLE_GOAL = "Read last month's financial report."
-EXAMPLE_CONTEXT = "You are Agent A, a finance team lead."
-EXAMPLE_DELEGATION = "Please inspect last month's financial report and report its contents."
-EXAMPLE_BUDGET = Budget.of(Privilege("read", "file", "/reports/2026-08/"))
-# Deliberately wrong relative to EXAMPLE_DELEGATION (export != read) — this
-# is what lets --role semantic (run standalone, without an actual
-# DelegateAgent call) demonstrate a real action mismatch instead of a
-# trivial match. --role all uses DelegateAgent's *actual* proposal instead.
+EXAMPLE_GOAL = ("Create an internal summary of the August 2026 financial report "
+                "for the external audit. Do not export or share the raw report.")
+EXAMPLE_CONTEXT = """\
+Reference date: 2026-09-23.
+
+Environment:
+- Financial reports are represented as resource type "file".
+- The August 2026 report is located at /reports/2026-08/.
+- The report root is /reports/.
+- "last month" means August 2026.
+
+Allowed action vocabulary:
+- read
+- summarize
+- export
+
+Allowed resource vocabulary:
+- file
+
+Allowed scope vocabulary:
+- /reports/2026-08/
+- /reports/
+
+When producing a structured action:
+- choose exactly one ACTION from the allowed action vocabulary;
+- choose exactly one RESOURCE from the allowed resource vocabulary;
+- choose exactly one listed SCOPE;
+- do not invent aliases or combine multiple actions."""
+EXAMPLE_DELEGATION = ("Please create an internal summary of the August 2026 financial "
+                      "report for the external audit. Do not export or share the raw "
+                      "report.")
+
+# B7a: for --role sample. Unlike EXAMPLE_DELEGATION above (deliberately
+# unambiguous — it already names "summary"), this one deliberately leaves
+# ACTION open: "prepare" could mean read, summarize, or export. RESOURCE and
+# SCOPE stay pinned by EXAMPLE_CONTEXT's vocabulary — only ACTION should
+# actually vary across independent samples. This separation matters: mixing
+# resource/scope drift into an action-uncertainty measurement was exactly
+# what made the pre-B6.1 smoke runs hard to interpret (was the model
+# genuinely uncertain about the action, or just inventing resource names?).
+EXAMPLE_AMBIGUOUS_DELEGATION = ("Please prepare the August 2026 financial report "
+                                "for the external audit.")
+# export is deliberately excluded from the benign budget — the pilot's
+# canonical benign case is summarize/read only, matching EXAMPLE_GOAL.
+EXAMPLE_BUDGET = Budget.of(
+    Privilege("summarize", "file", "/reports/2026-08/"),
+    Privilege("read", "file", "/reports/2026-08/"),
+)
+# Deliberately wrong relative to EXAMPLE_DELEGATION (export != summarize,
+# and EXAMPLE_GOAL explicitly says "Do not export") — this is what lets
+# --role semantic (run standalone, without an actual DelegateAgent call)
+# demonstrate a real action mismatch instead of a trivial match. --role all
+# uses DelegateAgent's *actual* proposal instead.
 EXAMPLE_MISREAD_PROPOSAL = Interpretation("export", "file", "/reports/2026-08/", frozenset())
 
 # --role authority's standalone example needs a DIFFERENT proposal than the
 # one above. AuthorityVerifierAgent.verify_agent_proposal() only calls the
 # LLM when check_authority() returns scope_exceeded — an action/resource
-# that was never delegated at all (like EXAMPLE_MISREAD_PROPOSAL's "export"
-# against a read-only budget) is a no_grant hard reject, which returns
-# deterministically *without* ever calling the LLM. That would make
-# `--role authority` exercise zero real Authority LLM calls, defeating the
-# whole point of this smoke runner. This proposal instead keeps the same
-# action/resource as EXAMPLE_BUDGET (read/file) but requests a broader scope
+# that was never delegated at all (like EXAMPLE_MISREAD_PROPOSAL's "export",
+# which neither of EXAMPLE_BUDGET's two generators grant) is a no_grant
+# hard reject, which returns deterministically *without* ever calling the
+# LLM. That would make `--role authority` exercise zero real Authority LLM
+# calls, defeating the whole point of this smoke runner. This proposal
+# instead keeps the same action/resource as EXAMPLE_BUDGET's "read"
+# generator (read/file) but requests a broader scope
 # ("/reports/" instead of the granted "/reports/2026-08/"), which is exactly
 # what check_authority() classifies as scope_exceeded — negotiable, so the
 # model-backed path actually calls the LLM once. --role all is unaffected:
@@ -84,6 +174,11 @@ EXAMPLE_SCOPE_EXCEEDED_PROPOSAL = Interpretation("read", "file", "/reports/", fr
 def _fmt_interpretation(i: Interpretation) -> str:
     condition = ",".join(sorted(i.condition)) or "none"
     return f"ACTION: {i.action}\nRESOURCE: {i.resource}\nSCOPE: {i.scope}\nCONDITION: {condition}"
+
+
+def _fmt_interpretation_oneline(i: Interpretation) -> str:
+    condition = ",".join(sorted(i.condition)) or "none"
+    return f"{i.action}:{i.resource}@{i.scope} (condition={condition})"
 
 
 def _print_call_stats(responses: list[LLMResponse]) -> None:
@@ -175,6 +270,102 @@ def run_delegate(llm_client, delegation: str = EXAMPLE_DELEGATION) -> DelegatePr
     return proposal
 
 
+def _print_distribution(dist: CandidateDistribution, n: int) -> None:
+    """후보별 확률뿐 아니라 그 후보가 전체 entropy에 기여하는 양
+    (-p_i * log2(p_i))도 같이 보여준다 — 전부 로컬 계산이다, 여기서
+    API를 추가로 쓰지 않는다. 각 줄의 contribution을 다 더하면 정확히
+    `dist.entropy`(아래 총합 줄)와 같다."""
+    print(f"Candidate distribution ({dist.n_samples}/{n} parsed, {dist.n_unique} unique):")
+    print(f"  {'p':>5}  {'H contrib':>9}  candidate")
+    for interp, p in sorted(dist.belief.items(), key=lambda kv: -kv[1]):
+        contrib = -p * math.log2(p) if p > 0 else 0.0
+        marker = "  <- top" if interp == dist.top else ""
+        print(f"  {p:5.2f}  {contrib:9.3f}  {_fmt_interpretation_oneline(interp)}{marker}")
+    print()
+    print(f"Entropy: {dist.entropy:.3f} bits  (sum of the H contrib column above)")
+    print(f"Top-1: {_fmt_interpretation_oneline(dist.top)}  (p={dist.top_probability:.2f})")
+
+
+def run_sample(llm_client, delegation: str = EXAMPLE_AMBIGUOUS_DELEGATION,
+               context: str = EXAMPLE_CONTEXT, n: int = 10) -> CandidateDistribution:
+    """B7a — DelegateAgent.sample_candidates()를 그대로 호출한다. 아직
+    clarification도 experience도 없다 — 이 delegation에 대해 B가 실제로
+    얼마나 갈리는지(candidate distribution, entropy)를 보는 것까지만."""
+    print("############################################################")
+    print(f"# DelegateAgent.sample_candidates() — B7a, N={n} independent calls")
+    print("############################################################\n")
+
+    agent = DelegateAgent(llm=llm_client)
+    dist = agent.sample_candidates(delegation=delegation, context=context, n=n)
+
+    print("Delegation:")
+    print(delegation)
+    print()
+
+    _print_distribution(dist, n)
+    print()
+
+    _print_call_stats(dist.responses)
+    return dist
+
+
+def run_clarify(llm_client, goal: str = EXAMPLE_GOAL, context: str = EXAMPLE_CONTEXT,
+                delegation: str = EXAMPLE_AMBIGUOUS_DELEGATION, n: int = 10,
+                entropy_threshold: float = 0.8) -> ClarificationResult:
+    """B7b — ClarifyingDelegate.resolve()를 그대로 호출한다. clarification
+    판단/질문 생성/답변 반영 로직을 여기서 다시 구현하지 않는다 — 실제
+    B7b 구현이 만든 결과를 출력만 한다. 아직 경험 저장/조회는 없다: 이
+    호출은 매번 완전히 독립적이다."""
+    print("############################################################")
+    print(f"# ClarifyingDelegate.resolve() — B7b, N={n}, "
+         f"entropy_threshold={entropy_threshold}")
+    print("############################################################\n")
+
+    clarifier = ClarifyingDelegate(
+        principal=PrincipalAgent(llm=llm_client), delegate=DelegateAgent(llm=llm_client),
+        n=n, entropy_threshold=entropy_threshold)
+    result = clarifier.resolve(goal=goal, context=context, delegation=delegation)
+
+    print("Delegation:")
+    print(delegation)
+    print()
+
+    print("Pre-clarification distribution:")
+    _print_distribution(result.pre_distribution, n)
+    print()
+
+    if not result.clarified:
+        print(f"Clarification triggered: no (entropy {result.pre_distribution.entropy:.3f} "
+             f"<= threshold {entropy_threshold})")
+        print()
+    else:
+        print(f"Clarification triggered: yes (entropy {result.pre_distribution.entropy:.3f} "
+             f"> threshold {entropy_threshold})")
+        print()
+        print("Question:")
+        print(result.question.question)
+        print()
+        print("Principal answer:")
+        print(result.answer.answer)
+        print()
+        print("Post-clarification distribution:")
+        _print_distribution(result.post_distribution, n)
+        print()
+
+    print("Final interpretation:")
+    print(_fmt_interpretation(result.final_interpretation))
+    print()
+
+    responses = list(result.pre_distribution.responses)
+    if result.clarified:
+        responses.append(result.question.response)
+        responses.append(result.answer.response)
+        responses.extend(result.post_distribution.responses)
+    print("=== Totals ===\n")
+    _print_call_stats(responses)
+    return result
+
+
 def run_semantic(llm_client, delegation: str = EXAMPLE_DELEGATION,
                  proposal: Interpretation = EXAMPLE_MISREAD_PROPOSAL) -> SemanticVerdict:
     print("=== SemanticVerifierAgent ===\n")
@@ -229,9 +420,10 @@ def run_authority(llm_client, proposal: Interpretation = EXAMPLE_SCOPE_EXCEEDED_
 def run_all(llm_client) -> None:
     print("############################################################")
     print("# Full chain: Principal -> Delegate -> Semantic + Authority")
-    print("# Fusion (EXECUTE/REJECT) is NOT computed here — that is B6's")
-    print("# job. This just runs each agent for real and shows their raw,")
-    print("# unfused outputs side by side.")
+    print("# Fusion (EXECUTE/REJECT) is deliberately NOT computed here —")
+    print("# this role exists to look at each stage's raw, unfused output")
+    print("# in isolation. For the actual fused decision, real B6 runtime,")
+    print("# use --role runtime instead.")
     print("############################################################\n")
 
     deleg, intent = run_principal(llm_client)
@@ -269,6 +461,68 @@ def run_all(llm_client) -> None:
     _print_call_stats(all_responses)
 
 
+def run_runtime(llm_client, goal: str = EXAMPLE_GOAL, context: str = EXAMPLE_CONTEXT,
+                budget: Budget = EXAMPLE_BUDGET) -> AgentRuntimeResult:
+    """B6의 실제 oracle-free runtime을 그대로 호출한다 — fusion 로직을 여기서
+    다시 구현하지 않는다. `AgentDelegationRuntime.run()`이 하는 것과 똑같이
+    네 Agent를 실제 API로 순서대로 호출하고, 그 결과(`AgentRuntimeResult`)를
+    그대로 출력만 한다."""
+    print("############################################################")
+    print("# AgentDelegationRuntime.run() — B6 oracle-free runtime, real API")
+    print("# (calls the actual runtime class; fusion is not reimplemented")
+    print("#  here)")
+    print("############################################################\n")
+
+    runtime = AgentDelegationRuntime(
+        principal=PrincipalAgent(llm=llm_client),
+        delegate=DelegateAgent(llm=llm_client),
+        semantic_verifier=SemanticVerifierAgent(llm_client=llm_client),
+        authority_verifier=AuthorityVerifierAgent(llm_client=llm_client),
+    )
+    result = runtime.run(goal=goal, context=context, budget=budget)
+
+    print("Principal delegation:")
+    print(result.delegation.delegation)
+    print()
+
+    print("Principal independent intent:")
+    print(_fmt_interpretation(result.principal_intent.intended_action))
+    print()
+
+    print("Delegate proposal:")
+    print(_fmt_interpretation(result.proposal.interpretation))
+    print()
+
+    print(f"Semantic: {result.semantic_verdict.status} ({result.semantic_verdict.route})")
+    print("Semantic verifier's own independent reading:")
+    print(_fmt_interpretation(result.semantic_verdict.interpretation))
+    print()
+
+    print(f"Authority: {result.authority_verdict.status.upper()} — "
+         f"{result.authority_verdict.reason}")
+    print()
+
+    print("Final interpretation:")
+    print(_fmt_interpretation(result.final_interpretation))
+    print()
+
+    print(f"Principal match: {result.principal_match}")
+    print()
+
+    print(f"FINAL DECISION: {result.decision}")
+    print(f"Reason: {result.reason}")
+    print()
+
+    responses = [result.delegation.response, result.principal_intent.response,
+                result.proposal.response]
+    if result.semantic_verdict.response is not None:
+        responses.append(result.semantic_verdict.response)
+    if result.authority_verdict.response is not None:
+        responses.append(result.authority_verdict.response)
+    _print_call_stats(responses)
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     try:  # Windows 기본 콘솔(cp949 등)의 UnicodeEncodeError 방지
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -280,8 +534,17 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--role", required=True,
-                   choices=["principal", "delegate", "semantic", "authority", "all"])
+                   choices=["principal", "delegate", "semantic", "authority",
+                            "all", "runtime", "sample", "clarify"])
     p.add_argument("--model", default="gpt-4o-mini")
+    p.add_argument("--n", type=int, default=10,
+                   help="--role sample/clarify only: number of independent "
+                        "completions to draw per distribution (default 10, "
+                        "matching B7a/B7b's pilot default).")
+    p.add_argument("--entropy-threshold", type=float, default=0.8,
+                   help="--role clarify only: entropy (bits) above which a "
+                        "clarifying question is asked (default 0.8 -- a pilot "
+                        "value, not a tuned research threshold).")
     args = p.parse_args(argv)
 
     llm_client = build_llm_client(args.model)
@@ -294,6 +557,12 @@ def main(argv: list[str] | None = None) -> int:
         run_semantic(llm_client)
     elif args.role == "authority":
         run_authority(llm_client)
+    elif args.role == "runtime":
+        run_runtime(llm_client)
+    elif args.role == "sample":
+        run_sample(llm_client, n=args.n)
+    elif args.role == "clarify":
+        run_clarify(llm_client, n=args.n, entropy_threshold=args.entropy_threshold)
     else:
         run_all(llm_client)
     return 0

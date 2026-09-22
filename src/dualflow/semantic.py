@@ -721,6 +721,11 @@ correct — form your own independent judgment of what the delegation \
 calls for, even if it turns out to match or differ from what Agent B \
 proposed.
 
+If the context below specifies an allowed action/resource/scope \
+vocabulary, choose exactly one value from each list — do not invent \
+aliases, and do not combine multiple actions into a single field (for \
+example, never answer "read, review, summarize"; pick the single best one).
+
 Respond with your own independently-resolved reading of the delegation, \
 in exactly this format, one field per line, no extra commentary:
 ACTION: <the action verb, e.g. read, export, delete, summarize>
