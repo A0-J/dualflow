@@ -442,6 +442,14 @@ meaningful.**
   600-call B7d.3 pilot numbers reported in §15 should be read as
   within-run (`v2` vs. `v1` vs. `no_experience`) evidence only, not as
   directly comparable to §7/§10's absolute numbers.
+- **`v2` semantic transfer is not yet established** — §16's canonical
+  re-run (wording confound removed) shows only a weak, run-inconsistent
+  `P(summarize)` lift (`C1` beats `A1` in 3/5 runs, ties in 1/5, loses in
+  1/5). Do not cite the §15 pilot's "5/5 consistent improvement" figure —
+  it was measured against a baseline §16 shows was artificially
+  deterministic. The current honest status is "`v2` is less harmful than
+  `v1`, direction is positive on average, magnitude and consistency are
+  not yet sufficient to call it transfer" — not "`v2` works."
 
 ## 14. Current Status
 
@@ -458,15 +466,22 @@ meaningful.**
 | Experience representation | **confirmed inadequate — redesign needed** |
 | Experience representation redesign (B7d.3) | **pilot complete — partial evidence + context-wording confound found (§15)** |
 | Experiment reproducibility fix (canonical wording + fingerprinting) | complete (§15) |
-| B7d.3 canonical-context re-validation (600 calls) | not started |
+| B7d.3 canonical-context re-validation (600 calls) | **complete — v1 harmful, v2 weak/inconsistent (§16)** |
+| Semantic-content ablation (B7d.4) | **script prepared, not yet run (§17)** |
 | Sequential experience evaluation (B7e) | not started |
 
 The sequential multi-episode experiment (B7e) stays intentionally
-postponed, now doubly so: B7d.3's redesign showed a real, consistent, but
-modest positive signal (§15) and still needs a canonical-context re-run
-before it can be trusted at face value. The original plan for B7d.3 was to
-redesign the experience representation so it presents ambiguity →
-clarification → confirmed-meaning as a
+postponed. The canonical-context B7d.3 re-run (§16) removed the
+context-wording confound and found that, against a correctly-behaving
+(non-deterministic) baseline, `v1` is clearly harmful (it collapses the
+model's natural ambiguity to a confident wrong answer) and `v2` shows only
+a weak, run-inconsistent directional signal — not yet a demonstration that
+verified experience reliably transfers semantic content. B7d.4 (§17) is
+designed to isolate whether the weak `v2` signal is content-sensitive at
+all, before any further redesign or the sequential experiment is
+considered. The original plan for B7d.3 was to redesign the experience
+representation so it presents ambiguity → clarification → confirmed-meaning
+as a
 relationship, not a bare action label — conceptually:
 
 ```
@@ -599,3 +614,189 @@ A follow-up ablation (`v2`-with-summarize-history vs. `v2`-with-export-
 history, mirroring §10's B/C separation) is planned for after the canonical
 re-run, to separate "v2's format helps" from "v2 genuinely carries the
 confirmed action's content" — not before.
+
+## 16. B7d.3 Canonical-Context Re-Run
+
+### Experiment identity
+
+```
+experiment_id:        b7d3_canonical_rerun
+git_sha:               a714e360ac08c142a00af91e0185ed349737e341
+scenario_id:            external_audit_finance
+scenario_version:       1.1
+delegation_sha256 (ambiguous):
+  38b8fc2394a7bc9a4d043dd8078ecd6194f3855d710710d1fce23727a4a5fab1
+delegation_sha256 (explicit_change):
+  45984505604c517c35de0edf51292df211163fbaa2bf377080b03b576d2ab8ad
+context_sha256:
+  a1a5da5674cab40190610056581c30802e13277b70c058eb2317569085233892
+model:                  gpt-4o-mini
+samples_per_condition:  20
+repetitions:            5
+total calls:            600
+script:                 experiments/diagnostics/experience_representation.py
+```
+
+Between `490f5a3` (the reproducibility fix commit, §15) and `a714e36` (the
+commit this run executed against), only documentation files changed
+(`README.md`, `README_KOR.md`, `docs/DESIGN_INVARIANTS.md`,
+`docs/REPRODUCIBILITY.md`, `experiments/README.md`) — verified via `git
+diff --stat 490f5a3..a714e36` before running. No source, experiment, or
+scenario file differs between the two commits, so this run is code- and
+scenario-identical to the fixed §15 wording.
+
+### Canonical baseline restoration
+
+The headline structural finding of this re-run: restoring the canonical
+wording made the `no_experience` baseline **non-deterministic again**.
+Under the drifted wording (§15), `A1 no_experience` was `H=0.000,
+P(export)=1.00` in all 5 runs. Under the canonical wording, `A1` shows real
+run-to-run variance (`H` 0.469–0.811, `P(summarize)` 0.10–0.25) — consistent
+with the model genuinely being uncertain between `summarize`/`export` for
+this delegation, matching the original B7a pilot's observed ambiguity (§3).
+This directly confirms the §15 hypothesis: the drifted wording was not
+cosmetic, it was artificially collapsing the model's natural uncertainty.
+One practical consequence: **the §15 pilot's absolute baseline numbers were
+not just "not directly comparable" as originally cautioned — they were
+measuring a qualitatively different (artificially deterministic) baseline
+condition**, not simply a slightly-shifted version of the same one.
+
+### A1 / B1 / C1 aggregate — ambiguous task
+
+| Condition | Mean H | P(summarize) | P(export) |
+| --- | --- | --- | --- |
+| A1 no experience | 0.707 | 0.200 | 0.800 |
+| B1 v1 | 0.000 | 0.000 | 1.000 |
+| C1 v2 | 0.784 | 0.250 | 0.750 |
+
+### Run-level C1 − A1 comparison
+
+| run | A1 | B1 | C1 | C1 − A1 |
+| --- | --- | --- | --- | --- |
+| 1 | 0.10 | 0.00 | 0.15 | +0.05 |
+| 2 | 0.20 | 0.00 | 0.35 | +0.15 |
+| 3 | 0.20 | 0.00 | 0.20 | 0.00 |
+| 4 | 0.25 | 0.00 | 0.20 | **−0.05** |
+| 5 | 0.25 | 0.00 | 0.35 | +0.10 |
+
+`C1 > B1` in 5/5 runs (`B1` is always exactly 0.00). `C1 > A1` in only 3/5
+runs, tied in 1/5, and **lower than A1** in 1/5 (run 4). Mean `C1 − A1` is
+`+0.05` — positive, but not a consistent per-run improvement. `top1 =
+export` in all 30 rows (A1/B1/C1 combined) — `v2` never flips the top
+candidate.
+
+### Explicit-change task (A2 / B2 / C2)
+
+All 15 rows (5 runs × 3 conditions) show `H=0.000`, `P(summarize)=0.00`,
+`P(export)=1.00`, with zero exceptions — identical to the §15 pilot. `v2`
+never overrode the explicit current instruction, across either the
+drifted-wording pilot or this canonical re-run.
+
+### Structural checks
+
+- **Scope**: all 30 rows show `scopes_seen = ['/reports/2026-09/']` only —
+  600/600 samples, 0 August-scope leakage.
+- **Clarification calls**: 0 — `experience_representation.py` only calls
+  `ExperienceAwareDelegate.sample_candidates()`, never
+  `ask_clarification()`/`ClarifyingDelegate` (confirmed by source
+  inspection).
+- **Authority calls**: 0 — `experience_aware_delegate.py`/
+  `agent_experience.py` import neither `Budget`, `check_authority`, nor
+  `AuthorityVerifierAgent` (matches `docs/DESIGN_INVARIANTS.md` item 4).
+- **`task.truth`**: 0 — no such parameter exists anywhere in this call path.
+- **Tokens**: 288,200 input / 15,364 output across 600 calls, in line with
+  the §15 pilot's token profile.
+
+### Conclusion
+
+1. **`v1` is clearly harmful, not merely ineffective.** Against the
+   canonical (non-deterministic) baseline, `v1` does not fail to transfer
+   the confirmed action — it actively collapses the model's natural
+   ambiguity (`H: 0.707 → 0.000`) into a fully confident WRONG answer
+   (`export`, `P(summarize): 0.20 → 0.00`). This is a sharper restatement
+   of the §7/§10 priming finding: the mere presence of a historical block
+   in `v1`'s format does not just fail to help, it measurably suppresses
+   the correct answer's probability below what doing nothing would have
+   given.
+2. **`v2` shows only weak and inconsistent directional improvement.** Mean
+   `P(summarize)` rises from `0.200` (A1) to `0.250` (C1), but this is not
+   a per-run-dominant effect — `C1` beats `A1` in 3/5 runs, ties in 1/5,
+   and is lower than `A1` in 1/5. `top1` remains `export` throughout. This
+   is a much weaker and less consistent result than the §15 pilot
+   suggested, because the §15 pilot's apparent "5/5 consistent +0.19 lift"
+   was measured against an artificially deterministic (`P(summarize)=0.00`
+   always) baseline that this re-run shows was itself the wording-drift
+   artifact, not the true no-experience condition.
+3. **Therefore: semantic transfer is not yet established.** `v2`'s
+   canonical-context signal is real in direction (mean lift is positive,
+   and `v2` clearly outperforms `v1`) but too weak and too inconsistent to
+   be read as evidence that verified experience reliably transfers
+   Principal-confirmed semantic content. What canonical `v2` currently
+   demonstrates is, at most, "somewhat better than `v1`'s harmful
+   collapse" — not "successful semantic transfer." Whether the small
+   positive signal `v2` does show is actually driven by the historical
+   experience's *content* (summarize vs. export) rather than by `v2`'s
+   format alone is exactly the question B7d.4 (§17) is designed to
+   separate.
+
+No code was modified to produce this re-run or this write-up —
+`render_experience_block_v1`/`_v2` and `ExperienceAwareDelegate` are
+unchanged from §15. The §15 pilot's numbers are preserved above, unedited,
+as a separate historical record of the wording-confounded run; §16 does not
+overwrite them.
+
+## 17. B7d.4 — Semantic-Content Ablation (Prepared, Not Yet Run)
+
+§16's canonical re-run leaves one question open: is `v2`'s weak positive
+signal driven by the *content* of the historical experience (which action
+was actually confirmed), or — like `v1` — mostly by the presence/format of
+a historical block regardless of content? A content-only ablation is
+needed to separate these, mirroring the logic of §10's structure-only
+control but applied to `v2` instead of `v1`.
+
+**New script, not an extension of a fixed reproducer**:
+`experiments/diagnostics/experience_semantic_ablation.py`. Neither
+`experience_transfer.py` (fixed B7d.1/B7d.2 reproducer) nor
+`experience_representation.py` (fixed B7d.3 reproducer) is modified by
+this script — it reuses `load_scenario()`/`build_current_context()`/
+`make_experience()`/`text_sha256()`/`scenario_fingerprint()` from
+`experience_transfer.py` via sibling import, and
+`render_experience_block_v2` from `experience_aware_delegate.py`, exactly
+as written.
+
+**Design**: same canonical ambiguous September delegation as §16's Task 1,
+three conditions:
+
+- **A.** no experience
+- **B.** `v2` rendering of a `summarize`-confirmed historical experience
+- **C.** `v2` rendering of an `export`-confirmed historical experience
+
+B and C are built from `make_experience()`'s shared answer template (the
+§10 wording-symmetry fix) so they stay structurally identical — same
+sentence shape, same header, same length — differing only in the one
+confirmed-action word. `N=20`, `repetitions=10`, 3 conditions → 600 calls.
+
+**Primary metrics** (entropy recorded but explicitly secondary, per §11):
+
+```
+P(summarize | summarize-history)   P(summarize | export-history)
+P(export    | summarize-history)   P(export    | export-history)
+
+delta_sum    = P(summarize | summarize-history) - P(summarize | export-history)
+delta_export = P(export    | export-history)    - P(export    | summarize-history)
+```
+
+**Interpretation rule, fixed before running**: if `summarize`-history
+selectively raises `P(summarize)` and `export`-history selectively raises
+`P(export)` (both deltas clearly positive), that is evidence `v2` carries
+genuine semantic-content sensitivity. If B and C behave similarly to each
+other regardless of which action was confirmed, the current `v2`
+representation still does not demonstrate semantic transfer — it would be
+behaving like a `v1`-style presence/format effect, just weaker in
+magnitude.
+
+**Status**: script written and structurally verified (fake-client dry run,
+`--help`, full `pytest -q` regression unaffected) — not yet run against the
+real API. No prompt tuning is planned after seeing results, and B7e remains
+not started regardless of this ablation's outcome, per the current gating
+order (§14).
