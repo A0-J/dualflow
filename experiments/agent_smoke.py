@@ -68,6 +68,7 @@ from the repository root, then run as above).
 
 from __future__ import annotations
 
+import math
 import os
 import sys
 
@@ -270,12 +271,18 @@ def run_delegate(llm_client, delegation: str = EXAMPLE_DELEGATION) -> DelegatePr
 
 
 def _print_distribution(dist: CandidateDistribution, n: int) -> None:
+    """후보별 확률뿐 아니라 그 후보가 전체 entropy에 기여하는 양
+    (-p_i * log2(p_i))도 같이 보여준다 — 전부 로컬 계산이다, 여기서
+    API를 추가로 쓰지 않는다. 각 줄의 contribution을 다 더하면 정확히
+    `dist.entropy`(아래 총합 줄)와 같다."""
     print(f"Candidate distribution ({dist.n_samples}/{n} parsed, {dist.n_unique} unique):")
+    print(f"  {'p':>5}  {'H contrib':>9}  candidate")
     for interp, p in sorted(dist.belief.items(), key=lambda kv: -kv[1]):
+        contrib = -p * math.log2(p) if p > 0 else 0.0
         marker = "  <- top" if interp == dist.top else ""
-        print(f"  {p:.2f}  {_fmt_interpretation_oneline(interp)}{marker}")
+        print(f"  {p:5.2f}  {contrib:9.3f}  {_fmt_interpretation_oneline(interp)}{marker}")
     print()
-    print(f"Entropy: {dist.entropy:.3f} bits")
+    print(f"Entropy: {dist.entropy:.3f} bits  (sum of the H contrib column above)")
     print(f"Top-1: {_fmt_interpretation_oneline(dist.top)}  (p={dist.top_probability:.2f})")
 
 
