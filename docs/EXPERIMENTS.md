@@ -124,7 +124,7 @@ Adversarial proposal은 LLM을 다시 호출하지 않는다 — `attack` field�
 
 세 시나리오를 나란히 보면: **M1(의미 자체가 다름) → M2(범위만 넘음, 협상 가능) → M3(조건만 빠짐, 협상 불가)** 순으로 "무엇이 잘못됐는가"의 종류가 깨끗하게 갈린다 — 이게 §6.3 Mechanism Attribution에서 서로 다른 메커니즘이 각각 담당하는 이유이기도 하다.
 
-![v1 Phase 2 — Correct vs. Adversarial Proposal](../figures/main/fig10_v1_phase2.png)
+_(Figure removed from the repository as part of the agent-connected research pivot — `research/agent-connected-eval`, see `docs/experiments/agent_connected_eval.md`. The controlled-benchmark mechanism it visualized is unchanged and still regenerable via `python experiments/plots.py`; the numeric findings are in the tables below.)_
 
 **Configurations.** Authority only / Semantic only / Full (v1).
 
@@ -179,7 +179,7 @@ Adversarial proposal은 LLM을 다시 호출하지 않는다 — `attack` field�
 | Feedback off | **0.0%** | 0.0% | **0.0%** |
 | **Authority Feedback on** | **0.0%** | **100.0%** | 66.7% |
 
-![Authority Feedback Loop — normal and semantic-proposal-manipulation conditions](../figures/main/fig7_authority_feedback.png)
+_(Figure removed from the repository as part of the agent-connected research pivot — regenerable via `python experiments/plots.py`; see the table above for the numeric result.)_
 
 Feedback이 없으면 negotiable scope violation도 안전하게 거절된다. Feedback을 사용하면:
 
@@ -189,7 +189,7 @@ safe rejection → bounded negotiation → authority revalidation → safe compl
 
 으로 전환된다. Authority Feedback의 역할은 hard constraint를 완화하는 것이 아니라, **현재 budget 안에서 recoverable scope error를 수정해 utility를 회복하는 것**이다. `no_grant`와 `condition_missing`은 feedback 대상이 아니며 즉시 reject된다.
 
-Semantic-proposal manipulation을 적용해도 scope negotiation 결과는 동일했다(위 그림의 두 번째 패널) — Authority Feedback이 B의 self-reported semantic uncertainty를 판단 입력으로 사용하지 않기 때문이다. 단, 이 강건성은 current authority state와 Principal feedback channel이 trusted라는 전제에서만 성립한다:
+Semantic-proposal manipulation을 적용해도 scope negotiation 결과는 동일했다(정성적 관찰 — 원래 그림의 두 번째 패널이 이 조건을 보여줬으나, 그림 자체는 위 caption에 적은 대로 repo에서 제거됐다) — Authority Feedback이 B의 self-reported semantic uncertainty를 판단 입력으로 사용하지 않기 때문이다. 단, 이 강건성은 current authority state와 Principal feedback channel이 trusted라는 전제에서만 성립한다:
 
 > **Scope negotiation remains robust to semantic-proposal manipulation as long as the authority state and Principal feedback channel are trusted.**
 
@@ -247,7 +247,7 @@ $$
 
 **Result.**
 
-![Adaptive Authority Feedback — 9-round timeline](../figures/optimization/fig8_adaptive_verification.png)
+_(Figure removed from the repository as part of the agent-connected research pivot — regenerable via `python experiments/plots.py`; see the table below for the numeric result.)_
 
 | Round | 상황 | A에게 물어봄 | auto-restrict | history n | Confirmed scope |
 |---|---|---|---|---:|---|
@@ -295,7 +295,7 @@ Optimization의 목적을 한 문장으로: **Always-feedback 수준의 authorit
 
 **Result.**
 
-![Entropy validation — first real-LLM results](../figures/main/fig9_entropy_probe.png)
+_(Figure removed from the repository as part of the agent-connected research pivot — regenerable via `python experiments/plots.py`; see Appendix A.10 "Entropy Validation — Full Record" for the raw data.)_
 
 전체 8-case 결과, referent count의 상관관계 해석 범위, 버그 수정 이력(`objective_referent_count`가 모델 출력에서 거꾸로 계산되던 순환 버그), 그리고 손으로 만든 candidates와 실제 분포의 격차는 Appendix A.10 "Entropy Validation — Full Record"에 상세히 남긴다.
 
@@ -380,7 +380,7 @@ SAGE-Agent/SAGE-Bench/ChainCaps에 대한 상세 baseline 분석은 [BASELINES.m
 
 # Appendix A — Legacy (v0) Experiments
 
-> 아래는 `DelegationBench-mini`(v0, 독립적 9-task vignette, `experiments/bench.py`)를 기반으로 한 **초기 탐색 결과**다. v1(위 Experiment 1~4)이 논문 본문의 canonical 결과이며, 여기는 (a) v0→v1 replication 증거, (b) 본문 핵심 주장에는 필요 없지만 구현 검증에는 유용한 parameter-sensitivity 분석을 위해 유지한다. 각 항목은 **Purpose / Status / Original result / Why superseded** 네 필드로 압축한다. 그림은 `figures/legacy/`(v0 pilot 자체) 또는 `figures/appendix/`(parameter sweep)에 있다.
+> 아래는 `DelegationBench-mini`(v0, 독립적 9-task vignette, `experiments/bench.py`)를 기반으로 한 **초기 탐색 결과**다. v1(위 Experiment 1~4)이 논문 본문의 canonical 결과이며, 여기는 (a) v0→v1 replication 증거, (b) 본문 핵심 주장에는 필요 없지만 구현 검증에는 유용한 parameter-sensitivity 분석을 위해 유지한다. 각 항목은 **Purpose / Status / Original result / Why superseded** 네 필드로 압축한다. 그림 자체는 agent-connected 연구로 전환하며 repo에서 제거했다(각 항목의 caption 참고) — 수치 결과는 표/설명 텍스트에 그대로 남아 있다.
 
 ## A.1 v0 Core Ablation (replication evidence)
 
@@ -413,7 +413,7 @@ SAGE-Agent/SAGE-Bench/ChainCaps에 대한 상세 baseline 분석은 [BASELINES.m
   | 1.00 | 0.0% | 80.0% | 0.0% | 0.22 |
   | 2.00 | 0.0% | 40.0% | 0.0% | 0.00 |
 
-  ![θ sweep](../figures/appendix/fig3_theta_sweep.png)
+  _(Figure removed from the repository as part of the agent-connected research pivot — regenerable via `python experiments/plots.py` (`fig_theta`); see the table above for the numeric result.)_
 - **Why superseded.** Superseded 아님 — v1에 동등한 실험이 없어 그대로 유지한다. θ 변화는 unsafe보다 benign completion / cost / LLM rate를 움직인다는 것만 확인하면 되는 diagnostic sweep이라 legacy pilot에 남겨둔다.
 
 ## A.3 Fast / Slow / AND (SAGE-Agent baseline 비교)
@@ -430,7 +430,7 @@ SAGE-Agent/SAGE-Bench/ChainCaps에 대한 상세 baseline 분석은 [BASELINES.m
   | Slow + Joint | **0.0%** | **100.0%** | **0.0%** | 0.00 | 3.00 |
   | AND | **0.0%** | 80.0% | 20.0% | 0.11 | 4.56 |
 
-  ![Fast / Slow / AND](../figures/legacy/fig1_pilot_normal.png)
+  _(Figure removed from the repository as part of the agent-connected research pivot — this v0 legacy figure is not regenerable by any current script; the findings are preserved in the table above.)_
 - **Why superseded.** 정상 조건 성능 비교는 Experiment 1(v1)로 대체됐다. 다만 "언제 Principal review를 실제로 호출해야 하는가?"라는 질문은 최종 Optimization Layer(Experiment 3)가 Authority Feedback 관점에서 다시 다룬다.
 
 ## A.4 Semantic Adaptive Routing — Ablation Only
@@ -461,7 +461,7 @@ SAGE-Agent/SAGE-Bench/ChainCaps에 대한 상세 baseline 분석은 [BASELINES.m
   | 1–4 | clarify | 2 | 0 | 0.50 → 0.80 | 1.93 → 1.50 | 2.0 |
   | 5–7 | experience | 0 | 0 | 0.83 → 0.88 | 1.38 → 1.18 | 0.0 |
 
-  ![Semantic ExperienceStore accumulation](../figures/appendix/fig4_experience.png)
+  _(Figure removed from the repository as part of the agent-connected research pivot — this v0 legacy figure is not regenerable by any current script; the findings are preserved in the table above.)_
 - **Why superseded.** Superseded 아님 — v1에 대응 실험 없음, 구현 검증용으로 유지. Authority Flow는 semantic history와 무관하게 계속 실행된다 — 높은 semantic confidence가 authority constraint를 bypass하지 않는다.
 
 ## A.6 v0 Semantic-proposal Manipulation (cold-start)
@@ -479,7 +479,7 @@ SAGE-Agent/SAGE-Bench/ChainCaps에 대한 상세 baseline 분석은 [BASELINES.m
   | AND | **0.0%** | 0.0% | 100.0% | 3.00 |
   | Semantic Adaptive Routing | 44.4% | 0.0% | 20.0% | 0.00 |
 
-  ![Semantic-proposal manipulation](../figures/legacy/fig2_attack.png)
+  _(Figure removed from the repository as part of the agent-connected research pivot — this v0 legacy figure is not regenerable by any current script; the findings are preserved in the table above.)_
 - **Why superseded.** Experiment 1/4(v1, Full DualFlow)로 같은 질문을 canonical하게 대체했다. path-level Joint Verification만으로는 모든 resource substitution을 잡을 수 있는 것은 아니라는 점, AND는 안전하지만 매우 보수적이라는 점은 여전히 유효한 관찰로 남겨둔다.
 
 ## A.7 Reviewer Carelessness
@@ -496,7 +496,7 @@ SAGE-Agent/SAGE-Bench/ChainCaps에 대한 상세 baseline 분석은 [BASELINES.m
   | 0.75 | 35.1% | **0.0%** | 35.3% | **0.0%** |
   | 1.00 | 44.4% | **0.0%** | 44.4% | **0.0%** |
 
-  ![Reviewer carelessness](../figures/appendix/fig5_careless_reviewer.png)
+  _(Figure removed from the repository as part of the agent-connected research pivot — this v0 legacy figure is not regenerable by any current script; the findings are preserved in the table above.)_
 - **Why superseded.** Superseded 아님 — v1에 대응 실험 없음. σ=0.80일 때의 안전성은 entropy가 아니라 **semantic history gate**가 만든다는 것("entropy가 manipulation을 탐지한다"는 증거가 아님)이 핵심이라 유지한다. 정상 warmup으로 history를 만들 수 있는 task 유형에서만 검증되었다.
 
 ## A.8 Consistency Threshold
@@ -505,7 +505,7 @@ SAGE-Agent/SAGE-Bench/ChainCaps에 대한 상세 baseline 분석은 [BASELINES.m
 - **Status.** Semantic Flow ablation의 robustness 분석 — Experiment 3의 핵심 gate와는 별개.
 - **Original result.**
 
-  ![Consistency threshold sweep](../figures/appendix/fig6_consistency_sweep.png)
+  _(Figure removed from the repository as part of the agent-connected research pivot — this v0 legacy figure is not regenerable by any current script; the findings are preserved in the description below.)_
 
   consistency-aware AND가 no-consistency AND보다 **낮거나 같은** unsafe rate를 전 구간에서 유지한다 — σ=0.95(게이트 닫힘) 패널의 threshold=0.9에서는 두 방식이 44.4%로 같아진다. `consistency_sigma`가 experience score(warmup 5회 → 0.83)를 넘는 순간부터는 일관성 검사 자체가 꺼지기 때문이다(`s < thr` 조건).
 - **Why superseded.** Superseded 아님 — 기본값 0.6이 우연이 아니라는 근거로 유지한다. "값을 낮게 줄수록 항상 이득"이라는 뜻은 아니다.
