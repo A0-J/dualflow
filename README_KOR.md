@@ -345,6 +345,7 @@ SAGE-Agent 비교 baseline(`experiments/baselines/sage.py`)과 v0/mini-set bench
 - [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) — 통제된 실험과 과거 pilot 결과
 - [`docs/BASELINES.md`](docs/BASELINES.md) — baseline 노트
 - [`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md) — 구현·연구 설계 노트
+- [`docs/experiments/agent_connected_eval.md`](docs/experiments/agent_connected_eval.md) — 실제 LLM 기반 agent-connected 평가 로그(B7a 이후), 예상 밖/부정적 결과 포함
 
 일부 문서는 아직 agent-pair 이전 구현을 반영하고 있으며, 이번 리팩터의 일부로 갱신 중이다.
 
