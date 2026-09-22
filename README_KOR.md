@@ -214,7 +214,10 @@ experiments/
 ├── demo.py
 ├── benchmark.py
 ├── entropy_probe.py
-└── plots.py
+├── plots.py
+├── bench.py
+└── baselines/
+    └── sage.py
 ```
 
 ### `demo.py`
@@ -231,7 +234,15 @@ semantic uncertainty 동작을 보는 독립 진단 실험.
 
 ### `plots.py`
 
-유지 중인 실험 그림을 생성한다. plotting은 `dualflow` package와 분리돼 있어 core 구현이 시각화 코드에 의존하지 않는다.
+유지 중인 실험 그림을 생성한다. plotting은 `dualflow` package와 분리돼 있어 core 구현이 시각화 코드에 의존하지 않는다. `bench.py`/`benchmark.py`를 `dualflow` package가 아니라 sibling 스크립트로 import한다.
+
+### `bench.py`
+
+하나의 legacy 파일이 아니라 두 가지 역할을 겸한다. `build_tasks()`가 정의하는 9-task pilot set은 superseded v0 benchmark다(`experiments/benchmark.py`가 canonical 대체제) — 반면 `scope_negotiation_tasks()` / `scope_negotiation_sequence()`는 지금도 Authority Feedback·Adaptive Authority 실험의 canonical 데이터 소스다. 정확한 대응은 `docs/EXPERIMENTS.md` §1.1 참고.
+
+### `baselines/sage.py`
+
+SAGE-Agent 논문의 Algorithm 1을 재현한 비교 baseline이다. `dualflow` core package의 일부가 아니다 — `framework.py`는 이 모듈을 전혀 모르고, 오직 범용 `Config.semantic_engine` 주입 훅을 통해 `as_semantic_engine()`으로만 연결된다.
 
 더 이상 main 평가에 포함되지 않는 과거 pilot/진단 결과는 `docs/EXPERIMENTS.md`에 기록돼 있다.
 
@@ -247,14 +258,16 @@ src/dualflow/
 ├── rule_engine.py
 ├── framework.py
 ├── llm.py
-├── sage_baseline.py
 └── ...
 
 experiments/
 ├── demo.py
 ├── benchmark.py
 ├── entropy_probe.py
-└── plots.py
+├── plots.py
+├── bench.py
+└── baselines/
+    └── sage.py
 
 docs/
 tests/
@@ -271,9 +284,8 @@ figures/
 | `rule_engine.py` | 결정론적 structured-intent compatibility 검사 |
 | `framework.py` | End-to-end orchestration과 결정론적 fusion |
 | `llm.py` | 모델을 향한 인터페이스/어댑터 |
-| `sage_baseline.py` | SAGE-Agent 비교 구현 |
 
-리팩터 브랜치에 `bench.py`가 아직 남아 있다면, 이건 legacy v0 benchmark 스캐폴딩이고 canonical benchmark가 **아니다**. canonical 실험 진입점은 `experiments/benchmark.py`다.
+SAGE-Agent 비교 baseline(`experiments/baselines/sage.py`)과 v0/mini-set benchmark 스캐폴딩(`experiments/bench.py`)은 `src/dualflow/`가 아니라 `experiments/` 아래에 있다 — 둘 다 core package가 아니다. 위 [실험](#실험) 항목 참고.
 
 ---
 

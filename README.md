@@ -214,7 +214,10 @@ experiments/
 ├── demo.py
 ├── benchmark.py
 ├── entropy_probe.py
-└── plots.py
+├── plots.py
+├── bench.py
+└── baselines/
+    └── sage.py
 ```
 
 ### `demo.py`
@@ -231,7 +234,15 @@ Focused diagnostic experiment for semantic uncertainty behavior.
 
 ### `plots.py`
 
-Generates the retained experiment figures. Plotting is separated from the `dualflow` package so the core implementation does not depend on visualization code.
+Generates the retained experiment figures. Plotting is separated from the `dualflow` package so the core implementation does not depend on visualization code. It imports `bench.py` and `benchmark.py` as sibling scripts, not from the `dualflow` package.
+
+### `bench.py`
+
+Not a single legacy file — it serves two different roles. `build_tasks()` and the 9-task pilot set it defines are the superseded v0 benchmark (`experiments/benchmark.py` is the canonical replacement); `scope_negotiation_tasks()` / `scope_negotiation_sequence()`, by contrast, are still the current canonical data source for the Authority Feedback and Adaptive Authority experiments. See `docs/EXPERIMENTS.md` §1.1 for the exact mapping.
+
+### `baselines/sage.py`
+
+Reproduces the SAGE-Agent paper's Algorithm 1 as a comparison baseline. It is not part of the `dualflow` core package — `framework.py` has no dependency on it and only knows it through the generic `Config.semantic_engine` injection hook, via `as_semantic_engine()`.
 
 Historical pilot and diagnostic results that are no longer part of the main evaluation are documented in `docs/EXPERIMENTS.md`.
 
@@ -247,14 +258,16 @@ src/dualflow/
 ├── rule_engine.py
 ├── framework.py
 ├── llm.py
-├── sage_baseline.py
 └── ...
 
 experiments/
 ├── demo.py
 ├── benchmark.py
 ├── entropy_probe.py
-└── plots.py
+├── plots.py
+├── bench.py
+└── baselines/
+    └── sage.py
 
 docs/
 tests/
@@ -271,9 +284,8 @@ figures/
 | `rule_engine.py` | Deterministic structured-intent compatibility checks |
 | `framework.py` | End-to-end orchestration and deterministic fusion |
 | `llm.py` | Model-facing interfaces / adapters |
-| `sage_baseline.py` | SAGE-Agent comparison implementation |
 
-`bench.py`, if still present on the refactor branch, is legacy v0 benchmark scaffolding and is **not** the canonical benchmark. The canonical experiment entry point is `experiments/benchmark.py`.
+The SAGE-Agent comparison baseline (`experiments/baselines/sage.py`) and the v0/mini-set benchmark scaffolding (`experiments/bench.py`) live under `experiments/`, not `src/dualflow/` — neither is part of the core package. See [Experiments](#experiments) above.
 
 ---
 
