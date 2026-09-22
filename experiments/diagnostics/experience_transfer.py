@@ -102,12 +102,12 @@ When producing a structured action:
 
 # --------------------------------------------------------------------------
 # Condition E's neutral history block -- structurally similar shape to
-# ExperienceAwareDelegate's real _render_experience_block() output (header +
-# "Example 1" + body + "Current environment context" trailer), but with no
-# action/resource label, no delegation text, no clarification-answer
-# content. This is scenario-independent by design (it must not vary with
-# what the real historical episode said) -- kept as a fixed template here,
-# not read from the scenario file.
+# ExperienceAwareDelegate's real renderer output (render_experience_block_v1/
+# _v2: header + "Example 1" + body + "Current environment context" trailer),
+# but with no action/resource label, no delegation text, no
+# clarification-answer content. This is scenario-independent by design (it
+# must not vary with what the real historical episode said) -- kept as a
+# fixed template here, not read from the scenario file.
 # --------------------------------------------------------------------------
 _NEUTRAL_HEADER = (
     "Verified prior interactions with this Principal in this workflow. "
