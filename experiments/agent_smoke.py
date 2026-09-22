@@ -10,6 +10,7 @@ repeated/statistical experiments.
     python experiments/agent_smoke.py --role runtime
     python experiments/agent_smoke.py --role sample [--n 10]
     python experiments/agent_smoke.py --role clarify [--n 10] [--entropy-threshold 0.8]
+    python experiments/agent_smoke.py --role experience [--n 10]
 
 Role separation (do not blur these):
     experiments/agent_smoke.py     <- this file. One canned scenario,
@@ -61,6 +62,19 @@ before/after entropy change is directly visible. Still no experience
 store — every run is independent, nothing is remembered between
 invocations.
 
+--role experience calls dualflow.experience_aware_delegate.
+ExperienceAwareDelegate.sample_candidates() (B7d) twice for the SAME
+current (September) delegation: once against an empty experience store,
+once against a store pre-seeded with one canned prior verified
+experience (a confirmed August "summarize" outcome for the same
+Principal/workflow, shaped like a real B7b pilot run). Prints both
+candidate distributions and the resulting entropy delta. No
+clarification happens in this comparison — the point is to isolate
+experience's effect on the INITIAL distribution, before any question
+would even be asked. The prior experience's own August scope never
+leaks into the September episode's context; only the semantic pattern
+(recurring action/resource) is shown to the Delegate as history.
+
 This script is not part of the DualFlow core package — it uses the
 installed package like any other caller would (`pip install -e ".[agent]"`
 from the repository root, then run as above).
@@ -75,8 +89,10 @@ import sys
 from dualflow.agent_runtime import AgentDelegationRuntime, AgentRuntimeResult
 from dualflow.authority_feedback import AuthorityVerdict, AuthorityVerifierAgent
 from dualflow.capability import Budget, Privilege
+from dualflow.agent_experience import AgentExperience, AgentExperienceStore
 from dualflow.clarification import ClarificationResult, ClarifyingDelegate
 from dualflow.delegate_agent import CandidateDistribution, DelegateAgent, DelegateProposal
+from dualflow.experience_aware_delegate import ExperienceAwareDelegate
 from dualflow.llm import LLMResponse, OpenAILLMClient
 from dualflow.principal_agent import PrincipalAgent, PrincipalDelegation, PrincipalIntent
 from dualflow.semantic import Interpretation, SemanticVerdict, SemanticVerifierAgent
@@ -169,6 +185,62 @@ EXAMPLE_MISREAD_PROPOSAL = Interpretation("export", "file", "/reports/2026-08/",
 # model-backed path actually calls the LLM once. --role all is unaffected:
 # it always uses DelegateAgent's real proposal, never this constant.
 EXAMPLE_SCOPE_EXCEEDED_PROPOSAL = Interpretation("read", "file", "/reports/", frozenset())
+
+# B7d: a later, September episode for the same Principal/workflow, to compare
+# against a prior verified (August) experience. Resource/scope are re-pinned
+# to September on purpose — the whole point is to check that the OLD (August)
+# scope from the experience never leaks into this episode's own scope.
+EXAMPLE_PRINCIPAL_ID = "finance_lead_A"
+EXAMPLE_TASK_CATEGORY = "external_audit_report"
+EXAMPLE_CURRENT_DELEGATION = ("Please prepare the September 2026 financial report "
+                              "for the external audit.")
+EXAMPLE_CURRENT_CONTEXT = """\
+Reference date: 2026-09-23.
+
+Environment:
+- Financial reports are represented as resource type "file".
+- Report root: /reports/.
+- The September 2026 report is located at /reports/2026-09/.
+- "this month" means September 2026.
+
+Allowed action vocabulary:
+- read
+- summarize
+- export
+
+Allowed resource vocabulary:
+- file
+
+Allowed scope vocabulary:
+- /reports/2026-09/
+- /reports/
+
+When producing a structured action:
+- choose exactly one ACTION from the allowed action vocabulary;
+- choose exactly one RESOURCE from the allowed resource vocabulary;
+- choose exactly one listed SCOPE;
+- do not invent aliases or combine multiple actions."""
+
+_AUG_SUMMARIZE = Interpretation("summarize", "file", "/reports/2026-08/", frozenset())
+_AUG_EXPORT = Interpretation("export", "file", "/reports/2026-08/", frozenset())
+# Mirrors run 4 of the real B7b pilot (see the B7b commit report): export
+# 0.60 / summarize 0.40 (H=0.971) before clarification, converging to
+# summarize 1.00 (H=0.000) after Principal confirmed "summarize only".
+EXAMPLE_PRIOR_EXPERIENCE = AgentExperience(
+    principal_id=EXAMPLE_PRINCIPAL_ID, task_category=EXAMPLE_TASK_CATEGORY,
+    delegation="Please prepare the August 2026 financial report for the external audit.",
+    clarification_question=("Should I export the August 2026 financial report as a file, "
+                            "or would you prefer a summary of the report instead?"),
+    principal_answer="Please summarize the August 2026 financial report.",
+    confirmed_interpretation=_AUG_SUMMARIZE,
+    pre_distribution=CandidateDistribution(
+        belief={_AUG_EXPORT: 0.6, _AUG_SUMMARIZE: 0.4}, entropy=0.971, top=_AUG_EXPORT,
+        top_probability=0.6, n_unique=2, n_samples=10, responses=[]),
+    post_distribution=CandidateDistribution(
+        belief={_AUG_SUMMARIZE: 1.0}, entropy=0.0, top=_AUG_SUMMARIZE,
+        top_probability=1.0, n_unique=1, n_samples=10, responses=[]),
+    episode_id="pilot_august",
+)
 
 
 def _fmt_interpretation(i: Interpretation) -> str:
@@ -366,6 +438,63 @@ def run_clarify(llm_client, goal: str = EXAMPLE_GOAL, context: str = EXAMPLE_CON
     return result
 
 
+def run_experience(llm_client, principal_id: str = EXAMPLE_PRINCIPAL_ID,
+                   task_category: str = EXAMPLE_TASK_CATEGORY,
+                   delegation: str = EXAMPLE_CURRENT_DELEGATION,
+                   context: str = EXAMPLE_CURRENT_CONTEXT, n: int = 10) -> None:
+    """B7d — ExperienceAwareDelegate.sample_candidates()를 그대로
+    호출한다. 비교 로직(경험 없음 vs 있음)을 여기서 다시 구현하지 않는다
+    — 같은 현재 episode를 두 개의 서로 다른 store(비어있는 것/채워진 것)
+    로 각각 한 번씩 호출해서 실제 결과를 그대로 보여줄 뿐이다.
+    clarification은 이 비교에 포함하지 않는다 — entropy에 대한 experience
+    자체의 순수 효과만 분리해서 보려는 목적이다."""
+    print("############################################################")
+    print(f"# ExperienceAwareDelegate.sample_candidates() — B7d, N={n}")
+    print("############################################################\n")
+
+    print("Current delegation:")
+    print(delegation)
+    print()
+
+    empty_store = AgentExperienceStore()
+    without_wrapped = ExperienceAwareDelegate(DelegateAgent(llm=llm_client), empty_store)
+    without = without_wrapped.sample_candidates(
+        principal_id=principal_id, task_category=task_category,
+        delegation=delegation, context=context, n=n)
+
+    print("=== WITHOUT experience ===\n")
+    print(f"Experiences retrieved: {without.experience_count}")
+    _print_distribution(without.distribution, n)
+    print()
+    _print_call_stats(without.distribution.responses)
+    print()
+
+    filled_store = AgentExperienceStore()
+    filled_store.add(EXAMPLE_PRIOR_EXPERIENCE)
+    with_wrapped = ExperienceAwareDelegate(DelegateAgent(llm=llm_client), filled_store)
+    with_exp = with_wrapped.sample_candidates(
+        principal_id=principal_id, task_category=task_category,
+        delegation=delegation, context=context, n=n)
+
+    print("=== WITH 1 verified experience ===\n")
+    print(f"Experiences retrieved: {with_exp.experience_count}")
+    for exp in with_exp.experiences_used:
+        print(f"  - {exp.episode_id}: {exp.delegation!r} -> "
+             f"{exp.confirmed_interpretation.action}:{exp.confirmed_interpretation.resource} "
+             f"(confirmed via: {exp.principal_answer!r})")
+    print()
+    _print_distribution(with_exp.distribution, n)
+    print()
+    _print_call_stats(with_exp.distribution.responses)
+    print()
+
+    print("=== Entropy reduction ===\n")
+    delta = without.distribution.entropy - with_exp.distribution.entropy
+    print(f"H_without = {without.distribution.entropy:.3f} bits")
+    print(f"H_with    = {with_exp.distribution.entropy:.3f} bits")
+    print(f"delta H   = {delta:.3f} bits")
+
+
 def run_semantic(llm_client, delegation: str = EXAMPLE_DELEGATION,
                  proposal: Interpretation = EXAMPLE_MISREAD_PROPOSAL) -> SemanticVerdict:
     print("=== SemanticVerifierAgent ===\n")
@@ -535,12 +664,12 @@ def main(argv: list[str] | None = None) -> int:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--role", required=True,
                    choices=["principal", "delegate", "semantic", "authority",
-                            "all", "runtime", "sample", "clarify"])
+                            "all", "runtime", "sample", "clarify", "experience"])
     p.add_argument("--model", default="gpt-4o-mini")
     p.add_argument("--n", type=int, default=10,
-                   help="--role sample/clarify only: number of independent "
-                        "completions to draw per distribution (default 10, "
-                        "matching B7a/B7b's pilot default).")
+                   help="--role sample/clarify/experience only: number of "
+                        "independent completions to draw per distribution "
+                        "(default 10, matching B7a/B7b/B7d's pilot default).")
     p.add_argument("--entropy-threshold", type=float, default=0.8,
                    help="--role clarify only: entropy (bits) above which a "
                         "clarifying question is asked (default 0.8 -- a pilot "
@@ -563,6 +692,8 @@ def main(argv: list[str] | None = None) -> int:
         run_sample(llm_client, n=args.n)
     elif args.role == "clarify":
         run_clarify(llm_client, n=args.n, entropy_threshold=args.entropy_threshold)
+    elif args.role == "experience":
+        run_experience(llm_client, n=args.n)
     else:
         run_all(llm_client)
     return 0
