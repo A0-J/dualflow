@@ -13,7 +13,7 @@ cover the earlier core refactor or controlled-benchmark history — see
 Negative and unexpected results are kept here deliberately, not cleaned up —
 they are exactly what motivated later design decisions (most notably,
 separating "uncertainty" from "semantic alignment" as two independent
-metrics; see §10).
+metrics; see §11).
 
 ## 1. Experimental Goal
 
@@ -160,7 +160,7 @@ However, Run 1 revealed an important boundary case: `export=0.80,
 summarize=0.20, H=0.722`. Since the entropy was below the pilot threshold,
 clarification was skipped and export was selected. Therefore: **low
 entropy does not imply semantic correctness.** This motivated separating
-uncertainty from semantic alignment in later experiments (§10).
+uncertainty from semantic alignment in later experiments (§11).
 
 ## 5. B7c — Verified Experience Storage
 
@@ -287,7 +287,85 @@ Please export the August 2026 financial report.
 Please read the August 2026 financial report.
 ```
 
-## 10. Key Experimental Lesson
+## 10. B7d.2 — Structure-Only Control
+
+To distinguish semantic transfer from prompt/history-block priming, a fifth
+condition was added, and the read condition's wording was made parallel to
+summarize/export's (per §9's caveat: `"Please read the August 2026
+financial report."`, no extra clause).
+
+Conditions (same current September episode in every condition):
+
+- **A.** No experience
+- **B.** Confirmed action = `summarize`
+- **C.** Confirmed action = `export`
+- **D.** Confirmed action = `read` (now wording-symmetric with B/C)
+- **E.** A neutral historical block with no action semantics at all — it
+  states only that a prior interaction with this Principal/workflow
+  existed, was clarified and confirmed, and that the current delegation
+  and environment always take precedence. It names no action, no resource,
+  and repeats none of the old delegation's content.
+
+Each condition: N=20 samples, 5 independent repetitions. Total: 5
+conditions × 20 samples × 5 runs = **500 real API calls**.
+
+### Aggregate results
+
+| Condition | Mean H | P(summarize) | P(export) | P(read) | Top-1 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| No experience | 0.673 | 0.20 | 0.80 | 0.00 | export 5/5 |
+| summarize experience | 0.000 | 0.00 | 1.00 | 0.00 | export 5/5 |
+| export experience | 0.000 | 0.00 | 1.00 | 0.00 | export 5/5 |
+| read experience (parallel wording) | 0.980 | 0.50 | 0.50 | 0.00 | summarize 3/5, export 2/5 |
+| neutral history (structure-only) | 0.114 | 0.02 | 0.98 | 0.00 | export 5/5 |
+
+All 500 samples again preserved `SCOPE=/reports/2026-09/`.
+
+### Explicit comparisons
+
+- **B vs. C** — identical for a second time (5/5 runs each at
+  `H=0.000, P(export)=1.00`). Reconfirms that the summarize/export label
+  itself is not what the model is reacting to.
+- **B vs. D / C vs. D** — clearly different: B/C fully collapse to export;
+  D sits near maximum two-way entropy (0.980), split roughly evenly
+  between summarize and export, and its own top-1 is not even stable
+  across the 5 repetitions (3 summarize, 2 export) — the only condition
+  with that instability.
+- **A vs. E** — clearly different: E's entropy (0.114) and P(export)
+  (0.98) are far more concentrated than baseline A (0.673, 0.80), despite
+  E containing zero action-level semantic content.
+- **E vs. B/C** — E tracks B/C far more closely than it tracks A (P(export)
+  0.98 vs. B/C's 1.00, vs. A's 0.80).
+
+### Main observation
+
+The neutral historical block (E) produced nearly the same behavior as the
+summarize/export experience blocks (B/C). Therefore, the strong entropy
+reduction observed in B7d cannot be interpreted as successful transfer of
+the Principal-confirmed semantic action — the presence/format of a
+historical-context block by itself strongly pushed the Delegate toward its
+own pre-existing export-leaning interpretation.
+
+The `read` condition shows the model is not entirely content-blind — D
+changed the distribution substantially relative to B/C/E — but not in the
+direction of adopting `read`; instead it increased uncertainty between
+summarize and export. So content has *some* effect, just not the intended
+"adopt the confirmed action" effect.
+
+Combined with the D-condition re-run: making the wording parallel changed
+the read condition substantially (previously P(summarize)=0.70 with a
+non-parallel answer; now P(summarize)=0.50 with parallel wording),
+confirming that part of the original B7d.1 read result was a wording
+confound, not a pure content effect.
+
+### Key lesson
+
+Entropy reduction and semantic alignment must be evaluated separately. A
+lower entropy can indicate *stronger confidence in an interpretation that
+is less aligned with the Principal-confirmed intent* — exactly what B/C/E
+show relative to the Principal's actual confirmed `summarize` outcome.
+
+## 11. Key Experimental Lesson
 
 B7d demonstrates that the following two quantities must be evaluated
 **separately**:
@@ -299,9 +377,11 @@ B7d demonstrates that the following two quantities must be evaluated
 The experiment demonstrated that **entropy decrease ≠ semantic correctness
 improvement**. For example, `H: 0.644 -> 0.000` can occur while
 `P(summarize): 0.17 -> 0.00`. Entropy alone cannot be used as evidence that
-experience improves semantic understanding.
+experience improves semantic understanding. §10's structure-only control
+reconfirms this with a second, independent 500-call diagnostic and pins the
+likely mechanism down further: concentration without correct transfer.
 
-## 11. Current Interpretation
+## 12. Current Interpretation
 
 The current implementation successfully demonstrates:
 
@@ -310,17 +390,24 @@ The current implementation successfully demonstrates:
 - isolation of semantic experience from authority,
 - candidate-distribution concentration after historical context is added.
 
-However, the current experiment does **not** demonstrate successful
-transfer of the Principal-confirmed semantic action.
+However, across two independent diagnostics (§7 B7d.1, §10 B7d.2 — 900
+real API calls total), the experiment does **not** demonstrate successful
+transfer of the Principal-confirmed semantic action. The dominant effect
+is best explained as **prompt/history-block priming toward the model's own
+pre-existing interpretation** rather than Principal-specific semantic
+learning: the neutral, content-free control (Condition E) tracked the
+labeled summarize/export conditions far more closely than it tracked the
+no-experience baseline. The read condition shows the mechanism is not
+purely content-blind, but its content-sensitivity does not currently take
+the form of "adopt the confirmed action."
 
-At this stage, the observed entropy reduction may reflect prompt/context
-priming, the mere presence of a historical-example block, formatting
-effects, or the model's own prior for the current delegation — rather than
-successful Principal-specific semantic learning. These explanations remain
-hypotheses and have not yet been isolated (Condition E, a structure-only/
-neutral-history control, is the planned next step for separating them).
+**Conclusion: the current experience representation (a bare
+`ACTION=<x> RESOURCE=<y>` label per historical example) is an inadequate
+design for semantic-pattern transfer and needs to be redesigned (B7d.3)
+before any sequential multi-episode evaluation (B7e) would be
+meaningful.**
 
-## 12. Known Experimental Caveats
+## 13. Known Experimental Caveats
 
 - **Closed action ontology** — current entropy is measured over
   `read`/`summarize`/`export`, not arbitrary free-form Agent actions (§2).
@@ -329,15 +416,17 @@ neutral-history control, is the planned next step for separating them).
 - **Small early pilots** — B7a/B7b/B7d initial experiments used five
   repetitions and should be interpreted as pilot results, not statistically
   powered conclusions.
-- **Experience representation** — the current historical-example format
-  has not yet been shown to transfer the semantic meaning of the confirmed
-  action (§8).
+- **Experience representation is confirmed inadequate** — not merely
+  "unproven" (§8, §10) — the structure-only control isolates prompt/format
+  priming as the dominant effect, not semantic content.
 - **Entropy is not correctness** — a concentrated candidate distribution
-  can still be concentrated on an incorrect interpretation.
-- **D-condition wording confound** — see §9; do not draw strong conclusions
-  from the read-experience result until re-run with parallel phrasing.
+  can still be concentrated on an incorrect interpretation; this is the
+  central finding of B7d/B7d.1/B7d.2, not just a caveat.
+- ~~D-condition wording confound~~ — resolved in §10: re-run with parallel
+  wording still shows D diverging from B/C (P(summarize) 0.50 vs. B/C's
+  0.00), so content sensitivity is real, just not correctly directed.
 
-## 13. Current Status
+## 14. Current Status
 
 | Item | Status |
 | --- | --- |
@@ -348,13 +437,40 @@ neutral-history control, is the planned next step for separating them).
 | Verified experience storage (B7c) | complete |
 | Experience-aware sampling (B7d) | complete |
 | Semantic-transfer diagnostic (B7d.1) | complete |
-| Experience semantics | **unresolved** |
+| Structure-only control (B7d.2) | complete |
+| Experience representation | **confirmed inadequate — redesign needed** |
+| Experience representation redesign (B7d.3) | not started |
 | Sequential experience evaluation (B7e) | not started |
 
-The sequential multi-episode experiment (B7e) is intentionally postponed
-until the semantic-transfer behavior of the experience mechanism is better
-understood — planned next steps are a structure-only control condition
-(Condition E) and a wording-symmetric re-run of the read condition, followed
-by revisiting the experience prompt's framing (currently weighted heavily
-toward "never override the current request," possibly under-weighting "use
-history to resolve genuine ambiguity") before any B7d.2 redesign.
+The sequential multi-episode experiment (B7e) stays intentionally
+postponed. The next step is B7d.3: redesign the experience representation
+so it presents ambiguity → clarification → confirmed-meaning as a
+relationship, not a bare action label — conceptually:
+
+```
+Previous ambiguous delegation:
+"Prepare the August report for the external audit."
+
+Principal clarification:
+"Please summarize it. Do not export it."
+
+Confirmed interpretation:
+summarize
+```
+
+together with instructions that frame history as evidence for resolving
+*current* ambiguity, not as a fallback the current request can be
+defaulted to. B7d.3 must not be declared successful based on entropy
+reduction alone. Its success criterion is two-part, tested against two
+different current tasks in the same small comparison (A. no experience,
+B. old representation, C. redesigned representation):
+
+- **Ambiguous task** ("Please prepare the September report for the
+  external audit.") — `P(Principal-confirmed recurring intent)` should
+  increase, and `H` should decrease or stay flat.
+- **Explicit-change task** ("This time, export the September report to
+  the external auditor.") — `P(current explicit action)` must stay high;
+  the prior summarize experience must not override an explicit current
+  instruction.
+
+B7d.3 only counts as progress if both conditions hold simultaneously.
