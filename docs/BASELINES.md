@@ -2,8 +2,8 @@
 
 > **Status: Supporting / exploratory baseline analysis.** 이 문서는 DualFlow의
 > 핵심 결과([EXPERIMENTS.md](EXPERIMENTS.md) Experiment 1–4)가 아니다 — SAGE-Agent
-> 베이스라인을 독립적으로 재현하고, 그 과정에서 v1 controlled benchmark(`bench_single_env_v1`)가
-> 아니라 v0(`bench.py`, legacy) pilot에 대고 비교한 결과다. 논문의 핵심 주장은
+> 베이스라인을 독립적으로 재현하고, 그 과정에서 v1 canonical benchmark(`experiments/benchmark.py`)가
+> 아니라 v0(`experiments/bench.py`의 9-task pilot, superseded)에 대고 비교한 결과다. 논문의 핵심 주장은
 > [EXPERIMENTS.md](EXPERIMENTS.md)를 참고할 것.
 
 이 문서는 DualFlow에서 사용하는 비교 베이스라인과 선행 연구의 역할을 정리한다.  
