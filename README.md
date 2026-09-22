@@ -345,6 +345,7 @@ The current repository should not yet be read as evidence of production-ready mu
 - [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) — controlled experiments and historical pilot results
 - [`docs/BASELINES.md`](docs/BASELINES.md) — baseline notes
 - [`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md) — implementation and research design notes
+- [`docs/experiments/agent_connected_eval.md`](docs/experiments/agent_connected_eval.md) — real-LLM agent-connected evaluation log (B7a onward), including unexpected/negative results
 
 Some documentation still reflects the pre-agent-pair implementation and is being updated as part of the refactor.
 
