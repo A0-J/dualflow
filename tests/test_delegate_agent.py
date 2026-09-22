@@ -258,3 +258,62 @@ class TestSampleCandidates:
             lowered = name.lower()
             assert not any(f in lowered for f in forbidden), (
                 f"sample_candidates has a suspicious parameter: {name}")
+
+
+class TestAskClarification:
+    """`ask_clarification()` — B7b. entropy 판단은 이 메서드의 책임이
+    아니다(호출하는 쪽이 이미 판단하고 부른다는 전제) — 여기서는 주어진
+    분포로 질문 하나를 만드는 것만 검증한다."""
+
+    def test_calls_llm_exactly_once(self):
+        from dualflow.delegate_agent import ClarificationQuestion
+
+        fake = _FakeLLMClient([LLMResponse(text="Internal summary or export?")])
+        agent = DelegateAgent(llm=fake)
+        dist = _distribution({"summarize": 0.6, "export": 0.4}, entropy_value=0.97)
+
+        result = agent.ask_clarification(delegation="Please prepare the report.",
+                                         distribution=dist)
+
+        assert isinstance(result, ClarificationQuestion)
+        assert result.question == "Internal summary or export?"
+        assert len(fake.calls) == 1
+        assert result.entropy == 0.97
+
+    def test_input_shows_delegation_and_candidate_frequencies(self):
+        fake = _FakeLLMClient([LLMResponse(text="?")])
+        agent = DelegateAgent(llm=fake)
+        dist = _distribution({"summarize": 0.6, "export": 0.4}, entropy_value=0.97)
+
+        agent.ask_clarification(delegation="Please prepare the report.",
+                                distribution=dist, context="my context")
+
+        input_text = fake.calls[0]["input_text"]
+        assert "Please prepare the report." in input_text
+        assert "my context" in input_text
+        assert "summarize" in input_text and "export" in input_text
+        assert "0.60" in input_text and "0.40" in input_text
+
+    def test_no_forbidden_parameter_in_signature(self):
+        forbidden = ("truth", "ground_truth", "label", "verdict",
+                     "intent", "principal", "authority", "semantic")
+        sig = inspect.signature(DelegateAgent.ask_clarification)
+        for name in sig.parameters:
+            lowered = name.lower()
+            assert not any(f in lowered for f in forbidden), (
+                f"ask_clarification has a suspicious parameter: {name}")
+
+
+def _distribution(action_probs: dict, entropy_value: float):
+    """`ask_clarification()` 단위 테스트용 최소 `CandidateDistribution`.
+    실제 sampling 없이 belief만 직접 구성한다."""
+    from dualflow.delegate_agent import CandidateDistribution
+
+    belief = {
+        Interpretation(action, "file", "/reports/2026-08/", frozenset()): p
+        for action, p in action_probs.items()
+    }
+    top = max(belief, key=lambda i: belief[i])
+    return CandidateDistribution(
+        belief=belief, entropy=entropy_value, top=top, top_probability=belief[top],
+        n_unique=len(belief), n_samples=10, responses=[])

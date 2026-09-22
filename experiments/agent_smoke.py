@@ -9,6 +9,7 @@ repeated/statistical experiments.
     python experiments/agent_smoke.py --role all
     python experiments/agent_smoke.py --role runtime
     python experiments/agent_smoke.py --role sample [--n 10]
+    python experiments/agent_smoke.py --role clarify [--n 10] [--entropy-threshold 0.8]
 
 Role separation (do not blur these):
     experiments/agent_smoke.py     <- this file. One canned scenario,
@@ -50,6 +51,16 @@ real model, whether DelegateAgent genuinely disagrees with itself across
 independent calls before any clarification/experience logic gets built
 on top of that signal.
 
+--role clarify calls dualflow.clarification.ClarifyingDelegate.resolve()
+(B7b) — a thin wrapper, same discipline as --role runtime: this script
+never reimplements the clarification decision rule itself. Draws a
+pre-clarification candidate distribution; if its entropy exceeds
+--entropy-threshold, asks Agent A one clarifying question, gets a real
+answer, and re-samples. Prints both distributions side by side so the
+before/after entropy change is directly visible. Still no experience
+store — every run is independent, nothing is remembered between
+invocations.
+
 This script is not part of the DualFlow core package — it uses the
 installed package like any other caller would (`pip install -e ".[agent]"`
 from the repository root, then run as above).
@@ -63,6 +74,7 @@ import sys
 from dualflow.agent_runtime import AgentDelegationRuntime, AgentRuntimeResult
 from dualflow.authority_feedback import AuthorityVerdict, AuthorityVerifierAgent
 from dualflow.capability import Budget, Privilege
+from dualflow.clarification import ClarificationResult, ClarifyingDelegate
 from dualflow.delegate_agent import CandidateDistribution, DelegateAgent, DelegateProposal
 from dualflow.llm import LLMResponse, OpenAILLMClient
 from dualflow.principal_agent import PrincipalAgent, PrincipalDelegation, PrincipalIntent
@@ -257,6 +269,16 @@ def run_delegate(llm_client, delegation: str = EXAMPLE_DELEGATION) -> DelegatePr
     return proposal
 
 
+def _print_distribution(dist: CandidateDistribution, n: int) -> None:
+    print(f"Candidate distribution ({dist.n_samples}/{n} parsed, {dist.n_unique} unique):")
+    for interp, p in sorted(dist.belief.items(), key=lambda kv: -kv[1]):
+        marker = "  <- top" if interp == dist.top else ""
+        print(f"  {p:.2f}  {_fmt_interpretation_oneline(interp)}{marker}")
+    print()
+    print(f"Entropy: {dist.entropy:.3f} bits")
+    print(f"Top-1: {_fmt_interpretation_oneline(dist.top)}  (p={dist.top_probability:.2f})")
+
+
 def run_sample(llm_client, delegation: str = EXAMPLE_AMBIGUOUS_DELEGATION,
                context: str = EXAMPLE_CONTEXT, n: int = 10) -> CandidateDistribution:
     """B7a — DelegateAgent.sample_candidates()를 그대로 호출한다. 아직
@@ -273,19 +295,68 @@ def run_sample(llm_client, delegation: str = EXAMPLE_AMBIGUOUS_DELEGATION,
     print(delegation)
     print()
 
-    print(f"Candidate distribution ({dist.n_samples}/{n} parsed, "
-         f"{dist.n_unique} unique):")
-    for interp, p in sorted(dist.belief.items(), key=lambda kv: -kv[1]):
-        marker = "  <- top" if interp == dist.top else ""
-        print(f"  {p:.2f}  {_fmt_interpretation_oneline(interp)}{marker}")
-    print()
-
-    print(f"Entropy: {dist.entropy:.3f} bits")
-    print(f"Top-1: {_fmt_interpretation_oneline(dist.top)}  (p={dist.top_probability:.2f})")
+    _print_distribution(dist, n)
     print()
 
     _print_call_stats(dist.responses)
     return dist
+
+
+def run_clarify(llm_client, goal: str = EXAMPLE_GOAL, context: str = EXAMPLE_CONTEXT,
+                delegation: str = EXAMPLE_AMBIGUOUS_DELEGATION, n: int = 10,
+                entropy_threshold: float = 0.8) -> ClarificationResult:
+    """B7b — ClarifyingDelegate.resolve()를 그대로 호출한다. clarification
+    판단/질문 생성/답변 반영 로직을 여기서 다시 구현하지 않는다 — 실제
+    B7b 구현이 만든 결과를 출력만 한다. 아직 경험 저장/조회는 없다: 이
+    호출은 매번 완전히 독립적이다."""
+    print("############################################################")
+    print(f"# ClarifyingDelegate.resolve() — B7b, N={n}, "
+         f"entropy_threshold={entropy_threshold}")
+    print("############################################################\n")
+
+    clarifier = ClarifyingDelegate(
+        principal=PrincipalAgent(llm=llm_client), delegate=DelegateAgent(llm=llm_client),
+        n=n, entropy_threshold=entropy_threshold)
+    result = clarifier.resolve(goal=goal, context=context, delegation=delegation)
+
+    print("Delegation:")
+    print(delegation)
+    print()
+
+    print("Pre-clarification distribution:")
+    _print_distribution(result.pre_distribution, n)
+    print()
+
+    if not result.clarified:
+        print(f"Clarification triggered: no (entropy {result.pre_distribution.entropy:.3f} "
+             f"<= threshold {entropy_threshold})")
+        print()
+    else:
+        print(f"Clarification triggered: yes (entropy {result.pre_distribution.entropy:.3f} "
+             f"> threshold {entropy_threshold})")
+        print()
+        print("Question:")
+        print(result.question.question)
+        print()
+        print("Principal answer:")
+        print(result.answer.answer)
+        print()
+        print("Post-clarification distribution:")
+        _print_distribution(result.post_distribution, n)
+        print()
+
+    print("Final interpretation:")
+    print(_fmt_interpretation(result.final_interpretation))
+    print()
+
+    responses = list(result.pre_distribution.responses)
+    if result.clarified:
+        responses.append(result.question.response)
+        responses.append(result.answer.response)
+        responses.extend(result.post_distribution.responses)
+    print("=== Totals ===\n")
+    _print_call_stats(responses)
+    return result
 
 
 def run_semantic(llm_client, delegation: str = EXAMPLE_DELEGATION,
@@ -457,11 +528,16 @@ def main(argv: list[str] | None = None) -> int:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--role", required=True,
                    choices=["principal", "delegate", "semantic", "authority",
-                            "all", "runtime", "sample"])
+                            "all", "runtime", "sample", "clarify"])
     p.add_argument("--model", default="gpt-4o-mini")
     p.add_argument("--n", type=int, default=10,
-                   help="--role sample only: number of independent completions "
-                        "to draw (default 10, matching B7a's pilot default).")
+                   help="--role sample/clarify only: number of independent "
+                        "completions to draw per distribution (default 10, "
+                        "matching B7a/B7b's pilot default).")
+    p.add_argument("--entropy-threshold", type=float, default=0.8,
+                   help="--role clarify only: entropy (bits) above which a "
+                        "clarifying question is asked (default 0.8 -- a pilot "
+                        "value, not a tuned research threshold).")
     args = p.parse_args(argv)
 
     llm_client = build_llm_client(args.model)
@@ -478,6 +554,8 @@ def main(argv: list[str] | None = None) -> int:
         run_runtime(llm_client)
     elif args.role == "sample":
         run_sample(llm_client, n=args.n)
+    elif args.role == "clarify":
+        run_clarify(llm_client, n=args.n, entropy_threshold=args.entropy_threshold)
     else:
         run_all(llm_client)
     return 0

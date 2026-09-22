@@ -23,11 +23,15 @@ instructions, 별도 input.
 B7a — `sample_candidates()`: 같은 delegation을 N번 독립적으로 해석해
 candidate의 empirical distribution과 entropy를 측정한다. "B가 정말로
 고민하는가"를 관찰 가능하게 만드는 첫 단계다 — 아직 clarification(A에게
-되묻기)도 verified experience(과거 확인 재사용)도 없다. 그건 각각 B7b/
-B7c의 일이다. self-report된 confidence가 아니라 `entropy_probe.py`와
-같은 방식(독립 completion N개 → MLE 확률 → Shannon entropy)을 쓴다 —
-calibration을 보장할 수 없는 self-report보다 empirical distribution이
-연구적으로 훨씬 방어 가능하다.
+되묻기)도 verified experience(과거 확인 재사용)도 없다. self-report된
+confidence가 아니라 `entropy_probe.py`와 같은 방식(독립 completion N개 →
+MLE 확률 → Shannon entropy)을 쓴다 — calibration을 보장할 수 없는
+self-report보다 empirical distribution이 연구적으로 훨씬 방어 가능하다.
+
+B7b — `ask_clarification()`: entropy가 높을 때(판단은 이 클래스가 아니라
+호출하는 쪽, `clarification.ClarifyingDelegate`가 한다) 경쟁하는 후보들을
+실제로 구별해줄 질문 하나를 만든다. 아직 verified experience는 없다 —
+그건 B7c의 일이다.
 """
 
 from __future__ import annotations
@@ -61,11 +65,37 @@ RESOURCE: <the target resource type, e.g. file, report>
 SCOPE: <the resource scope/path, e.g. /reports/2026-08/, or * if unrestricted>
 CONDITION: <comma-separated conditions that must hold, or 'none'>"""
 
+_CLARIFY_QUESTION_INSTRUCTIONS = """\
+You are Agent B (the Delegate) in an agent-to-agent delegation system. \
+You were given the delegation below, but when asked to determine a single \
+concrete action multiple times independently, your answers disagreed — \
+you are genuinely uncertain what is meant. Your competing interpretations \
+and how often each occurred are shown below.
+
+Write a single, direct clarifying question to send back to Agent A (the \
+Principal) that would resolve this specific uncertainty — one that \
+explicitly distinguishes between the competing interpretations shown \
+below, not a vague general question.
+
+Respond with the question only. No preamble, no explanation."""
+
 
 def _render_delegation_context(delegation: str, context: str) -> str:
     parts = [f"Delegation: {delegation}"]
     if context:
         parts.append(f"Context: {context}")
+    return "\n".join(parts)
+
+
+def _render_clarify_input(delegation: str, context: str, belief: Belief) -> str:
+    candidates = "\n".join(
+        f"  {p:.2f}  {i.action}:{i.resource}@{i.scope}"
+        + (f" (condition={','.join(sorted(i.condition))})" if i.condition else "")
+        for i, p in sorted(belief.items(), key=lambda kv: -kv[1]))
+    parts = [f"Delegation: {delegation}"]
+    if context:
+        parts.append(f"Context: {context}")
+    parts.append(f"Your competing interpretations and their frequency:\n{candidates}")
     return "\n".join(parts)
 
 
@@ -95,11 +125,25 @@ class CandidateDistribution:
     responses: list[LLMResponse] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class ClarificationQuestion:
+    """`ask_clarification()` 호출 1회의 결과. `belief`/`entropy`는 이
+    질문을 만든 근거가 된 `CandidateDistribution`을 그대로 옮겨온 것이다
+    (감사/디버깅용) — 새로 계산하지 않는다."""
+
+    question: str
+    raw_text: str
+    response: LLMResponse
+    belief: Belief
+    entropy: float
+
+
 class DelegateAgent:
-    """Agent B. `propose()`(단일 확정)와 `sample_candidates()`(N-sampling
-    기반 분포/entropy 측정)를 제공한다. 매 completion은 독립적인
-    `LLMClient.generate()` 1회다 — `sample_candidates()`의 N개 호출도
-    전부 개별 invocation이지, 한 번의 호출로 N개를 받아내는 게 아니다."""
+    """Agent B. `propose()`(단일 확정), `sample_candidates()`(N-sampling
+    기반 분포/entropy 측정), `ask_clarification()`(불확실할 때 질문 생성)
+    을 제공한다. 매 completion은 독립적인 `LLMClient.generate()` 1회다 —
+    `sample_candidates()`의 N개 호출도 전부 개별 invocation이지, 한 번의
+    호출로 N개를 받아내는 게 아니다."""
 
     def __init__(self, llm: LLMClient):
         self.llm = llm
@@ -156,3 +200,23 @@ class DelegateAgent:
             belief=belief, entropy=h, top=top, top_probability=counts[top] / total,
             n_unique=len(counts), n_samples=total,
             responses=[r for _, r in samples])
+
+    def ask_clarification(self, *, delegation: str, distribution: CandidateDistribution,
+                          context: str = "") -> ClarificationQuestion:
+        """`distribution`(보통 `sample_candidates()`의 결과)의 경쟁 후보들을
+        바탕으로, 그 모호함을 실제로 해소할 clarifying question 하나를
+        만든다. 독립적인 `LLMClient.generate()` 호출 1회.
+
+        entropy가 임계값을 넘었는지 판단하는 건 이 메서드의 책임이 아니다
+        — 호출하는 쪽(`clarification.ClarifyingDelegate`)이 이미 판단하고
+        불렀다는 전제다. 이 메서드가 절대 받지 않는 것: `task.truth`,
+        evaluation label, `PrincipalIntent`, `SemanticVerdict`,
+        `AuthorityVerdict`, 최종 판정 — 시그니처 자체에 그런 정보가 들어갈
+        자리가 없다. 오직 delegation 텍스트, context, 그리고 B 자신이 이미
+        만든 candidate 분포만 본다."""
+        input_text = _render_clarify_input(delegation, context, distribution.belief)
+        response = self.llm.generate(
+            instructions=_CLARIFY_QUESTION_INSTRUCTIONS, input_text=input_text)
+        return ClarificationQuestion(
+            question=response.text.strip(), raw_text=response.text, response=response,
+            belief=distribution.belief, entropy=distribution.entropy)

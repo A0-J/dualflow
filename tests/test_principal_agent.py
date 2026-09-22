@@ -163,8 +163,65 @@ class TestNoGroundTruthAccess:
     def test_no_truth_or_label_parameter_anywhere_in_the_public_api(self):
         forbidden = ("truth", "ground_truth", "label", "verdict")
         for target in (PrincipalAgent.__init__, PrincipalAgent.delegate,
-                       PrincipalAgent.restate_intent):
+                       PrincipalAgent.restate_intent, PrincipalAgent.answer_clarification):
             for name in inspect.signature(target).parameters:
                 lowered = name.lower()
                 assert not any(f in lowered for f in forbidden), (
                     f"{target.__qualname__} has a suspicious parameter: {name}")
+
+
+class TestAnswerClarification:
+    """`answer_clarification()` — B7b. goal/context/질문 텍스트만 보고
+    답한다 — B의 candidate 확률 분포나 다른 verifier의 결론은 절대
+    받지 않는다."""
+
+    def test_calls_llm_exactly_once_and_returns_answer(self):
+        fake = _FakeLLMClient([LLMResponse(text="Create an internal summary only.")])
+        agent = PrincipalAgent(llm=fake)
+
+        result = agent.answer_clarification(
+            goal="Prepare the report.", context="finance team",
+            question="Internal summary or export?")
+
+        assert result.answer == "Create an internal summary only."
+        assert len(fake.calls) == 1
+
+    def test_input_contains_goal_context_and_question(self):
+        fake = _FakeLLMClient([LLMResponse(text="ok")])
+        agent = PrincipalAgent(llm=fake)
+
+        agent.answer_clarification(goal="my goal", context="my context",
+                                   question="my question")
+
+        input_text = fake.calls[0]["input_text"]
+        assert "my goal" in input_text
+        assert "my context" in input_text
+        assert "my question" in input_text
+
+    def test_is_independent_of_delegate_and_restate_intent_calls(self):
+        """세 메서드가 각자 독립 호출이라는 걸 실제로 확인한다 — 같은
+        PrincipalAgent 인스턴스로 셋을 다 불러도 서로 다른 instructions,
+        서로 다른 input이어야 한다."""
+        fake = _FakeLLMClient([
+            LLMResponse(text="Please prepare the report."),                  # delegate()
+            _structured(),                                                    # restate_intent()
+            LLMResponse(text="Internal summary only."),                       # answer_clarification()
+        ])
+        agent = PrincipalAgent(llm=fake)
+
+        agent.delegate(goal="x")
+        agent.restate_intent(goal="x")
+        agent.answer_clarification(goal="x", question="Internal or export?")
+
+        assert len(fake.calls) == 3
+        instructions = [c["instructions"] for c in fake.calls]
+        assert len(set(instructions)) == 3  # 셋 다 서로 다른 prompt
+
+    def test_no_forbidden_parameter_in_signature(self):
+        forbidden = ("truth", "ground_truth", "label", "verdict",
+                     "proposal", "distribution", "probability")
+        sig = inspect.signature(PrincipalAgent.answer_clarification)
+        for name in sig.parameters:
+            lowered = name.lower()
+            assert not any(f in lowered for f in forbidden), (
+                f"answer_clarification has a suspicious parameter: {name}")
