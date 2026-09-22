@@ -16,7 +16,10 @@ import pytest
 
 from dualflow.agent_experience import AgentExperience, AgentExperienceStore
 from dualflow.delegate_agent import CandidateDistribution, DelegateAgent
-from dualflow.experience_aware_delegate import ExperienceAwareDelegate, ExperienceAwareSampleResult
+from dualflow.experience_aware_delegate import (
+    ExperienceAwareDelegate, ExperienceAwareSampleResult,
+    render_experience_block_v1, render_experience_block_v2,
+)
 from dualflow.llm import LLMResponse
 from dualflow.semantic import Interpretation
 
@@ -278,3 +281,105 @@ class TestExistingPathsUnaffected:
     def test_delegate_agent_sample_candidates_signature_unchanged(self):
         sig = inspect.signature(DelegateAgent.sample_candidates)
         assert list(sig.parameters) == ["self", "delegation", "context", "n"]
+
+
+class TestRenderExperienceBlockV2:
+    """B7d.3 재설계 — v1과 나란히 존재하는 새 renderer. 아직 real-API로
+    "더 낫다"고 검증되지 않았다(agent_connected_eval.md §14) — 여기서는
+    구조(ambiguity→clarification→confirmed-meaning 관계, RESOURCE/SCOPE
+    미포함, "현재가 명시적이면 현재를 따르라"는 지시)만 확인한다."""
+
+    def test_empty_experiences_returns_empty_string(self):
+        assert render_experience_block_v2([]) == ""
+
+    def test_contains_ambiguity_resolution_framing(self):
+        block = render_experience_block_v2([_make_experience()])
+        assert "ambiguous language" in block
+        assert "genuinely ambiguous" in block
+        assert "follow the current delegation even if it differs" in block
+
+    def test_confirmed_interpretation_omits_resource_and_scope(self):
+        block = render_experience_block_v2([_make_experience()])
+        line = next(l for l in block.splitlines() if l.startswith("Confirmed interpretation"))
+        assert line == "Confirmed interpretation: summarize"
+        assert "RESOURCE" not in line
+        assert "2026-08" not in line
+
+    def test_labels_differ_from_v1(self):
+        block_v2 = render_experience_block_v2([_make_experience()])
+        block_v1 = render_experience_block_v1([_make_experience()])
+        assert "Previous ambiguous delegation:" in block_v2
+        assert "Previous ambiguous delegation:" not in block_v1
+        assert "Principal-confirmed interpretation: ACTION=" in block_v1
+        assert "Principal-confirmed interpretation: ACTION=" not in block_v2
+
+
+class TestRendererInjection:
+    """`ExperienceAwareDelegate`의 조회/우선순위 보장 로직은 그대로 두고,
+    표현 방식(renderer)만 주입해서 바꿀 수 있는지 확인한다."""
+
+    def test_default_construction_uses_v1_renderer(self):
+        store = AgentExperienceStore()
+        fake = _FakeLLMClient([])
+        wrapped = ExperienceAwareDelegate(DelegateAgent(llm=fake), store)
+
+        assert wrapped.render_experience_block is render_experience_block_v1
+
+    def test_injecting_v2_changes_prompt_content(self):
+        store = AgentExperienceStore()
+        store.add(_make_experience())
+        fake = _FakeLLMClient([_structured("summarize") for _ in range(3)])
+        wrapped = ExperienceAwareDelegate(DelegateAgent(llm=fake), store,
+                                          render_experience_block=render_experience_block_v2)
+
+        wrapped.sample_candidates(
+            principal_id="finance_lead_A", task_category="external_audit_report",
+            delegation=CURRENT_DELEGATION, context=CURRENT_CONTEXT, n=3)
+
+        input_text = fake.calls[0]["input_text"]
+        assert "ambiguous language" in input_text
+        assert "Confirmed interpretation: summarize" in input_text
+        assert "Principal-confirmed interpretation: ACTION=" not in input_text
+
+    def test_explicit_v1_injection_matches_default_behavior(self):
+        store = AgentExperienceStore()
+        store.add(_make_experience())
+
+        fake_default = _FakeLLMClient([_structured("summarize") for _ in range(3)])
+        wrapped_default = ExperienceAwareDelegate(DelegateAgent(llm=fake_default), store)
+        wrapped_default.sample_candidates(
+            principal_id="finance_lead_A", task_category="external_audit_report",
+            delegation=CURRENT_DELEGATION, context=CURRENT_CONTEXT, n=3)
+
+        fake_explicit = _FakeLLMClient([_structured("summarize") for _ in range(3)])
+        wrapped_explicit = ExperienceAwareDelegate(
+            DelegateAgent(llm=fake_explicit), store, render_experience_block=render_experience_block_v1)
+        wrapped_explicit.sample_candidates(
+            principal_id="finance_lead_A", task_category="external_audit_report",
+            delegation=CURRENT_DELEGATION, context=CURRENT_CONTEXT, n=3)
+
+        assert fake_default.calls[0]["input_text"] == fake_explicit.calls[0]["input_text"]
+
+    def test_current_scope_precedence_still_holds_with_v2(self):
+        """v2로 바꿔도 현재 9월 scope는 'Current environment context' 아래
+        그대로 있고, 'Confirmed interpretation' 줄에는 8월 scope가 아예
+        등장할 자리가 없다(구조적으로 scope 필드 자체가 없다)."""
+        store = AgentExperienceStore()
+        store.add(_make_experience())  # 8월 scope로 confirm된 경험
+        fake = _FakeLLMClient([_structured("summarize", scope="/reports/2026-09/")
+                               for _ in range(3)])
+        wrapped = ExperienceAwareDelegate(DelegateAgent(llm=fake), store,
+                                          render_experience_block=render_experience_block_v2)
+
+        wrapped.sample_candidates(
+            principal_id="finance_lead_A", task_category="external_audit_report",
+            delegation=CURRENT_DELEGATION, context=CURRENT_CONTEXT, n=3)
+
+        input_text = fake.calls[0]["input_text"]
+        assert "Current environment context" in input_text
+        assert "/reports/2026-09/" in input_text
+        confirmed_line = next(
+            line for line in input_text.splitlines()
+            if line.startswith("Confirmed interpretation"))
+        assert "2026-08" not in confirmed_line
+        assert confirmed_line == "Confirmed interpretation: summarize"
