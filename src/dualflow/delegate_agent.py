@@ -26,8 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .llm import LLMClient, LLMResponse
-from .semantic import Interpretation
-from .structured_action import parse_structured_action
+from .semantic import Interpretation, parse_structured_action
 
 # ----------------------------------------------------------------------------
 # Prompt — agent-specific 내용이므로 llm.py가 아니라 여기 산다.
