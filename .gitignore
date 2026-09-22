@@ -8,3 +8,18 @@ dist/
 .DS_Store
 .idea/
 .vscode/
+
+# Local, uncommitted real-API experiment output (ad-hoc diagnostic
+# transcripts and scratch results, e.g. from experiments/agent_smoke.py or
+# experiments/diagnostics/*.py). Structured results meant to be committed
+# belong under results/agent/ instead (e.g. results/agent/runs.jsonl) --
+# these patterns are intentionally narrow, not *.json/*.txt, so they never
+# shadow that.
+*_stdout.txt
+*_results.json
+clarify_*.txt
+sample_*.txt
+runtime_*.txt
+experience_*.txt
+b7d*_results.json
+b7d*_stdout.txt
