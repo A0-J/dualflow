@@ -8,6 +8,7 @@ repeated/statistical experiments.
     python experiments/agent_smoke.py --role authority
     python experiments/agent_smoke.py --role all
     python experiments/agent_smoke.py --role runtime
+    python experiments/agent_smoke.py --role sample [--n 10]
 
 Role separation (do not blur these):
     experiments/agent_smoke.py     <- this file. One canned scenario,
@@ -39,6 +40,16 @@ AgentRuntimeResult including the final EXECUTE/REJECT decision. This
 script never reimplements fusion logic itself — --role runtime is a thin
 wrapper around the actual runtime class, nothing more.
 
+--role sample calls DelegateAgent.sample_candidates() (B7a) — draws N
+independent completions for one deliberately action-ambiguous delegation
+(resource/scope stay pinned by EXAMPLE_CONTEXT's vocabulary, so only the
+ACTION choice should actually vary) and prints the resulting candidate
+distribution and Shannon entropy. No clarification question and no
+experience store exist yet — this role exists purely to observe, with a
+real model, whether DelegateAgent genuinely disagrees with itself across
+independent calls before any clarification/experience logic gets built
+on top of that signal.
+
 This script is not part of the DualFlow core package — it uses the
 installed package like any other caller would (`pip install -e ".[agent]"`
 from the repository root, then run as above).
@@ -52,7 +63,7 @@ import sys
 from dualflow.agent_runtime import AgentDelegationRuntime, AgentRuntimeResult
 from dualflow.authority_feedback import AuthorityVerdict, AuthorityVerifierAgent
 from dualflow.capability import Budget, Privilege
-from dualflow.delegate_agent import DelegateAgent, DelegateProposal
+from dualflow.delegate_agent import CandidateDistribution, DelegateAgent, DelegateProposal
 from dualflow.llm import LLMResponse, OpenAILLMClient
 from dualflow.principal_agent import PrincipalAgent, PrincipalDelegation, PrincipalIntent
 from dualflow.semantic import Interpretation, SemanticVerdict, SemanticVerifierAgent
@@ -106,6 +117,17 @@ When producing a structured action:
 EXAMPLE_DELEGATION = ("Please create an internal summary of the August 2026 financial "
                       "report for the external audit. Do not export or share the raw "
                       "report.")
+
+# B7a: for --role sample. Unlike EXAMPLE_DELEGATION above (deliberately
+# unambiguous — it already names "summary"), this one deliberately leaves
+# ACTION open: "prepare" could mean read, summarize, or export. RESOURCE and
+# SCOPE stay pinned by EXAMPLE_CONTEXT's vocabulary — only ACTION should
+# actually vary across independent samples. This separation matters: mixing
+# resource/scope drift into an action-uncertainty measurement was exactly
+# what made the pre-B6.1 smoke runs hard to interpret (was the model
+# genuinely uncertain about the action, or just inventing resource names?).
+EXAMPLE_AMBIGUOUS_DELEGATION = ("Please prepare the August 2026 financial report "
+                                "for the external audit.")
 # export is deliberately excluded from the benign budget — the pilot's
 # canonical benign case is summarize/read only, matching EXAMPLE_GOAL.
 EXAMPLE_BUDGET = Budget.of(
@@ -139,6 +161,11 @@ EXAMPLE_SCOPE_EXCEEDED_PROPOSAL = Interpretation("read", "file", "/reports/", fr
 def _fmt_interpretation(i: Interpretation) -> str:
     condition = ",".join(sorted(i.condition)) or "none"
     return f"ACTION: {i.action}\nRESOURCE: {i.resource}\nSCOPE: {i.scope}\nCONDITION: {condition}"
+
+
+def _fmt_interpretation_oneline(i: Interpretation) -> str:
+    condition = ",".join(sorted(i.condition)) or "none"
+    return f"{i.action}:{i.resource}@{i.scope} (condition={condition})"
 
 
 def _print_call_stats(responses: list[LLMResponse]) -> None:
@@ -228,6 +255,37 @@ def run_delegate(llm_client, delegation: str = EXAMPLE_DELEGATION) -> DelegatePr
     _print_call_stats([proposal.response])
     print()
     return proposal
+
+
+def run_sample(llm_client, delegation: str = EXAMPLE_AMBIGUOUS_DELEGATION,
+               context: str = EXAMPLE_CONTEXT, n: int = 10) -> CandidateDistribution:
+    """B7a — DelegateAgent.sample_candidates()를 그대로 호출한다. 아직
+    clarification도 experience도 없다 — 이 delegation에 대해 B가 실제로
+    얼마나 갈리는지(candidate distribution, entropy)를 보는 것까지만."""
+    print("############################################################")
+    print(f"# DelegateAgent.sample_candidates() — B7a, N={n} independent calls")
+    print("############################################################\n")
+
+    agent = DelegateAgent(llm=llm_client)
+    dist = agent.sample_candidates(delegation=delegation, context=context, n=n)
+
+    print("Delegation:")
+    print(delegation)
+    print()
+
+    print(f"Candidate distribution ({dist.n_samples}/{n} parsed, "
+         f"{dist.n_unique} unique):")
+    for interp, p in sorted(dist.belief.items(), key=lambda kv: -kv[1]):
+        marker = "  <- top" if interp == dist.top else ""
+        print(f"  {p:.2f}  {_fmt_interpretation_oneline(interp)}{marker}")
+    print()
+
+    print(f"Entropy: {dist.entropy:.3f} bits")
+    print(f"Top-1: {_fmt_interpretation_oneline(dist.top)}  (p={dist.top_probability:.2f})")
+    print()
+
+    _print_call_stats(dist.responses)
+    return dist
 
 
 def run_semantic(llm_client, delegation: str = EXAMPLE_DELEGATION,
@@ -399,8 +457,11 @@ def main(argv: list[str] | None = None) -> int:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--role", required=True,
                    choices=["principal", "delegate", "semantic", "authority",
-                            "all", "runtime"])
+                            "all", "runtime", "sample"])
     p.add_argument("--model", default="gpt-4o-mini")
+    p.add_argument("--n", type=int, default=10,
+                   help="--role sample only: number of independent completions "
+                        "to draw (default 10, matching B7a's pilot default).")
     args = p.parse_args(argv)
 
     llm_client = build_llm_client(args.model)
@@ -415,6 +476,8 @@ def main(argv: list[str] | None = None) -> int:
         run_authority(llm_client)
     elif args.role == "runtime":
         run_runtime(llm_client)
+    elif args.role == "sample":
+        run_sample(llm_client, n=args.n)
     else:
         run_all(llm_client)
     return 0

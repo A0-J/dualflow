@@ -19,14 +19,24 @@ context만 본다. `propose()`는 `LLMClient.generate()` 호출 1회로 끝난�
 `PrincipalAgent`와 같은 client 인스턴스를 공유해도 되지만(주입은 호출자
 책임), 대화 상태는 전혀 공유하지 않는다: 별도 invocation, 별도
 instructions, 별도 input.
+
+B7a — `sample_candidates()`: 같은 delegation을 N번 독립적으로 해석해
+candidate의 empirical distribution과 entropy를 측정한다. "B가 정말로
+고민하는가"를 관찰 가능하게 만드는 첫 단계다 — 아직 clarification(A에게
+되묻기)도 verified experience(과거 확인 재사용)도 없다. 그건 각각 B7b/
+B7c의 일이다. self-report된 confidence가 아니라 `entropy_probe.py`와
+같은 방식(독립 completion N개 → MLE 확률 → Shannon entropy)을 쓴다 —
+calibration을 보장할 수 없는 self-report보다 empirical distribution이
+연구적으로 훨씬 방어 가능하다.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 
 from .llm import LLMClient, LLMResponse
-from .semantic import Interpretation, parse_structured_action
+from .semantic import Belief, Interpretation, entropy, parse_structured_action
 
 # ----------------------------------------------------------------------------
 # Prompt — agent-specific 내용이므로 llm.py가 아니라 여기 산다.
@@ -68,9 +78,28 @@ class DelegateProposal:
     response: LLMResponse
 
 
+@dataclass(frozen=True)
+class CandidateDistribution:
+    """`sample_candidates()` 호출 1회(N개의 독립 completion)의 결과.
+
+    `belief`는 `semantic.Belief`(= `dict[Interpretation, float]`) 그대로라
+    `semantic.entropy()`/`information_gain()` 등 기존 함수를 바로 쓸 수
+    있다 — 새 확률 표현을 따로 만들지 않는다."""
+
+    belief: Belief
+    entropy: float
+    top: Interpretation
+    top_probability: float
+    n_unique: int
+    n_samples: int              # 파싱에 성공해 분포에 실제로 들어간 표본 수
+    responses: list[LLMResponse] = field(default_factory=list)
+
+
 class DelegateAgent:
-    """Agent B. `propose()` 하나만 제공하며, 매 호출은 독립적인
-    `LLMClient.generate()` 1회다."""
+    """Agent B. `propose()`(단일 확정)와 `sample_candidates()`(N-sampling
+    기반 분포/entropy 측정)를 제공한다. 매 completion은 독립적인
+    `LLMClient.generate()` 1회다 — `sample_candidates()`의 N개 호출도
+    전부 개별 invocation이지, 한 번의 호출로 N개를 받아내는 게 아니다."""
 
     def __init__(self, llm: LLMClient):
         self.llm = llm
@@ -86,3 +115,44 @@ class DelegateAgent:
         interpretation = parse_structured_action(response.text)
         return DelegateProposal(interpretation=interpretation,
                                 raw_text=response.text, response=response)
+
+    def sample_candidates(self, *, delegation: str, context: str = "",
+                          n: int = 10) -> CandidateDistribution:
+        """같은 delegation을 n번 독립적으로 해석해 candidate의 empirical
+        distribution을 만든다. 매 sample은 `propose()`와 똑같은 prompt/
+        instructions로 만든 독립 `LLMClient.generate()` 호출이다 — 총 n회.
+
+        아직 여기서 하지 않는 것: entropy를 보고 clarifying question을
+        만드는 것(B7b), 과거 경험을 조회/반영하는 것(B7c). 이 메서드는
+        순수하게 "지금 이 delegation에 대해 B가 실제로 얼마나 갈리는가"
+        를 측정하는 것까지만 한다.
+
+        파싱에 실패한 sample은 조용히 성공으로 세지 않고 분포에서
+        제외한다(같은 fail-closed 원칙을 `parse_structured_action()`과
+        공유). n회 전부 파싱에 실패하면 `ValueError`를 던진다."""
+        samples: list[tuple[Interpretation, LLMResponse]] = []
+        input_text = _render_delegation_context(delegation, context)
+        for _ in range(n):
+            response = self.llm.generate(
+                instructions=_PROPOSE_INSTRUCTIONS, input_text=input_text)
+            try:
+                interp = parse_structured_action(response.text)
+            except ValueError:
+                continue
+            samples.append((interp, response))
+
+        if not samples:
+            raise ValueError(
+                f"sample_candidates(): {n}회 샘플링 전부 파싱 실패 — "
+                "candidate distribution을 만들 수 없다.")
+
+        counts = Counter(interp for interp, _ in samples)
+        total = len(samples)
+        belief: Belief = {interp: c / total for interp, c in counts.items()}
+        h = entropy(belief)
+        top = max(counts, key=lambda i: (counts[i], str(i)))
+
+        return CandidateDistribution(
+            belief=belief, entropy=h, top=top, top_probability=counts[top] / total,
+            n_unique=len(counts), n_samples=total,
+            responses=[r for _, r in samples])
