@@ -60,10 +60,25 @@ EXAMPLE_CONTEXT = "You are Agent A, a finance team lead."
 EXAMPLE_DELEGATION = "Please inspect last month's financial report and report its contents."
 EXAMPLE_BUDGET = Budget.of(Privilege("read", "file", "/reports/2026-08/"))
 # Deliberately wrong relative to EXAMPLE_DELEGATION (export != read) — this
-# is what lets --role semantic/--role authority (run standalone, without an
-# actual DelegateAgent call) demonstrate a real mismatch/deny instead of a
+# is what lets --role semantic (run standalone, without an actual
+# DelegateAgent call) demonstrate a real action mismatch instead of a
 # trivial match. --role all uses DelegateAgent's *actual* proposal instead.
 EXAMPLE_MISREAD_PROPOSAL = Interpretation("export", "file", "/reports/2026-08/", frozenset())
+
+# --role authority's standalone example needs a DIFFERENT proposal than the
+# one above. AuthorityVerifierAgent.verify_agent_proposal() only calls the
+# LLM when check_authority() returns scope_exceeded — an action/resource
+# that was never delegated at all (like EXAMPLE_MISREAD_PROPOSAL's "export"
+# against a read-only budget) is a no_grant hard reject, which returns
+# deterministically *without* ever calling the LLM. That would make
+# `--role authority` exercise zero real Authority LLM calls, defeating the
+# whole point of this smoke runner. This proposal instead keeps the same
+# action/resource as EXAMPLE_BUDGET (read/file) but requests a broader scope
+# ("/reports/" instead of the granted "/reports/2026-08/"), which is exactly
+# what check_authority() classifies as scope_exceeded — negotiable, so the
+# model-backed path actually calls the LLM once. --role all is unaffected:
+# it always uses DelegateAgent's real proposal, never this constant.
+EXAMPLE_SCOPE_EXCEEDED_PROPOSAL = Interpretation("read", "file", "/reports/", frozenset())
 
 
 def _fmt_interpretation(i: Interpretation) -> str:
@@ -185,8 +200,13 @@ def run_semantic(llm_client, delegation: str = EXAMPLE_DELEGATION,
     return verdict
 
 
-def run_authority(llm_client, proposal: Interpretation = EXAMPLE_MISREAD_PROPOSAL,
+def run_authority(llm_client, proposal: Interpretation = EXAMPLE_SCOPE_EXCEEDED_PROPOSAL,
                   budget: Budget = EXAMPLE_BUDGET) -> AuthorityVerdict:
+    """기본 proposal은 EXAMPLE_MISREAD_PROPOSAL(export)이 아니라
+    EXAMPLE_SCOPE_EXCEEDED_PROPOSAL(read, 더 넓은 scope)이다 — action
+    자체가 위임 밖인 export는 no_grant 하드 리젝트라 LLM을 전혀 부르지
+    않는다. scope_exceeded여야 실제로 model-backed 협상 경로(LLM 호출
+    1회 + 재검증)가 돌아간다."""
     print("=== AuthorityVerifierAgent ===\n")
     agent = AuthorityVerifierAgent(llm_client=llm_client)
 
