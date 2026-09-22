@@ -47,6 +47,7 @@ from dataclasses import dataclass
 
 from .llm import LLMClient, LLMResponse
 from .semantic import Interpretation
+from .structured_action import parse_structured_action
 
 # ----------------------------------------------------------------------------
 # Prompts — agent-specific 내용이므로 llm.py가 아니라 여기 산다.
@@ -84,43 +85,6 @@ def _render_goal_context(goal: str, context: str, extra: str = "") -> str:
     if extra:
         parts.append(extra)
     return "\n".join(parts)
-
-
-def _parse_intended_action(text: str) -> Interpretation:
-    """`_RESTATE_INTENT_INSTRUCTIONS`가 요구하는 고정 스키마
-    (ACTION/RESOURCE/SCOPE/CONDITION 라인)를 파싱해 `Interpretation`으로
-    바꾼다. 이 파싱 로직 자체는 결정론적이라 API 없이도 단위 테스트할 수
-    있다."""
-    fields: dict[str, str] = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or ":" not in line:
-            continue
-        key, _, value = line.partition(":")
-        key = key.strip().upper()
-        value = value.strip()
-        if key in ("ACTION", "RESOURCE", "SCOPE", "CONDITION"):
-            fields[key] = value
-
-    if "ACTION" not in fields or "RESOURCE" not in fields:
-        raise ValueError(
-            "PrincipalAgent.restate_intent(): 모델 응답에서 ACTION/RESOURCE를 "
-            f"찾을 수 없다 — raw text: {text!r}"
-        )
-
-    scope = fields.get("SCOPE") or "*"
-    condition_raw = fields.get("CONDITION", "")
-    if condition_raw.strip().lower() in ("", "none"):
-        condition: frozenset[str] = frozenset()
-    else:
-        condition = frozenset(c.strip() for c in condition_raw.split(",") if c.strip())
-
-    return Interpretation(
-        action=fields["ACTION"],
-        resource=fields["RESOURCE"],
-        scope=scope,
-        condition=condition,
-    )
 
 
 @dataclass(frozen=True)
@@ -168,6 +132,6 @@ class PrincipalAgent:
         input_text = _render_goal_context(goal, context, extra)
         response = self.llm.generate(
             instructions=_RESTATE_INTENT_INSTRUCTIONS, input_text=input_text)
-        intended_action = _parse_intended_action(response.text)
+        intended_action = parse_structured_action(response.text)
         return PrincipalIntent(intended_action=intended_action,
                                raw_text=response.text, response=response)
