@@ -23,6 +23,7 @@ dependencies = []
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "matplotlib>=3.6"]
 plot = ["matplotlib>=3.6"]
+agent = ["openai>=1.0"]
 
 [project.scripts]
 dualflow-entropy-probe = "dualflow.entropy_probe:main"
