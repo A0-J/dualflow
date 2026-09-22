@@ -426,11 +426,14 @@ The sequential experiment is intentionally postponed until the semantic-transfer
 
 ## Documentation
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — architecture and safety invariants
+- [`docs/DESIGN_INVARIANTS.md`](docs/DESIGN_INVARIANTS.md) — conditions that must never be broken by any future change, in one place
+- [`docs/REPRODUCIBILITY.md`](docs/REPRODUCIBILITY.md) — what must be fixed and recorded for a real-API result to be reproducible (scenario version, model, prompt fingerprint, ...)
+- [`experiments/README.md`](experiments/README.md) — what each script under `experiments/` does and which one to use
+- [`docs/experiments/agent_connected_eval.md`](docs/experiments/agent_connected_eval.md) — real-LLM agent-connected evaluation log, including unexpected/negative results
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — mechanism-level architecture explanation (source-code level)
 - [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) — controlled experiments and historical pilot results
 - [`docs/BASELINES.md`](docs/BASELINES.md) — baseline notes
-- [`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md) — implementation and research design notes
-- [`docs/experiments/agent_connected_eval.md`](docs/experiments/agent_connected_eval.md) — real-LLM agent-connected evaluation log, including unexpected/negative results
+- [`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md) — abandoned approaches and implementation decisions
 - [README_KOR.md](README_KOR.md) — Korean README
 
 This repository is under active research development. Unexpected and negative experimental results are intentionally preserved in the documentation. In particular, lower semantic entropy is not treated as evidence of improved semantic correctness unless semantic alignment is also evaluated.
