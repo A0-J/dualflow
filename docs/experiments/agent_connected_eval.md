@@ -450,6 +450,16 @@ meaningful.**
   deterministic. The current honest status is "`v2` is less harmful than
   `v1`, direction is positive on average, magnitude and consistency are
   not yet sufficient to call it transfer" — not "`v2` works."
+- **`v2`'s positive `delta_sum`/`delta_export` in B7d.4 do not by
+  themselves show semantic transfer** — §18: both deltas were `+0.23`, but
+  entirely because `export`-history collapsed deterministically to
+  `P(export)=1.00` (10/10 runs), not because `summarize`-history raised
+  `P(summarize)` above the no-experience baseline (it did not — mean
+  `0.230` vs. baseline `0.250`, 4 wins/2 ties/4 losses across 10 runs). A
+  positive delta pair computed from an asymmetric, one-sided collapse must
+  not be read as evidence of bidirectional content sensitivity — see §18's
+  conclusion and B7d.5 (§19) for the follow-up needed to separate
+  block-presence priming from genuine content effects.
 
 ## 14. Current Status
 
@@ -467,7 +477,8 @@ meaningful.**
 | Experience representation redesign (B7d.3) | **pilot complete — partial evidence + context-wording confound found (§15)** |
 | Experiment reproducibility fix (canonical wording + fingerprinting) | complete (§15) |
 | B7d.3 canonical-context re-validation (600 calls) | **complete — v1 harmful, v2 weak/inconsistent (§16)** |
-| Semantic-content ablation (B7d.4) | **script prepared, not yet run (§17)** |
+| Semantic-content ablation (B7d.4) | **complete — asymmetric/prior-congruent priming, not established transfer (§18)** |
+| Neutral-format control (B7d.5) | script prepared, not yet run (§19) |
 | Sequential experience evaluation (B7e) | not started |
 
 The sequential multi-episode experiment (B7e) stays intentionally
@@ -476,9 +487,14 @@ context-wording confound and found that, against a correctly-behaving
 (non-deterministic) baseline, `v1` is clearly harmful (it collapses the
 model's natural ambiguity to a confident wrong answer) and `v2` shows only
 a weak, run-inconsistent directional signal — not yet a demonstration that
-verified experience reliably transfers semantic content. B7d.4 (§17) is
-designed to isolate whether the weak `v2` signal is content-sensitive at
-all, before any further redesign or the sequential experiment is
+verified experience reliably transfers semantic content. B7d.4 (§18) ran
+that content-sensitivity check and found an asymmetric, prior-congruent
+result: `export`-history collapsed deterministically toward the model's
+pre-existing `export` lean (10/10 runs), while `summarize`-history showed
+no consistent improvement over no-experience at all — so `v2` semantic
+transfer is still not established. B7d.5 (§19) is designed to separate
+whether that collapse comes from `v2`'s block presence/format alone or
+specifically from prior-congruent content, before any `v3` redesign is
 considered. The original plan for B7d.3 was to redesign the experience
 representation so it presents ambiguity → clarification → confirmed-meaning
 as a
@@ -747,6 +763,11 @@ overwrite them.
 
 ## 17. B7d.4 — Semantic-Content Ablation (Prepared, Not Yet Run)
 
+> **Status update**: this experiment has since been run — see §18 for the
+> real-API results. This section is left unedited below as the original
+> design record (what was prepared and why), per this document's standing
+> policy of not overwriting earlier sections.
+
 §16's canonical re-run leaves one question open: is `v2`'s weak positive
 signal driven by the *content* of the historical experience (which action
 was actually confirmed), or — like `v1` — mostly by the presence/format of
@@ -800,3 +821,206 @@ magnitude.
 real API. No prompt tuning is planned after seeing results, and B7e remains
 not started regardless of this ablation's outcome, per the current gating
 order (§14).
+
+## 18. B7d.4 — Semantic-Content Ablation (Results)
+
+### Experiment identity
+
+```
+experiment_id:          b7d4_semantic_content_ablation
+git_sha:                 3c03dda8894da6a1f42394add26682d1d051b2bd
+scenario_id:             external_audit_finance
+scenario_version:        1.1
+delegation_sha256:
+  38b8fc2394a7bc9a4d043dd8078ecd6194f3855d710710d1fce23727a4a5fab1
+context_sha256:
+  a1a5da5674cab40190610056581c30802e13277b70c058eb2317569085233892
+model:                   gpt-4o-mini
+samples_per_condition:   20
+repetitions:             10
+total calls:             600
+script:                  experiments/diagnostics/experience_semantic_ablation.py
+```
+
+Single ambiguous September task only (no explicit-change task this round).
+`preflight`: before this run, a separate 1-call real-API check via the
+unmodified `build_llm_client()`/`DelegateAgent.propose()` path confirmed a
+real, non-zero-token response (`input_tokens=403`, `output_tokens=25`,
+class `OpenAILLMClient`) — no source file was touched to perform it.
+
+### Aggregate results
+
+| Condition | Mean H | P(summarize) | P(export) |
+| --- | --- | --- | --- |
+| A no experience | 0.775 | 0.250 | 0.750 |
+| B v2 summarize-history | 0.744 | 0.230 | 0.770 |
+| C v2 export-history | **0.000** | **0.000** | **1.000** |
+
+### Run-level A vs B vs C (10 runs)
+
+| run | A no_exp | B sumhist | C exphist | B − A |
+| --- | --- | --- | --- | --- |
+| 1 | 0.25 | 0.15 | 0.00 | −0.10 |
+| 2 | 0.30 | 0.25 | 0.00 | −0.05 |
+| 3 | 0.35 | 0.10 | 0.00 | −0.25 |
+| 4 | 0.15 | 0.25 | 0.00 | +0.10 |
+| 5 | 0.35 | 0.25 | 0.00 | −0.10 |
+| 6 | 0.25 | 0.20 | 0.00 | −0.05 |
+| 7 | 0.30 | 0.45 | 0.00 | +0.15 |
+| 8 | 0.30 | 0.30 | 0.00 | 0.00 |
+| 9 | 0.05 | 0.15 | 0.00 | +0.10 |
+| 10 | 0.20 | 0.20 | 0.00 | 0.00 |
+
+`B` beats `A` in 4/10 runs, ties in 2/10, loses in 4/10 — no consistent
+direction. `C` is `H=0.000`, `P(export)=1.00` in **10/10 runs**, no
+exception.
+
+### delta_sum / delta_export
+
+```
+delta_sum    = P(summarize|summarize-hist) - P(summarize|export-hist) = 0.23 - 0.00 = +0.23
+delta_export = P(export|export-hist)    - P(export|summarize-hist)    = 1.00 - 0.77 = +0.23
+```
+
+Both positive — but this is **not sufficient evidence of semantic
+transfer**. The composition of each delta matters: `delta_sum` is positive
+almost entirely because `C`'s `P(summarize)` is forced to exactly `0.00`
+in every run (total collapse), not because `B` meaningfully raises
+`P(summarize)` above baseline — `B`'s mean (`0.230`) is in fact slightly
+*below* `A`'s mean (`0.250`). Symmetric bidirectional evidence would
+require `B` to clearly beat `A` on its own; it does not.
+
+### Structural / safety checks
+
+- **Scope**: all 30 rows show `scopes=['/reports/2026-09/']` only —
+  600/600, 0 August-scope leakage.
+- **Parse failures**: 0 — every row shows `calls=20` and
+  `P(read)+P(summarize)+P(export)=1.00`.
+- **Clarification calls**: 0 — confirmed by source inspection
+  (`experience_semantic_ablation.py` only calls
+  `ExperienceAwareDelegate.sample_candidates()`).
+- **Authority calls**: 0 — `experience_aware_delegate.py`/
+  `agent_experience.py` reference neither `Budget`, `check_authority`, nor
+  `AuthorityVerifierAgent` (DESIGN_INVARIANTS.md item 4).
+- **`task.truth`**: 0 — not present anywhere in this call path.
+- **Tokens**: 283,800 input / 15,360 output across 600 calls.
+
+### Conclusion
+
+- `delta_sum = +0.23` and `delta_export = +0.23` — both positive, but this
+  is **not** sufficient evidence of semantic transfer on its own.
+- **`summarize`-history did not improve over baseline**: mean `P(summarize)`
+  `0.230` vs. `A`'s `0.250` (slightly lower), and per-run it beats `A` in
+  only 4/10 runs, ties in 2/10, loses in 4/10 — no consistent direction.
+- **`export`-history collapsed deterministically toward the model's
+  existing export prior**: `H=0.000`, `P(export)=1.00` in 10/10 runs, with
+  zero exceptions — the same total-collapse pattern `v1` showed in §16,
+  now appearing under `v2`'s format when the historical content happens to
+  agree with the model's pre-existing lean toward `export`.
+- **Therefore: `v2` semantic transfer is not established.** The result is
+  best characterized as **asymmetric / prior-congruent priming**, not
+  successful (bidirectional) semantic transfer — consistent with the
+  presence/format-priming mechanism already identified in §7/§8/§10/§16,
+  now shown to still dominate under `v2`'s reworded representation, at
+  least in the direction that agrees with the model's own prior.
+- **Open question this result cannot answer on its own**: whether `C`'s
+  total collapse comes from (a) the mere presence of *any* `v2` historical
+  block reinforcing the model's existing export lean regardless of its
+  content, or (b) the export-specific content adding something beyond what
+  block-presence alone would do. B7d.1/B7d.2/§16 already showed (a) is a
+  real, dominant effect under `v1`'s bare-label format — B7d.5 (a neutral,
+  content-free `v2`-shaped control) is designed to check whether it is
+  *also* the dominant effect under `v2`'s reworded format, before any `v3`
+  redesign is considered.
+
+No code was modified to produce this result or this write-up.
+`render_experience_block_v1`/`_v2` and `ExperienceAwareDelegate` remain
+unchanged. All earlier B7d results (§6–§17) are preserved above, unedited.
+B7e remains not started.
+
+## 19. B7d.5 — Neutral-Format Control (Prepared, Not Yet Run)
+
+§18's B7d.4 result cannot distinguish two explanations for
+`export`-history's 10/10 deterministic collapse toward `export`: (a) `v2`'s
+block presence/format alone reinforces whatever the model's existing prior
+already favors, regardless of content — the same mechanism already found
+under `v1`'s bare-label format (§7–§10) — or (b) `v2`'s presence is roughly
+neutral and it is specifically the export-congruent *content* that adds an
+extra push in the prior's direction. A neutral, content-free `v2`-shaped
+control is needed to separate these, mirroring §10's structure-only control
+(Condition E) but applied to `v2`'s format instead of `v1`'s.
+
+**New script, not an extension of any fixed reproducer**:
+`experiments/diagnostics/experience_neutral_control.py`. None of
+`experience_transfer.py` (fixed B7d.1/B7d.2 reproducer),
+`experience_representation.py` (fixed B7d.3 reproducer), or
+`experience_semantic_ablation.py` (fixed B7d.4 reproducer) is modified.
+`src/dualflow/experience_aware_delegate.py`'s `render_experience_block_v2`
+is also **not modified** — the neutral control renderer
+(`render_experience_block_v2_neutral`) lives only in the new script, so the
+production/research implementation stays frozen regardless of this
+experiment's outcome, per instruction.
+
+**Design**: same canonical ambiguous September delegation as §16 Task 1 /
+§18. Four conditions:
+
+- **A.** no experience
+- **B.** `v2` rendering of a `summarize`-confirmed historical experience
+  (identical to §18's condition B)
+- **C.** `v2` rendering of an `export`-confirmed historical experience
+  (identical to §18's condition C)
+- **D.** `v2`-shaped neutral-history control — same header
+  (`_EXPERIENCE_HEADER_V2`, imported from `experience_aware_delegate.py`
+  rather than retyped, to avoid exactly the kind of byte-for-byte wording
+  drift `docs/REPRODUCIBILITY.md` exists to prevent), same "Example N"
+  structure, same three content lines, but the two content-bearing lines
+  (`Principal clarification`/`Confirmed interpretation`) are replaced with
+  text naming no action at all:
+
+  ```
+  Principal clarification: The intended operation for this prior task
+  was clarified with the Principal.
+  Confirmed interpretation: a meaning was confirmed for this prior
+  interaction; no specific action preference is indicated here.
+  ```
+
+  Verified structurally (dry run): the rendered block contains none of
+  `summarize`/`export`/`read`, and its header is byte-identical to
+  `render_experience_block_v2`'s.
+
+`N=20`, `repetitions=10`, 4 conditions → 800 calls.
+
+**Primary comparisons** (entropy recorded but secondary, per §11):
+
+```
+format_effect            = P(export | neutral-history) - P(export | no-experience)
+summarize_content_effect = P(summarize | summarize-history) - P(summarize | neutral-history)
+export_content_effect    = P(export | export-history) - P(export | neutral-history)
+```
+
+**Interpretation rule, fixed before running**:
+
+- If neutral-history *also* collapses toward `export` (large
+  `format_effect`), conclude `v2`'s block presence/format itself still
+  strongly primes the existing export prior — the same mechanism found
+  under `v1` (§7–§10), now shown to persist under `v2`'s reworded format.
+- If neutral-history stays near the no-experience baseline (small
+  `format_effect`) but `export`-history still collapses toward `export`
+  (large `export_content_effect`), conclude `v2` shows asymmetric,
+  prior-congruent content sensitivity — content matters, but only when it
+  already agrees with the model's prior; counter-prior (`summarize`)
+  transfer still fails.
+- Only if `summarize`-history selectively raises `P(summarize)` *and*
+  `export`-history selectively raises `P(export)`, both relative to the
+  neutral condition, would that be evidence of bidirectional
+  semantic-content sensitivity — the bar for treating `v2` as doing real
+  semantic transfer.
+
+**Status**: script written and structurally verified (fake-client dry run
+including a direct assertion that the neutral block contains no action
+words and shares `v2`'s exact header, `--help`, full `pytest -q` regression
+unaffected — 318 passed, zero diff on every previously-fixed diagnostic
+file and on `experience_aware_delegate.py`) — not yet run against the real
+API. No prompt tuning is planned after seeing results, and B7e remains not
+started regardless of this control's outcome, per the current gating order
+(§14).
