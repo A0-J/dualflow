@@ -1,191 +1,338 @@
-English | [한국어](README_KOR.md)
+[한국어](README_KOR.md)
 
 # DualFlow
 
-**Semantic and Authority Verification for Safe Agent-to-Agent Delegation**
+**Independent Semantic and Authority Verification for LLM Agent Delegation**
 
-DualFlow is a research prototype for verifying agent-to-agent delegation before execution. It separates two questions that should not be collapsed into a single confidence score:
+DualFlow is a research framework for studying **safe delegation between LLM agents**.
 
-1. **Semantic verification** — did the delegate correctly understand what the principal requested?
-2. **Authority verification** — is the proposed execution actually permitted by the delegated authority?
+When a Principal Agent delegates a task to a Delegate Agent, two different failures can occur:
 
-The current core exposes these checks as two independent verifier components:
+1. the Delegate may **misinterpret what the Principal meant**, and
+2. the Delegate may attempt an action **outside the authority it was given**.
 
-- `SemanticVerifierAgent` → `SemanticVerdict`
-- `AuthorityVerifierAgent` → `AuthorityVerdict`
+DualFlow separates these problems into two independent verification paths:
 
-Their results are combined by a deterministic joint-verification layer in `framework.py`.
+- **Semantic Verifier** — checks whether the Delegate's proposed action matches the delegated intent.
+- **Authority Verifier** — checks whether the proposed action stays within the delegated capability and scope.
 
-> **Current status**
->
-> The verifier-agent architecture is implemented, but the repository still evaluates it primarily with deterministic simulated scenarios. It is **not yet an end-to-end validation with independent production LLM agents A and B**. The next evaluation phase will connect real agent calls, remove the remaining simulation-only intent oracle from runtime matching, and regenerate the main experimental results.
-
----
-
-## Motivation
-
-Delegation can fail in two different ways.
-
-### Semantic mismatch
-
-The delegate can confidently misunderstand the request.
-
-```text
-Principal:              "Read last month's report."
-Delegate interpretation: /reports/2025-08/
-```
-
-Low uncertainty does not guarantee that the interpretation is correct.
-
-### Authority mismatch
-
-The delegate can understand the request correctly while proposing an action outside the authority that was actually delegated.
-
-```text
-Delegated scope:  read /reports/2026-08/*
-Proposed scope:   read /reports/*
-```
-
-A clear interpretation is not automatically an authorized action.
-
-DualFlow therefore verifies semantics and authority independently before execution.
+The two verifiers operate over different evidence spaces and their results are combined through deterministic logic.
 
 ---
 
 ## Architecture
 
 ```text
-                 Agent A (Principal)
-                         |
-                    delegation
-                         v
-                  Agent B (Delegate)
-                         |
-                  proposed action
-                         |
-             +-----------+-----------+
-             |                       |
-             v                       v
-   SemanticVerifierAgent    AuthorityVerifierAgent
-             |                       |
-      SemanticVerdict          AuthorityVerdict
-             |                       |
-             +-----------+-----------+
-                         |
-                         v
-               Deterministic Fusion
-                  /             \
-             EXECUTE           REJECT
+Principal Agent
+      |
+      | natural-language delegation
+      v
+Delegate Agent
+      |
+      | proposed interpretation / action
+      v
++-------------------------------+
+|                               |
+v                               v
+Semantic Verifier          Authority Verifier
+|                               |
+| SemanticVerdict               | AuthorityVerdict
+|                               |
++---------------+---------------+
+                |
+                v
+       Deterministic Fusion
+                |
+         EXECUTE / REJECT
 ```
 
-### Semantic Verifier Agent
+A key design goal is to keep semantic reasoning and authority enforcement separate. The Semantic Verifier cannot grant authority, and the Authority Verifier cannot redefine the Principal's intent.
 
-`SemanticVerifierAgent` is implemented in `semantic.py`.
+---
 
-It owns the existing semantic verification strategies:
+## Design Principles
 
-- **Fast** — entropy / clarification based verification
-- **Slow** — principal review
-- **AND** — both paths must agree
-- **Adaptive** — Fast first, with escalation when required
+### Independent verification
 
-The verifier returns a `SemanticVerdict`. The current refactor preserves the behavior of the original Fast/Slow/AND/Adaptive implementation; the agent abstraction does not by itself add a new LLM call.
+Each agent reasons from a deliberately restricted evidence space. The Delegate does not receive benchmark truth or the Principal's hidden structured intent.
 
-### Authority Verifier Agent
+The Semantic Verifier independently evaluates: delegation + Delegate proposal + runtime-visible context.
 
-`AuthorityVerifierAgent` is implemented in `authority_feedback.py`.
+The Authority Verifier evaluates: Delegate proposal + delegated `Budget` + runtime-visible context.
 
-It owns the complete authority-verification sequence:
+Verifier outputs are not shared with each other before fusion.
 
-1. deterministic authority check,
-2. bounded authority feedback when negotiation is allowed,
-3. re-validation of any revised interpretation,
-4. production of an `AuthorityVerdict`.
+### Deterministic authority boundary
 
-The low-level authority primitives remain deterministic and live in `capability.py`.
+Authority is not decided by an LLM. DualFlow keeps authority enforcement behind deterministic mechanisms such as `Budget`, `Budget.meet()`, `delegation_chain()`, and `check_authority()`.
 
-### Deterministic capability layer
+If a proposal exceeds the delegated scope, an LLM may suggest a narrower proposal, but the result must still pass `check_authority()` before it can be accepted. Semantic experience never grants or expands authority.
 
-`capability.py` provides the authority primitives used by the Authority Verifier Agent:
+### Oracle-free agent runtime
 
-- `Budget`
-- budget intersection / attenuation
-- delegation-chain composition
-- non-amplification
-- `check_authority()`
+The real agent runtime does not use `task.truth`, ground-truth labels, expected decisions, or evaluation labels to make execution decisions. Evaluation-only information remains outside the runtime path.
 
-A delegated capability cannot become broader as it moves down a delegation chain.
+Legacy controlled benchmarks are retained separately for mechanism-level evaluation and regression testing.
 
-### Joint verification
+---
 
-`framework.py` owns orchestration and final fusion. The rule engine supplies deterministic structured-intent matching; it is not a third verifier agent.
+## Agent-Connected Evaluation
 
-The intended deployment architecture is:
+The current research focuses on a repeated Principal–Delegate workflow. Instead of assuming that every delegation is immediately clear, the Delegate can estimate uncertainty over multiple candidate interpretations.
 
 ```text
-Semantic evidence  -> SemanticVerifierAgent  -> SemanticVerdict
-Authority evidence -> AuthorityVerifierAgent -> AuthorityVerdict
-                                            \ /
-                                  deterministic fusion
+Principal delegation
+        |
+        v
+Delegate candidate sampling
+        |
+        v
+Candidate distribution
+        |
+        v
+Semantic entropy
+        |
+   +----+----+
+   |         |
+ low H      high H
+   |         |
+   |         v
+   |    clarification request
+   |         |
+   |         v
+   |      Principal
+   |         |
+   |         v
+   |    clarified intent
+   |         |
+   +----+----+
+        |
+        v
+verification / execution
 ```
 
-Future deployments may give each verifier its own model call and tool context while sharing the same API client.
+The longer-term question is whether Principal-confirmed experience from previous interactions can reduce future clarification overhead without reducing semantic correctness or authority safety.
+
+### Current experimental scenario
+
+The current pilot uses a narrow, controlled workflow: **external-audit financial-report delegation**.
+
+Example ambiguous delegation:
+
+> Please prepare the September 2026 financial report for the external audit.
+
+The experimental environment currently uses the canonical action ontology `read` / `summarize` / `export`, with a grounded resource and scope, e.g. `RESOURCE = file`, `SCOPE = /reports/2026-09/`.
+
+The current entropy measurements therefore represent uncertainty over this canonical semantic action space, not over every possible free-form action an LLM could generate.
+
+### Candidate sampling and semantic entropy
+
+Instead of asking the model for a self-reported confidence score, DualFlow estimates uncertainty using independent LLM samples:
+
+```python
+distribution = delegate.sample_candidates(
+    delegation=delegation,
+    context=context,
+    n=N,
+)
+```
+
+Candidate probabilities are estimated empirically. Semantic entropy is computed as:
+
+$$ H = -\sum_i p_i \log_2 p_i $$
+
+with each candidate's contribution being $-p_i \log_2 p_i$. Entropy computation itself is local and requires no additional API calls.
+
+### Observed ambiguity
+
+For the delegation "Please prepare the August 2026 financial report for the external audit.", five independent runs with ten samples each produced:
+
+| Run | export | summarize | read | Entropy |
+| --- | --- | --- | --- | --- |
+| 1 | 0.50 | 0.50 | 0.00 | 1.000 |
+| 2 | 0.70 | 0.30 | 0.00 | 0.881 |
+| 3 | 0.60 | 0.40 | 0.00 | 0.971 |
+| 4 | 0.60 | 0.40 | 0.00 | 0.971 |
+| 5 | 0.50 | 0.50 | 0.00 | 1.000 |
+
+Across all 50 samples, the resource and scope remained correctly grounded. The ambiguity was concentrated on `summarize` vs. `export`. This provides a controlled real-API example of semantic ambiguity in natural-language delegation.
+
+### Principal clarification
+
+When candidate entropy exceeds a configurable threshold, the Delegate can ask the Principal for clarification:
+
+> **Delegate:** Should I export the financial report for the external audit, or would you prefer a summary?
+>
+> **Principal:** Please summarize the August 2026 financial report.
+
+The Delegate then samples its interpretation again using the clarification. In the initial real-API pilot, clarification was triggered in four of five runs. All four clarified runs changed from approximately `H = 0.88 ~ 0.97 bits` to `summarize = 1.00`, `H = 0.00`. The average entropy reduction among clarified runs was **0.904 bits**.
+
+This pilot demonstrates that Principal clarification can substantially reduce semantic uncertainty.
+
+### Important finding: entropy is not correctness
+
+One non-clarified run produced `export = 0.80`, `summarize = 0.20`, `H = 0.722`. Because the pilot threshold was 0.8, clarification was skipped and `export` became the selected interpretation.
+
+This exposed an important distinction: **low entropy does not imply correct interpretation.** DualFlow therefore evaluates two separate quantities:
+
+- **Semantic uncertainty** — entropy `H`.
+- **Semantic alignment** — the probability assigned to the Principal-confirmed intent.
+
+A model can become more confident while becoming less aligned with the Principal.
+
+### Verified experience
+
+Clarification outcomes can be stored as Principal-confirmed semantic experiences, indexed deterministically by `(principal_id, task_category)`. No embedding retrieval, fuzzy matching, or LLM-based retrieval is required.
+
+A verified experience records the previous delegation, the clarification question, the Principal's answer, the confirmed interpretation, and the pre-/post-clarification distributions. Low-entropy Delegate guesses that were never confirmed by the Principal are not treated as verified experience. Experience records contain no authority grants or capability information.
+
+### Experience-transfer diagnostics
+
+The initial experience representation exposed historical interactions primarily as a structured label, e.g. `Principal-confirmed interpretation: ACTION=summarize`. Real-API experiments showed that this representation did not reliably transfer the Principal-confirmed semantic pattern.
+
+A 400-call diagnostic and a subsequent 500-call structure-only control showed that:
+
+- `summarize` and `export` historical labels could produce essentially identical output distributions;
+- a neutral historical block with no action semantics could still strongly change the candidate distribution;
+- entropy could decrease while semantic alignment became worse.
+
+This led to another central finding: **historical-context priming must be distinguished from genuine semantic transfer.** The detailed negative results and diagnostic conditions are preserved rather than removed from the experimental record — see [`docs/experiments/agent_connected_eval.md`](docs/experiments/agent_connected_eval.md).
+
+### Semantic-memory representation v2
+
+The current redesign represents experience as a relationship instead of a single historical label:
+
+```text
+previous ambiguous delegation
+        |
+        v
+Delegate clarification question
+        |
+        v
+Principal clarification
+        |
+        v
+confirmed meaning
+```
+
+The model is instructed to use verified prior interactions specifically as evidence for resolving ambiguous parts of the current delegation, while explicit instructions in the current task must override historical experience.
+
+The initial v2 pilot showed a partial semantic-transfer signal on the ambiguous task while preserving explicit current instructions. However, the experiment also revealed a context-wording drift confound, so the absolute baseline from that pilot should not be directly compared with earlier experiments. Exact prompt reproducibility is therefore the current priority before the next large evaluation.
 
 ---
 
-## What Is Implemented Today
+## Repository Structure
 
-The current repository implements:
+```text
+dualflow/
+├── src/
+│   └── dualflow/
+│       ├── principal_agent.py
+│       ├── delegate_agent.py
+│       ├── semantic.py
+│       ├── authority_feedback.py
+│       ├── capability.py
+│       ├── framework.py
+│       ├── clarification.py
+│       ├── agent_experience.py
+│       ├── experience_aware_delegate.py
+│       ├── agent_runtime.py
+│       └── llm.py
+│
+├── experiments/
+│   ├── agent_smoke.py
+│   ├── demo.py
+│   ├── benchmark.py
+│   ├── bench.py
+│   ├── plots.py
+│   ├── entropy_probe.py
+│   ├── baselines/
+│   │   └── sage.py
+│   │
+│   ├── diagnostics/
+│   │   ├── experience_transfer.py
+│   │   └── experience_representation.py
+│   │
+│   └── scenarios/
+│       └── external_audit_finance.json
+│
+├── docs/
+│   ├── ARCHITECTURE.md
+│   ├── EXPERIMENTS.md
+│   ├── BASELINES.md
+│   ├── DESIGN_NOTES.md
+│   └── experiments/
+│       └── agent_connected_eval.md
+│
+├── results/
+│   └── agent/
+│
+├── figures/
+│   └── agent/
+│
+└── tests/
+```
 
-- independent Semantic and Authority verifier interfaces,
-- deterministic capability checking and delegation attenuation,
-- bounded authority feedback,
-- semantic Fast / Slow / AND / Adaptive strategies,
-- verified-authority reuse as an optimization layer,
-- deterministic joint verification,
-- a SAGE-Agent comparison implementation,
-- deterministic benchmark and diagnostic experiments.
-
-The core refactor is intentionally behavior-preserving. The verifier-agent abstractions were extracted from the existing implementation without changing the current benchmark outputs.
+- `src/dualflow/` contains the runtime mechanisms.
+- `experiments/scenarios/` contains reproducible research scenarios — the literal, model-visible delegation/context strings, not just semantic fields code reconstructs prose from.
+- `experiments/diagnostics/` contains experiments used to investigate specific failure modes (semantic-transfer priming, representation redesign).
+- `experiments/baselines/sage.py` reproduces the SAGE-Agent paper's Algorithm 1 as a comparison baseline; it is not part of the `dualflow` core package.
+- `docs/experiments/agent_connected_eval.md` preserves the chronological real-API experimental record, including unexpected and negative results.
+- `results/agent/` and `figures/agent/` are reserved for the sequential agent evaluation and final research outputs.
 
 ---
 
-## Important Evaluation Boundary
+## Installation
 
-The current experiments are **mechanism tests**, not yet production-agent validation.
+Install the core package:
 
-The controlled benchmark uses simulated task state and a simulated principal. Ground truth is valid for evaluation and for simulating what the principal knows.
+```bash
+pip install -e .
+```
 
-However, the current branch still contains a simulation-only dependency in final joint matching: the runtime intent reference is derived from `task.truth` through `DelegationTask.intent_fields`. A deployed verifier cannot assume access to that hidden truth.
-
-We confirmed this is load-bearing, not incidental, by actually removing it: substituting the Semantic Verifier's own resolved interpretation as the reference collapses misread detection specifically — the comparison becomes "the delegate's interpretation vs. the delegate's interpretation," which is tautological whenever Authority doesn't independently modify the proposal. `Full = 0% unsafe` (Experiment 1) becomes 11.1% (the `silent_misread` case) under that substitution.
-
-The next research-behavior change is therefore to make the runtime joint check use the resolved `SemanticVerdict` as its semantic reference, while keeping `task.truth` only for evaluation — and to design where an independent second semantic signal comes from in deployment (principal reconfirmation is the obvious candidate, which reopens the same cost/safety tradeoff Adaptive Feedback already explores).
-
-Until that change and the real Agent A/B evaluation are complete, the existing pilot numbers should be treated as controlled sanity checks and ablations rather than the paper's final main-result evidence.
-
----
-
-## Quick Start
+For running tests and regenerating figures:
 
 ```bash
 pip install -e ".[dev]"
+```
+
+For real LLM-agent experiments:
+
+```bash
+pip install -e ".[agent]"
+```
+
+Set the API key using an environment variable:
+
+```bash
+export OPENAI_API_KEY="..."
+```
+
+PowerShell:
+
+```powershell
+$env:OPENAI_API_KEY="..."
+```
+
+Do not place API keys in source files or command-line arguments.
+
+---
+
+## Quick Checks
+
+Run the test suite:
+
+```bash
 pytest -q
 ```
 
-Current refactor baseline:
-
-```text
-183 passed
-```
-
-Run the minimal demo:
+Run the controlled demonstration:
 
 ```bash
 python experiments/demo.py
 ```
 
-Run the canonical controlled benchmark:
+Run the controlled benchmark:
 
 ```bash
 python experiments/benchmark.py
@@ -197,157 +344,99 @@ Generate the retained experiment figures:
 python experiments/plots.py --outdir figures
 ```
 
-Inspect the entropy probe options:
+Inspect available real-agent smoke modes:
 
 ```bash
-python experiments/entropy_probe.py --help
+python experiments/agent_smoke.py --help
 ```
+
+Examples:
+
+```bash
+python experiments/agent_smoke.py --role principal
+python experiments/agent_smoke.py --role delegate
+python experiments/agent_smoke.py --role semantic
+python experiments/agent_smoke.py --role authority
+python experiments/agent_smoke.py --role runtime
+python experiments/agent_smoke.py --role sample --n 10
+python experiments/agent_smoke.py --role clarify --n 10 --entropy-threshold 0.8
+python experiments/agent_smoke.py --role experience --n 10
+```
+
+### Reproducing experience-transfer diagnostics
+
+The experience-transfer diagnostics are implemented separately from the runtime:
+
+```bash
+python experiments/diagnostics/experience_transfer.py --help
+python experiments/diagnostics/experience_representation.py --help
+```
+
+The experiment scenario is stored under `experiments/scenarios/external_audit_finance.json`. Raw local API outputs are intentionally excluded from Git. The repository instead preserves the experimental conditions, reproducible diagnostic code, aggregate observations, known confounds, and the chronological research log.
 
 ---
 
-## Experiments
+## Controlled Benchmark vs. Agent-Connected Evaluation
 
-The experiment scripts are intentionally kept outside the core package.
+The repository currently contains two different forms of evaluation.
 
-```text
-experiments/
-├── demo.py
-├── benchmark.py
-├── entropy_probe.py
-├── plots.py
-├── bench.py
-└── baselines/
-    └── sage.py
-```
+**Controlled benchmark** — used for mechanism-level testing, regression testing, and controlled semantic/authority failure cases. Some legacy controlled evaluation paths use oracle information internally and should not be interpreted as real-agent runtime evaluation.
 
-### `demo.py`
+**Agent-connected evaluation** — uses real Principal, Delegate, Semantic Verifier, and Authority Verifier interactions. The actual runtime does not use benchmark truth to make decisions.
 
-Minimal end-to-end examples of the current DualFlow pipeline.
-
-### `benchmark.py`
-
-Canonical controlled benchmark used during the core refactor.
-
-### `entropy_probe.py`
-
-Focused diagnostic experiment for semantic uncertainty behavior.
-
-### `plots.py`
-
-Generates the retained experiment figures. Plotting is separated from the `dualflow` package so the core implementation does not depend on visualization code. It imports `bench.py` and `benchmark.py` as sibling scripts, not from the `dualflow` package.
-
-### `bench.py`
-
-Not a single legacy file — it serves two different roles. `build_tasks()` and the 9-task pilot set it defines are the superseded v0 benchmark (`experiments/benchmark.py` is the canonical replacement); `scope_negotiation_tasks()` / `scope_negotiation_sequence()`, by contrast, are still the current canonical data source for the Authority Feedback and Adaptive Authority experiments. See `docs/EXPERIMENTS.md` §1.1 for the exact mapping.
-
-### `baselines/sage.py`
-
-Reproduces the SAGE-Agent paper's Algorithm 1 as a comparison baseline. It is not part of the `dualflow` core package — `framework.py` has no dependency on it and only knows it through the generic `Config.semantic_engine` injection hook, via `as_semantic_engine()`.
-
-Historical pilot and diagnostic results that are no longer part of the main evaluation are documented in `docs/EXPERIMENTS.md`.
+The two evaluation settings are intentionally documented separately.
 
 ---
 
-## Repository Structure
+## Current Research Status
 
-```text
-src/dualflow/
-├── capability.py
-├── semantic.py
-├── authority_feedback.py
-├── rule_engine.py
-├── framework.py
-├── llm.py
-└── ...
-
-experiments/
-├── demo.py
-├── benchmark.py
-├── entropy_probe.py
-├── plots.py
-├── bench.py
-└── baselines/
-    └── sage.py
-
-docs/
-tests/
-figures/
-```
-
-### Core modules
-
-| Module | Responsibility |
+| Item | Status |
 | --- | --- |
-| `semantic.py` | Semantic representations and `SemanticVerifierAgent` |
-| `authority_feedback.py` | `AuthorityVerifierAgent`, bounded authority feedback, verified-authority reuse |
-| `capability.py` | Deterministic capability / budget / delegation primitives |
-| `rule_engine.py` | Deterministic structured-intent compatibility checks |
-| `framework.py` | End-to-end orchestration and deterministic fusion |
-| `llm.py` | Model-facing interfaces / adapters |
+| LLM abstraction | complete |
+| Principal Agent | complete |
+| Delegate Agent | complete |
+| Semantic Verifier | complete |
+| Authority Verifier | complete |
+| Oracle-free deterministic runtime | complete |
+| Candidate sampling | complete |
+| Entropy-based clarification | complete |
+| Verified experience storage | complete |
+| Experience-aware sampling | implemented |
+| v1 semantic-transfer diagnostic | complete |
+| Structure-only control | complete |
+| v2 semantic-memory redesign | implemented |
+| v2 real-API pilot | partial evidence |
+| Exact scenario/prompt reproducibility | current priority |
+| Sequential multi-episode evaluation | not started |
 
-The SAGE-Agent comparison baseline (`experiments/baselines/sage.py`) and the v0/mini-set benchmark scaffolding (`experiments/bench.py`) live under `experiments/`, not `src/dualflow/` — neither is part of the core package. See [Experiments](#experiments) above.
-
----
-
-## Current Limitations
-
-The current repository should not yet be read as evidence of production-ready multi-agent safety.
-
-- Agent A and Agent B are not yet connected as independent real LLM agents in the canonical experiment.
-- The verifier agents are structurally independent, but the current controlled experiments do not yet require two independent production model calls.
-- Semantic candidate generation and principal behavior are still simulated in the controlled benchmark.
-- Authority checking currently operates on explicit `Budget` / capability state; policy retrieval from natural-language organizational policies is future work.
-- The current runtime joint match still contains simulation-derived ground-truth wiring, as described above.
-- The benchmark is small and controlled rather than a naturalistic task distribution.
-- Existing pilot figures are useful for regression testing and mechanism ablations, but they should not be treated as the final main experimental evidence for the agent-pair architecture.
+The sequential experiment is intentionally postponed until the semantic-transfer behavior is reproducible under an exactly fixed model-visible scenario.
 
 ---
 
-## Next Steps
+## Current Research Questions
 
-1. **Remove the runtime ground-truth oracle**
-   - derive final semantic matching from `SemanticVerdict`, not `task.truth`;
-   - retain ground truth only for scoring and simulation.
-
-2. **Connect real Agent A and Agent B**
-   - generate the delegation and proposal through independent model calls;
-   - keep Semantic and Authority verifier contexts separate.
-
-3. **Upgrade AuthorityVerifierAgent for deployment**
-   - policy retrieval,
-   - delegation / identity lookup,
-   - resource-state inspection,
-   - evidence-backed authority decisions,
-   - explicit unknown / escalation handling.
-
-4. **Run a new agent-connected benchmark**
-   - no verification,
-   - semantic-only,
-   - authority-only,
-   - single-verifier / joint-prompt baseline,
-   - DualFlow independent verifier pair + deterministic fusion.
-
-5. **Regenerate paper-facing figures**
-   - correct execution rate,
-   - unsafe execution / attack success rate,
-   - false rejection rate,
-   - clarification / escalation rate,
-   - LLM calls,
-   - latency,
-   - token cost,
-   - mechanism ablations.
+1. Can verified Principal-specific experience improve semantic alignment on later ambiguous delegations?
+2. Can it do so without overriding explicit changes in the current instruction?
+3. Does accumulated experience reduce clarification rate, LLM calls, token usage, and latency?
+4. Can these efficiency gains be achieved without degrading semantic correctness or authority safety?
+5. How sensitive are the results to prompt wording and entropy thresholds?
+6. How well does the method extend beyond a closed canonical action ontology?
 
 ---
 
 ## Documentation
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — architecture and safety invariants
+- [`docs/DESIGN_INVARIANTS.md`](docs/DESIGN_INVARIANTS.md) — conditions that must never be broken by any future change, in one place
+- [`docs/REPRODUCIBILITY.md`](docs/REPRODUCIBILITY.md) — what must be fixed and recorded for a real-API result to be reproducible (scenario version, model, prompt fingerprint, ...)
+- [`experiments/README.md`](experiments/README.md) — what each script under `experiments/` does and which one to use
+- [`docs/experiments/agent_connected_eval.md`](docs/experiments/agent_connected_eval.md) — real-LLM agent-connected evaluation log, including unexpected/negative results
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — mechanism-level architecture explanation (source-code level)
 - [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) — controlled experiments and historical pilot results
 - [`docs/BASELINES.md`](docs/BASELINES.md) — baseline notes
-- [`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md) — implementation and research design notes
-- [`docs/experiments/agent_connected_eval.md`](docs/experiments/agent_connected_eval.md) — real-LLM agent-connected evaluation log (B7a onward), including unexpected/negative results
+- [`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md) — abandoned approaches and implementation decisions
+- [README_KOR.md](README_KOR.md) — Korean README
 
-Some documentation still reflects the pre-agent-pair implementation and is being updated as part of the refactor.
+This repository is under active research development. Unexpected and negative experimental results are intentionally preserved in the documentation. In particular, lower semantic entropy is not treated as evidence of improved semantic correctness unless semantic alignment is also evaluated.
 
 ---
 

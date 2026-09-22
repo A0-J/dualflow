@@ -1,18 +1,27 @@
 {
   "scenario_id": "external_audit_finance",
-  "description": "External-audit financial-report delegation between a recurring Principal (finance_lead_A) and Delegate, used by B6.1's grounded pilot (agent_smoke.py) and the B7d.1/B7d.2 experience-transfer diagnostics.",
+  "scenario_version": "1.1",
+  "description": "External-audit financial-report delegation between a recurring Principal (finance_lead_A) and Delegate, used by B6.1's grounded pilot (agent_smoke.py) and the B7d.1/B7d.2 experience-transfer diagnostics. current_episode.context/delegation are the literal, real-API-validated model-visible strings (byte-identical to agent_smoke.py EXAMPLE_CURRENT_CONTEXT/EXAMPLE_CURRENT_DELEGATION as of B7d.3) -- diagnostics must consume them as-is, not reconstruct prose from the other fields.",
   "principal_id": "finance_lead_A",
   "task_category": "external_audit_report",
   "reference_date": "2026-09-23",
-  "action_vocabulary": ["read", "summarize", "export"],
-  "resource_vocabulary": ["file"],
+  "action_vocabulary": [
+    "read",
+    "summarize",
+    "export"
+  ],
+  "resource_vocabulary": [
+    "file"
+  ],
   "current_episode": {
     "delegation": "Please prepare the September 2026 financial report for the external audit.",
+    "context": "Reference date: 2026-09-23.\n\nEnvironment:\n- Financial reports are represented as resource type \"file\".\n- Report root: /reports/.\n- The September 2026 report is located at /reports/2026-09/.\n- \"this month\" means September 2026.\n\nAllowed action vocabulary:\n- read\n- summarize\n- export\n\nAllowed resource vocabulary:\n- file\n\nAllowed scope vocabulary:\n- /reports/2026-09/\n- /reports/\n\nWhen producing a structured action:\n- choose exactly one ACTION from the allowed action vocabulary;\n- choose exactly one RESOURCE from the allowed resource vocabulary;\n- choose exactly one listed SCOPE;\n- do not invent aliases or combine multiple actions.",
     "resource": "file",
     "scope": "/reports/2026-09/",
-    "scope_vocabulary": ["/reports/2026-09/", "/reports/"],
-    "temporal_label": "this month",
-    "temporal_meaning": "September 2026"
+    "scope_vocabulary": [
+      "/reports/2026-09/",
+      "/reports/"
+    ]
   },
   "historical_episode": {
     "delegation": "Please prepare the August 2026 financial report for the external audit.",
