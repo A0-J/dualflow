@@ -38,9 +38,10 @@ experiments/
 │
 ├── scenarios/
 │   └── external_audit_finance.json
-│       The authoritative experiment scenario. Stores the literal,
-│       model-visible delegation/context strings the diagnostics above
-│       send to the model — not fields that code reconstructs prose from.
+│       Authoritative scenario definition for the reproducible diagnostic
+│       experiments in this directory. Stores the literal model-visible
+│       delegation/context strings consumed by those diagnostics rather
+│       than semantic fields from which Python reconstructs prose.
 │       See docs/REPRODUCIBILITY.md for why this matters (a paraphrase
 │       here measurably changed real-API results once already).
 │
@@ -94,11 +95,29 @@ table is a map, not a substitute for reading it.
 
 ## Real-API scripts
 
-`agent_smoke.py` and everything under `diagnostics/` make real, billed
-OpenAI API calls. They require `pip install -e ".[agent]"` and
-`OPENAI_API_KEY` set as an environment variable — never as a CLI argument.
-See [`../docs/REPRODUCIBILITY.md`](../docs/REPRODUCIBILITY.md) before
-running or reporting results from any of them: raw API output must stay
-local (never committed), and the exact scenario version / model /
-N-and-repetitions / prompt fingerprint must be recorded alongside any
-number that gets reported.
+The real-API modes of `agent_smoke.py` and the scripts under
+`diagnostics/` can make billed OpenAI API calls. They require:
+
+```bash
+pip install -e ".[agent]"
+```
+
+and `OPENAI_API_KEY` must be provided through the environment, never as a
+CLI argument.
+
+Before running or reporting a real-API experiment, read
+[`../docs/REPRODUCIBILITY.md`](../docs/REPRODUCIBILITY.md).
+
+Any reported result should record enough metadata to identify the exact
+experiment, including at least:
+
+- Git commit SHA
+- scenario ID and version
+- model name
+- samples per condition (N)
+- number of repetitions
+- delegation/context fingerprints when applicable
+
+Ad-hoc stdout and scratch API outputs should remain local unless they are
+intentionally promoted into a versioned research result under
+`results/agent/`.
