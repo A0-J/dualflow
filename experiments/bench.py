@@ -1,14 +1,21 @@
 """
 DelegationBench-mini (v0) — 각 트랙이 잡아야 할 실패 모드를 하나씩 담은 소형 벤치마크.
 
-**superseded**: 이 9-task 벤치마크는 독립적 vignette 9개로 구성된 초기 탐색
-pilot이다. 이후 하나의 연속된 작은 환경으로 재설계된
-`bench_single_env_v1.build_single_env_sequence()`(v1)가 논문 본문이 인용하는
-canonical 결과다 — 자세한 사유는 DESIGN_NOTES.md §2, EXPERIMENTS.md §1 참고.
-여기(v0)는 삭제하지 않는다: v1이 같은 정성적 패턴을 독립적으로 재현했다는 것
-자체가 내부 replication 증거이기 때문이다.
+이 모듈은 두 가지 서로 다른 역할을 겸한다 — 하나로 뭉쳐 있다고 둘 다
+"legacy"인 건 아니다.
 
-카테고리
+1. **superseded** — `build_tasks()`/`PRINCIPAL`/`VAGUE_CANDIDATES`가 정의하는
+   9-task 벤치마크 자체는 독립적 vignette 9개로 구성된 초기 탐색 pilot이다.
+   이후 하나의 연속된 작은 환경으로 재설계된 `experiments.benchmark.TASKS`
+   (v1)가 논문 본문이 인용하는 canonical Core Ablation 결과다 — 자세한 사유는
+   DESIGN_NOTES.md §2, EXPERIMENTS.md §1 참고. 그래도 `build_tasks()`는 여전히
+   `experiments/plots.py`의 fig3(θ sweep, appendix)가 직접 호출한다.
+2. **current** — `scope_negotiation_tasks()`/`scope_negotiation_sequence()`는
+   legacy가 아니다. `docs/EXPERIMENTS.md` §1.1이 명시하듯 Experiment 2(fig7,
+   Authority Feedback)와 Experiment 3(fig8, Adaptive Authority)의 **현재
+   canonical** 데이터 소스다 — v1의 8-step 환경이 대체한 적이 없다.
+
+카테고리(9-task 벤치마크 한정)
   clear          명세가 이미 충분히 구체적 → 역질의도 LLM 도 필요 없음
   ambiguous      모호하지만 역질의로 수렴 → LLM 미호출
   persistent     A 도 특정 못 해 역질의가 수렴하지 않음 → LLM fallback
@@ -20,16 +27,19 @@ canonical 결과다 — 자세한 사유는 DESIGN_NOTES.md §2, EXPERIMENTS.md 
 
 각 과제의 '이상적 판정' 은 손으로 적지 않고 A 의 실제 의도로부터 유도한다
 (DelegationTask.ideal_decision). 판정 기준을 파이프라인과 독립적으로 두기 위해서다.
+
+이 스크립트는 DualFlow core package(`dualflow`)의 일부가 아니다 — 설치된
+package를 사용하는 외부 코드다.
 """
 
 from __future__ import annotations
 
-from .capability import Budget, Privilege
 import dataclasses
 
-from .framework import DelegationTask
-from .llm import ScriptedJudge
-from .semantic import Interpretation as I
+from dualflow.capability import Budget, Privilege
+from dualflow.framework import DelegationTask
+from dualflow.llm import ScriptedJudge
+from dualflow.semantic import Interpretation as I
 
 # --------------------------------------------------------------------------
 # Agent A(오케스트레이터)의 권한. delete 권한은 애초에 없다.

@@ -38,7 +38,7 @@ Optimization Layer ── principal 호출 비용만 줄임, 안전성 자체는
   Verified Authority Store → Adaptive Feedback Gate → 필요할 때만 principal 호출
 ```
 
-`Config.use_verified_experience=False`로 Optimization Layer를 완전히 꺼도 Core만으로 동일한 안전성 보장이 유지된다([framework.py:65](../src/dualflow/framework.py#L65), README "Architecture" 절). 본 문서의 §3–§6은 Core, §7·§9·§10은 Optimization Layer, §8은 두 층을 관통하는 구조적 불변식, §11은 두 층이 실제로 한 번의 `DelegationVerifier.run()` 호출 안에서 어떻게 엮이는지를 다룬다.
+`Config.use_verified_experience=False`로 Optimization Layer를 완전히 꺼도 Core만으로 동일한 안전성 보장이 유지된다([framework.py:71-73](../src/dualflow/framework.py#L71-L73), README "Architecture" 절). 본 문서의 §3–§6은 Core, §7·§9·§10은 Optimization Layer, §8은 두 층을 관통하는 구조적 불변식, §11은 두 층이 실제로 한 번의 `DelegationVerifier.run()` 호출 안에서 어떻게 엮이는지를 다룬다.
 
 ---
 
@@ -48,31 +48,37 @@ Optimization Layer ── principal 호출 비용만 줄임, 안전성 자체는
 
 `Budget`은 downward-closed privilege 집합을 극대 원소(generators)만으로 표현한 정규형이다([capability.py:104-135](../src/dualflow/capability.py#L104-L135)). `generators`의 기본값은 빈 집합이라 `Budget()`이 곧 fail-closed 기본값이다 — 아무것도 위임하지 않으면 아무것도 못 한다.
 
-위임 체인은 `Agent(name, budget)`들의 연쇄이고, 한 홉의 위임은 `delegate(principal, spec_ceiling)`가 `principal.meet(spec_ceiling)`으로 계산한다 — 명세가 아무리 넓은 권한을 요구해도 결과는 `principal`을 넘지 못한다([capability.py:150-158](../src/dualflow/capability.py#L150-L158)). `delegation_chain(principal, ceilings)`는 다홉 위임의 각 단계별 유효 예산을 리스트로 반환한다([capability.py:161-166](../src/dualflow/capability.py#L161-L166)).
+위임은 `delegate(principal, spec_ceiling)`가 `principal.meet(spec_ceiling)`으로 계산한다 — 명세가 아무리 넓은 권한을 요구해도 결과는 `principal`을 넘지 못한다([capability.py:141-149](../src/dualflow/capability.py#L141-L149)). `delegation_chain(principal, ceilings)`는 다홉 위임의 각 단계별 유효 예산을 리스트로 반환한다([capability.py:152-158](../src/dualflow/capability.py#L152-L158)).
 
-평가 단위는 `DelegationTask`다 — 위임 명세(`spec`), 시작 예산(`principal_budget`)과 홉별 상한(`ceilings`), 해석 후보 집합(`candidates`), 평가용 실제 의도(`truth`), 시스템 변수(`sysvars`), 협상 불가 차원(`refuses`) 등을 담는다([framework.py:128-164](../src/dualflow/framework.py#L128-L164)). `effective_budget()`은 `delegation_chain(...)[-1]`이고, `ideal_decision()`은 파이프라인과 무관하게 "`truth`가 유효 예산 안에 있고(§4) SOP상 EXECUTE 대상인가(§6)"만으로 정의되는 상한선 판정이다([framework.py:152-164](../src/dualflow/framework.py#L152-L164)) — 어떤 설정도 이보다 더 잘할 수는 없다는 평가 기준선이다.
+평가 단위는 `DelegationTask`다 — 위임 명세(`spec`), 시작 예산(`principal_budget`)과 홉별 상한(`ceilings`), 해석 후보 집합(`candidates`), 평가용 실제 의도(`truth`), 시스템 변수(`sysvars`), 협상 불가 차원(`refuses`) 등을 담는다([framework.py:121-157](../src/dualflow/framework.py#L121-L157)). `effective_budget()`은 `delegation_chain(...)[-1]`이고, `ideal_decision()`은 파이프라인과 무관하게 "`truth`가 유효 예산 안에 있고(§4) SOP상 EXECUTE 대상인가(§6)"만으로 정의되는 상한선 판정이다([framework.py:145-157](../src/dualflow/framework.py#L145-L157)) — 어떤 설정도 이보다 더 잘할 수는 없다는 평가 기준선이다.
 
 ---
 
 ## 3. Semantic Flow
 
-**"B가 A의 요청을 무엇으로 이해했는가"**를 다룬다. 해석 후보는 `Interpretation(action, resource, scope, condition)`이며 `.privilege()`로 `Privilege`로 변환된다([semantic.py:36-58](../src/dualflow/semantic.py#L36-L58)). `Belief`는 `dict[Interpretation, float]`이고, 불확실성은 Shannon entropy `entropy(p) = -Σ p·log2(p)`로 측정한다([semantic.py:71-73](../src/dualflow/semantic.py#L71-L73)).
+**"B가 A의 요청을 무엇으로 이해했는가"**를 다룬다. 해석 후보는 `Interpretation(action, resource, scope, condition)`이며 `.privilege()`로 `Privilege`로 변환된다([semantic.py:38-60](../src/dualflow/semantic.py#L38-L60)). `Belief`는 `dict[Interpretation, float]`이고, 불확실성은 Shannon entropy `entropy(p) = -Σ p·log2(p)`로 측정한다([semantic.py:74-76](../src/dualflow/semantic.py#L74-L76)).
 
-**초기 belief.** `build_belief(candidates, experience, weight)`는 후보의 사전 그럴듯함(plausibility)과 `ExperienceStore`에서 가져온 과거 카운트를 결합해 정규화한다([semantic.py:128-136](../src/dualflow/semantic.py#L128-L136)).
+**초기 belief.** `build_belief(candidates, experience, weight)`는 후보의 사전 그럴듯함(plausibility)과 `ExperienceStore`에서 가져온 과거 카운트를 결합해 정규화한다([semantic.py:131-139](../src/dualflow/semantic.py#L131-L139)).
 
-**Experience Score 게이트.** `ExperienceStore.score(key)`는 `share * n / (n + smoothing)` — 가장 많이 나온 해석의 점유율(`share`)과 표본 수(`n`)를 함께 반영하는 0~1 값이다([semantic.py:108-115](../src/dualflow/semantic.py#L108-L115)). `framework._fast()`는 `score ≥ cfg.sigma`(기본 0.8)면 엔트로피 계산 자체를 건너뛰고 `ExperienceStore.best(key)`로 자율 판단한다([framework.py:191-199](../src/dualflow/framework.py#L191-L199)).
+**알고리즘의 위치.** Fast/Slow/AND/Adaptive 라우팅 알고리즘 자체는 `framework.py`가 아니라 `semantic.SemanticVerifierAgent`에 구현돼 있다([semantic.py:379-595](../src/dualflow/semantic.py#L379-L595)) — `DelegationVerifier`가 갖고 있던 `_fast`/`_slow`/`_adaptive`/`_consistent`/`_experience_conflict`를 몸체 그대로 옮긴 것으로 동작에 변화는 없다. `DelegationVerifier.__init__`이 `Config` 객체를 통째로 넘기는 대신 필요한 스칼라 필드만 풀어서 생성자에 전달한다 — `mode`, `theta`, `k`, `sigma`, `lam`, `experience_weight`, `always_llm`, `use_experience`, `use_llm`, `use_consistency_check`, `consistency_sigma`, `adaptive_sigma`, 그리고 `experience`/`judge` 인스턴스([framework.py:173-182](../src/dualflow/framework.py#L173-L182); 생성자 시그니처, [semantic.py:389-407](../src/dualflow/semantic.py#L389-L407)). 진입점은 `SemanticVerifierAgent.verify(task, principal, log)`이며 `self.mode`(fast/slow/adaptive, 그 외는 AND로 취급)로 분기한다([semantic.py:409-430](../src/dualflow/semantic.py#L409-L430)).
 
-**Entropy 게이트 + Clarification.** 점수가 부족하면 `entropy(belief) ≤ cfg.theta`(기본 0.5 bits)인지 검사한다. 넘으면 최대 `cfg.k`회(기본 2) 역질의를 반복한다([framework.py:210-229](../src/dualflow/framework.py#L210-L229)). 질문 선택은 정보이득 기준이다 — `information_gain(p, q) = H(p) − E_r[H(p|r)]`는 상호정보량이므로 항상 0 이상이다([semantic.py:180-182](../src/dualflow/semantic.py#L180-L182)). `select_question()`은 `IG − λ·(이미 물어본 횟수)`가 최대인 질문을 고르고, 이득이 0 이하면 더 묻지 않는다([semantic.py:185-196](../src/dualflow/semantic.py#L185-L196)). 답변은 `apply_answer()`가 모순되는 후보를 제거하고 재정규화한다([semantic.py:199-206](../src/dualflow/semantic.py#L199-L206)).
+**Experience Score 게이트.** `ExperienceStore.score(key)`는 `share * n / (n + smoothing)` — 가장 많이 나온 해석의 점유율(`share`)과 표본 수(`n`)를 함께 반영하는 0~1 값이다([semantic.py:111-118](../src/dualflow/semantic.py#L111-L118)). `_fast()`는 `score ≥ self.sigma`(기본 0.8)면 엔트로피 계산 자체를 건너뛰고 `ExperienceStore.best(key)`로 자율 판단한다([semantic.py:440-451](../src/dualflow/semantic.py#L440-L451)).
 
-**LLM fallback.** `H ≤ θ`로 수렴하면 LLM 호출 없이 확정한다. 그래도 안 되면(`k`회 소진) `LLMJudge.judge()`를 1회 호출한다(§6-2 참고). 즉 LLM은 "우선 시도"가 아니라 마지막 자원이다.
+**Entropy 게이트 + Clarification.** 점수가 부족하면 `entropy(belief) ≤ self.theta`(기본 0.5 bits)인지 검사한다. 넘으면 최대 `self.k`회(기본 2) 역질의를 반복한다([semantic.py:459-486](../src/dualflow/semantic.py#L459-L486)). 질문 선택은 정보이득 기준이다 — `information_gain(p, q) = H(p) − E_r[H(p|r)]`는 상호정보량이므로 항상 0 이상이다([semantic.py:183-185](../src/dualflow/semantic.py#L183-L185)). `select_question()`은 `IG − λ·(이미 물어본 횟수)`가 최대인 질문을 고르고, 이득이 0 이하면 더 묻지 않는다([semantic.py:188-199](../src/dualflow/semantic.py#L188-L199)). 답변은 `apply_answer()`가 모순되는 후보를 제거하고 재정규화한다([semantic.py:202-209](../src/dualflow/semantic.py#L202-L209)).
 
-**Fast / Slow / AND / Adaptive.** `Config.mode`가 라우팅 전략을 고른다.
-- `fast` — 위 게이트 파이프라인 그대로(`_fast`, [framework.py:182-247](../src/dualflow/framework.py#L182-L247)).
-- `slow` — B가 정리한 해석 전체를 A에게 제시하고 `Principal.review()`로 승인/교정/불확정 중 하나를 받는다(`_slow`, [framework.py:279-306](../src/dualflow/framework.py#L279-L306); `Principal.review`, [semantic.py:258-293](../src/dualflow/semantic.py#L258-L293)).
-- `and` — Fast로 좁힌 해석을 다시 Slow로 확인받는다. `strict=True`이므로 A의 교정(`correct`)조차 "불일치"로 처리해 확정하지 않는다 — 오탐을 0으로 유지하는 대신 미탐을 감내하는 보수적 결합([framework.py:371-382](../src/dualflow/framework.py#L371-L382)).
-- `adaptive` — 평소엔 Fast만 돌리고, Fast가 미확정이거나 확정 결과가 누적 경험(`ExperienceStore`)과 정면으로 모순될 때만 Slow로 에스컬레이션한다(`_adaptive`, [framework.py:309-347](../src/dualflow/framework.py#L309-L347)). 이것은 **Semantic Flow 내부의** adaptive 전략이며, §7·§9·§10의 Optimization Layer(Authority 쪽 Adaptive Feedback)와는 다른 메커니즘이다([DESIGN_NOTES.md](DESIGN_NOTES.md) §12).
+**LLM fallback.** `H ≤ θ`로 수렴하면 LLM 호출 없이 확정한다. 그래도 안 되면(`k`회 소진) `LLMJudge.judge()`를 1회 호출한다([semantic.py:488-496](../src/dualflow/semantic.py#L488-L496)). 즉 LLM은 "우선 시도"가 아니라 마지막 자원이다.
 
-Principal 시뮬레이션은 `semantic.Principal`이 맡는다 — `truth`를 알고 있는 오라클이지만, 물어본 차원에만 답하고(`answer`), `carelessness`(부주의한 승인)와 `overcaution`(과잉신중한 반려) 두 축으로 완벽하지 않은 검토자를 흉내낸다([semantic.py:225-293](../src/dualflow/semantic.py#L225-L293)).
+**Fast / Slow / AND / Adaptive.** `Config.mode`가 라우팅 전략을 고른다(값은 `fast | slow | and | adaptive` 넷뿐이다 — SAGE는 아래 참고).
+- `fast` — 위 게이트 파이프라인 그대로(`_fast`, [semantic.py:433-496](../src/dualflow/semantic.py#L433-L496)).
+- `slow` — B가 정리한 해석 전체를 A에게 제시하고 `Principal.review()`로 승인/교정/불확정 중 하나를 받는다(`_slow`, [semantic.py:528-554](../src/dualflow/semantic.py#L528-L554); `Principal.review`, [semantic.py:261-296](../src/dualflow/semantic.py#L261-L296)).
+- `and` — `verify()` 안에서 Fast로 좁힌 해석을 다시 Slow(`strict=True`)로 확인받는다([semantic.py:419-430](../src/dualflow/semantic.py#L419-L430)). `strict=True`이므로 A의 교정(`correct`)조차 "불일치"로 처리해 확정하지 않는다 — 오탐을 0으로 유지하는 대신 미탐을 감내하는 보수적 결합.
+- `adaptive` — 평소엔 Fast만 돌리고, Fast가 미확정이거나 확정 결과가 누적 경험(`ExperienceStore`)과 정면으로 모순될 때만 Slow로 에스컬레이션한다(`_adaptive`, [semantic.py:557-595](../src/dualflow/semantic.py#L557-L595)). 이것은 **Semantic Flow 내부의** adaptive 전략이며, §7·§9·§10의 Optimization Layer(Authority 쪽 Adaptive Feedback)와는 다른 메커니즘이다([DESIGN_NOTES.md](DESIGN_NOTES.md) §12).
+
+모든 전략은 공통으로 `SemanticVerdict(interpretation, confirmed, route, h_initial, h_final, n_questions, n_llm, n_reviews)`를 반환한다. `SemanticVerdict`는 `AuthorityVerdict.status`(§4)와 서술적으로 대구를 이루는 `.status` 프로퍼티도 갖는다 — 새로 저장되는 상태가 아니라 `confirmed`의 별칭으로, `confirmed`면 `"resolved"`, 아니면 `"unresolved"`다([semantic.py:360-376](../src/dualflow/semantic.py#L360-L376)).
+
+Principal 시뮬레이션은 `semantic.Principal`이 맡는다 — `truth`를 알고 있는 오라클이지만, 물어본 차원에만 답하고(`answer`), `carelessness`(부주의한 승인)와 `overcaution`(과잉신중한 반려) 두 축으로 완벽하지 않은 검토자를 흉내낸다([semantic.py:228-296](../src/dualflow/semantic.py#L228-L296)).
+
+**SAGE 결합의 제거(aside).** `framework.py`는 SAGE에 대해 전혀 알지 못한다. `Config.semantic_engine`은 Semantic Flow 전체를 다른 알고리즘으로 갈아끼우는 범용 훅일 뿐이고([framework.py:60-67](../src/dualflow/framework.py#L60-L67)), 이 훅에 꽂히는 구체적인 것 중 하나가 `experiments/baselines/sage.py`의 `as_semantic_engine()`이다 — SAGE-Agent 원 알고리즘(`SageAgentBaseline`)을 이 시그니처(`(DelegationTask, Principal, list[str]) -> SemanticVerdict`)로 감싼다([../experiments/baselines/sage.py:238-248](../experiments/baselines/sage.py#L238-L248)). `framework.py`가 이 모듈의 존재를 아는 지점은 없다 — `experiments/baselines/sage.py` 쪽이 `dualflow.framework`/`dualflow.semantic`을 import해서 규격에 맞춘다.
 
 ---
 
@@ -80,7 +86,7 @@ Principal 시뮬레이션은 `semantic.Principal`이 맡는다 — `truth`를 �
 
 **"B가 무엇을 하도록 허용됐는가"**를 다룬다. `Privilege.__le__`(`p ⪯ q`)는 action/resource가 같고, scope가 `scope_leq`로 포함되며, condition이 역포함(⊇)일 때 참이다 — condition이 많을수록 약한 권한이라는 정의와 일치한다([capability.py:71-75](../src/dualflow/capability.py#L71-L75)). `Budget.meet(other)`는 두 예산의 교집합을 generator별 `Privilege.meet` 쌍의 합집합으로 계산한다 — ChainCaps Eq.(2)의 meet rule([capability.py:119-127](../src/dualflow/capability.py#L119-L127)).
 
-핵심 함수는 `check_authority(effective, requested)`다([capability.py:190-230](../src/dualflow/capability.py#L190-L230)). 요청이 유효 예산 안에 있으면 즉시 통과. 아니면 실패를 세 종류로 분류한다:
+핵심 함수는 `check_authority(effective, requested)`다([capability.py:181-221](../src/dualflow/capability.py#L181-L221)). 요청이 유효 예산 안에 있으면 즉시 통과. 아니면 실패를 세 종류로 분류한다:
 
 | `failure_kind` | 조건 | 처리 |
 |---|---|---|
@@ -88,22 +94,24 @@ Principal 시뮬레이션은 `semantic.Principal`이 맡는다 — `truth`를 �
 | `condition_missing` | scope는 맞는데 필수 condition이 빠짐 — B가 스스로 채울 수 없는 시스템 요구사항 | 하드 리젝트, 협상 불가 |
 | `scope_exceeded` | action/resource/condition은 맞는데 범위만 넘음 | **협상 가능**(§5) — `suggested` 필드에 실제 허용 상한을 채워 반환 |
 
-`scope_exceeded`일 때 `suggested`는 요청 scope와, condition을 만족하는 generator들의 scope의 meet(교집합) 중 최대값이다([capability.py:219-228](../src/dualflow/capability.py#L219-L228)). 이 계산은 위임 예산 자체에서만 나오며 `task.truth`를 전혀 보지 않는다 — 오라클이 아니다([capability.py:190-197](../src/dualflow/capability.py#L190-L197)).
+`scope_exceeded`일 때 `suggested`는 요청 scope와, condition을 만족하는 generator들의 scope의 meet(교집합) 중 최대값이다([capability.py:212-219](../src/dualflow/capability.py#L212-L219)). 이 계산은 위임 예산 자체에서만 나오며 `task.truth`를 전혀 보지 않는다 — 오라클이 아니다([capability.py:181-187](../src/dualflow/capability.py#L181-L187)).
 
-`framework.DelegationVerifier.run()`은 시작 시 `delegation_chain(task.principal_budget, task.ceilings)`로 전체 홉의 유효 예산을 계산하고([framework.py:390-393](../src/dualflow/framework.py#L390-L393)), Semantic Flow가 확정한 해석에 대해 `check_authority(effective, interp.privilege())`를 호출한다(§11).
+`framework.DelegationVerifier.run()`은 시작 시 `delegation_chain(task.principal_budget, task.ceilings)`로 전체 홉의 유효 예산을 계산한다([framework.py:211-214](../src/dualflow/framework.py#L211-L214)). 그러나 `run()` 자신은 더 이상 `check_authority()`를 직접 호출하지 않는다 — Semantic Flow가 확정한 해석을 `self.authority_verifier.verify(interp, effective, principal, log, task.key)`에 넘기고([framework.py:225](../src/dualflow/framework.py#L225)), `authority_feedback.AuthorityVerifierAgent.verify()`가 그 내부에서 `check_authority(budget, interpretation.privilege())`를 호출한다([authority_feedback.py:291](../src/dualflow/authority_feedback.py#L291)). `run()`이 받는 것은 원시 `AuthorityResult`가 아니라 `AuthorityVerdict(interpretation, allowed, reason, n_feedback, negotiated, auto_restricted)`다 — `interpretation`은 협상(§5)으로 수정됐다면 그 최종본이며, `.status` 프로퍼티가 `allowed`의 별칭으로 `"allow"`/`"deny"`를 돌려준다([authority_feedback.py:242-259](../src/dualflow/authority_feedback.py#L242-L259)).
 
 ---
 
 ## 5. Authority Feedback
 
-Authority Flow가 `scope_exceeded`로 막았을 때, `run_feedback()`이 A와의 bounded negotiation을 수행한다([authority_feedback.py:141-229](../src/dualflow/authority_feedback.py#L141-L229)). 결정 종류는 `FeedbackDecision`의 네 값이다([authority_feedback.py:48-52](../src/dualflow/authority_feedback.py#L48-L52)):
+Authority Flow가 `scope_exceeded`로 막았을 때, `run_feedback()`이 A와의 bounded negotiation을 수행한다([authority_feedback.py:141-229](../src/dualflow/authority_feedback.py#L141-L229)). `run_feedback()` 자체의 알고리즘과 줄 번호는 추출 이전과 동일하다 — 바뀐 것은 **호출자**뿐이다: `framework.py`가 이 함수를 직접 부르지 않고, `authority_feedback.AuthorityVerifierAgent.verify()`가 대신 호출한다([authority_feedback.py:304-310](../src/dualflow/authority_feedback.py#L304-L310)).
+
+결정 종류는 `FeedbackDecision`의 네 값이다([authority_feedback.py:48-52](../src/dualflow/authority_feedback.py#L48-L52)):
 
 - `APPROVE` — 제시된 상한이 이미(또는 그대로) 맞음
 - `CORRECT` — A가 정확한 값으로 고쳐줌(`suggested`보다 더 좁을 수 있음)
 - `RESTRICT` — 제안된 상한까지만 축소하면 충분
 - `REJECT` — A가 원하는 것이 이 범위 밖이거나 확인을 거부
 
-루프 구조([authority_feedback.py:173-228](../src/dualflow/authority_feedback.py#L173-L228)):
+루프 구조([authority_feedback.py:173-229](../src/dualflow/authority_feedback.py#L173-L229)):
 
 ```text
 매 반복:
@@ -120,13 +128,13 @@ Authority Flow가 `scope_exceeded`로 막았을 때, `run_feedback()`이 A와의
 
 매 확정 직전에는 항상 top의 `check_authority()`로 다시 검증한다 — A의 응답도, 재사용한 경험(§10)도 그 자체로는 최종 권한이 아니다([authority_feedback.py:158-161](../src/dualflow/authority_feedback.py#L158-L161)). 이것이 careless한 `APPROVE`가 그대로 권한 확장으로 이어지지 않는 이유다(§8).
 
-`NegotiationResult.rounds`는 A에게 **실제로** 물어본 횟수만 센다 — auto-restrict(§10)로 풀리면 0, 애초에 협상 불가로 즉시 거부돼도 0이다([authority_feedback.py:84](../src/dualflow/authority_feedback.py#L84), [authority_feedback.py:163-164](../src/dualflow/authority_feedback.py#L163-L164)).
+`NegotiationResult.rounds`는 A에게 **실제로** 물어본 횟수만 센다 — auto-restrict(§10)로 풀리면 0, 애초에 협상 불가로 즉시 거부돼도 0이다([authority_feedback.py:84](../src/dualflow/authority_feedback.py#L84), [authority_feedback.py:163-164](../src/dualflow/authority_feedback.py#L163-L164)). `AuthorityVerifierAgent.verify()`는 이 값을 그대로 `AuthorityVerdict.n_feedback`으로 넘긴다(§4).
 
 ---
 
 ## 6. Joint Verification
 
-`rule_engine.py`가 담당하며, SAGE-Bench의 SOP 그래프 구조를 위임 검증에 재적용한다([rule_engine.py:1-15](../src/dualflow/rule_engine.py#L1-L15)). `classify(interp, sysvars)`가 해석을 거친(coarse) 분류 필드 `Fields(action_type, sensitivity, scope_breadth, condition_met, ...)`로 변환하고([rule_engine.py:56-78](../src/dualflow/rule_engine.py#L56-L78)), `RuleEngine.trace()`가 결정론적 SOP를 따라간다([rule_engine.py:92-107](../src/dualflow/rule_engine.py#L92-L107)):
+`rule_engine.py`가 담당하며, SAGE-Bench의 SOP 그래프 구조를 위임 검증에 재적용한다([rule_engine.py:1-15](../src/dualflow/rule_engine.py#L1-L15)). `classify(interp, sysvars)`가 해석을 거친(coarse) 분류 필드 `Fields(action_type, sensitivity, scope_breadth, condition_met, ...)`로 변환하고([rule_engine.py:30-74](../src/dualflow/rule_engine.py#L30-L74)), `RuleEngine.trace()`가 결정론적 SOP를 따라간다([rule_engine.py:88-103](../src/dualflow/rule_engine.py#L88-L103)):
 
 ```text
 stage1 Classification
@@ -137,12 +145,12 @@ stage5 ConditionMet true→stage6 | false→REJECT
 stage6 ApprovalRequired(sysvar) false→EXECUTE | true→ESCALATE
 ```
 
-두 겹의 비교로 매칭을 판정한다([rule_engine.py:157-193](../src/dualflow/rule_engine.py#L157-L193)):
+두 겹의 비교로 매칭을 판정한다([rule_engine.py:149-185](../src/dualflow/rule_engine.py#L149-L185)):
 
-1. **경로 유사도** `sim_path(p, p*) = |p ∩ p*| / |p*|`(SAGE-Bench Eq.6) — B의 해석 경로와 A의 원본 의도(`intent`)로 계산한 정답 경로의 비교([rule_engine.py:114-118](../src/dualflow/rule_engine.py#L114-L118)).
-2. **필드 매칭** `V_action ∧ V_resource ∧ V_scope ∧ V_condition` — 원본 값의 exact match([rule_engine.py:121-134](../src/dualflow/rule_engine.py#L121-L134)).
+1. **경로 유사도** `sim_path(p, p*) = |p ∩ p*| / |p*|`(SAGE-Bench Eq.6) — B의 해석 경로와 A의 원본 의도(`intent`)로 계산한 정답 경로의 비교([rule_engine.py:110-114](../src/dualflow/rule_engine.py#L110-L114)).
+2. **필드 매칭** `V_action ∧ V_resource ∧ V_scope ∧ V_condition` — 원본 값의 exact match([rule_engine.py:117-130](../src/dualflow/rule_engine.py#L117-L130)).
 
-`match_intent()`는 `matched = sim ≥ tau and action == ref_action and fields_ok`로 두 조건을 결합한다([rule_engine.py:157-193](../src/dualflow/rule_engine.py#L157-L193)). `fields_ok`는 `require_fields`(=`Config.use_field_match`) 인자로 제어되며 **기본값은 `False`**다 — exact-field 매칭은 `task.truth`에서 유도된 reference와 직접 비교하는 oracle/ablation 기능이라 live gate에는 쓰지 않는다([DESIGN_NOTES.md](DESIGN_NOTES.md) §4·§8, [framework.py:429-430](../src/dualflow/framework.py#L429-L430)). 기본 live gate는 `Sim_path ≥ τ` **AND** `Terminal(p) = Terminal(p*)`(EXECUTE/ESCALATE/REJECT) 두 조건이다.
+`match_intent()`는 `matched = sim ≥ tau and action == ref_action and fields_ok`로 두 조건을 결합한다([rule_engine.py:149-185](../src/dualflow/rule_engine.py#L149-L185)). `fields_ok`는 `require_fields`(=`Config.use_field_match`) 인자로 제어되며 **기본값은 `False`**다 — exact-field 매칭은 `task.truth`에서 유도된 reference와 직접 비교하는 oracle/ablation 기능이라 live gate에는 쓰지 않는다([DESIGN_NOTES.md](DESIGN_NOTES.md) §4·§8, [framework.py:232-233](../src/dualflow/framework.py#L232-L233)). 기본 live gate는 `Sim_path ≥ τ` **AND** `Terminal(p) = Terminal(p*)`(EXECUTE/ESCALATE/REJECT) 두 조건이다.
 
 **단 이 "기본 live gate" 자체도 이미 오라클을 쓴다** — `p*`/`ref_action`을 계산하는 `intent`(=`task.intent_fields`)가 `classify(task.truth, sysvars)`다(§2 참고). `use_field_match`만 껐다고 오라클이 없어지는 게 아니라, 매칭 전체(Sim_path 비교 포함)가 `task.truth` 기반이다 — 실제로 이 reference를 Semantic Verifier 자신의 출력으로 바꿔서 확인한 결과, silent-misread 탐지력이 정확히 사라졌다(`EXPERIMENTS.md` §1.3, §7 Limitations). §11의 `_semantic()`/`match_intent()` 호출 순서 설명은 현재 구현을 정확히 반영하지만, 이 reference 소스 자체가 배포 불가능한 controlled-benchmark 전용 설계라는 점은 반드시 §1.3과 함께 읽을 것.
 
@@ -152,11 +160,11 @@ stage6 ApprovalRequired(sysvar) false→EXECUTE | true→ESCALATE
 
 ## 7. Optimization Layer
 
-Core(§3–§6)만으로 안전성이 성립한다는 것을 전제로, Optimization Layer는 **반복되는 principal 호출 비용**만을 줄인다. 구성 요소는 두 가지다 — `authority_feedback.VerifiedAuthorityStore`(§9)와 `run_feedback()` 내부의 adaptive 재사용 분기(§10). 스위치는 `Config.use_verified_experience`(기본 `True`)이며, `verified_experience_n_min=3`·`verified_experience_sigma=0.8`이 재사용 기준을 정한다([framework.py:65-67](../src/dualflow/framework.py#L65-L67)).
+Core(§3–§6)만으로 안전성이 성립한다는 것을 전제로, Optimization Layer는 **반복되는 principal 호출 비용**만을 줄인다. 구성 요소는 두 가지다 — `authority_feedback.VerifiedAuthorityStore`(§9)와 `run_feedback()` 내부의 adaptive 재사용 분기(§10). 스위치는 `Config.use_verified_experience`(기본 `True`)이며, `verified_experience_n_min=3`·`verified_experience_sigma=0.8`이 재사용 기준을 정한다([framework.py:71-73](../src/dualflow/framework.py#L71-L73)).
 
-비용 모델은 `Verdict.cost(cfg)`가 계산한다 — 역질의(`cost_question`=1.0), Slow 리뷰(`cost_review`=3.0), LLM 호출(`cost_llm`=10.0), Authority Feedback 1라운드(`cost_authority_feedback`=3.0, review와 동급 — 둘 다 A 호출)의 가중합이다([framework.py:120-124](../src/dualflow/framework.py#L120-L124), [framework.py:57-60](../src/dualflow/framework.py#L57-L60)). Optimization Layer가 줄이는 것은 정확히 이 비용의 `n_authority_feedback` 항이다.
+비용 모델은 `Verdict.cost(cfg)`가 계산한다 — 역질의(`cost_question`=1.0), Slow 리뷰(`cost_review`=3.0), LLM 호출(`cost_llm`=10.0), Authority Feedback 1라운드(`cost_authority_feedback`=3.0, review와 동급 — 둘 다 A 호출)의 가중합이다([framework.py:113-117](../src/dualflow/framework.py#L113-L117), [framework.py:55-58](../src/dualflow/framework.py#L55-L58)). Optimization Layer가 줄이는 것은 정확히 이 비용의 `n_authority_feedback` 항이다.
 
-이 층을 꺼도(`use_verified_experience=False`) `run_feedback()`은 §5의 루프에서 3단계(자동 재사용 시도)를 건너뛰고 바로 4단계(`principal.review_authority` 호출)로 가므로, Core의 안전 보장과 판정 결과 집합은 바뀌지 않고 A에게 매번 묻게 될 뿐이다([authority_feedback.py:186-203](../src/dualflow/authority_feedback.py#L186-L203) 분기 자체가 `verified is not None`을 전제).
+이 층의 on/off는 `framework.py`가 아니라 `AuthorityVerifierAgent`가 소유한다. `DelegationVerifier.__init__`이 `cfg.use_verified_experience`를 그대로 `AuthorityVerifierAgent`에 넘기고([framework.py:183-190](../src/dualflow/framework.py#L183-L190)), `AuthorityVerifierAgent.verify()`는 이 값에 따라 `run_feedback()`에 `verified=self.verified_authority` 또는 `verified=None`을 전달한다([authority_feedback.py:304-310](../src/dualflow/authority_feedback.py#L304-L310)). `run_feedback()`은(여전히 §5의 그 함수, 몸체는 바뀌지 않았다) `verified is not None`을 전제로 하는 자동 재사용 분기(§10)를 건너뛰고 바로 `principal.review_authority` 호출로 가므로([authority_feedback.py:186-203](../src/dualflow/authority_feedback.py#L186-L203) 분기 자체가 `verified is not None`을 전제), 꺼도 Core의 안전 보장과 판정 결과 집합은 바뀌지 않고 A에게 매번 묻게 될 뿐이다.
 
 ---
 
@@ -172,9 +180,9 @@ C_{\text{next}} = C_{\text{current}} \cap C_{\text{ceiling}}
 C_n \subseteq C_{n-1} \subseteq \cdots \subseteq C_A
 $$
 
-`delegation_chain()`이 이 단조 감소 수열 전체를 반환한다([capability.py:161-166](../src/dualflow/capability.py#L161-L166)).
+`delegation_chain()`이 이 단조 감소 수열 전체를 반환한다([capability.py:152-158](../src/dualflow/capability.py#L152-L158)).
 
-**(2) Authority Feedback.** Principal이 어떤 수정안을 반환하더라도(`APPROVE`·`CORRECT`·`RESTRICT` 무관), 매 라운드 `check_authority(effective, current.privilege())`로 현재 예산에 대해 재검증한다([authority_feedback.py:174-179](../src/dualflow/authority_feedback.py#L174-L179)) — careless한 `APPROVE`가 예산 밖이면 non-amplification 검사가 이후 단계에서 반드시 다시 걸러낸다([semantic.py:301-303](../src/dualflow/semantic.py#L301-L303) 주석).
+**(2) Authority Feedback.** Principal이 어떤 수정안을 반환하더라도(`APPROVE`·`CORRECT`·`RESTRICT` 무관), 매 라운드 `check_authority(effective, current.privilege())`로 현재 예산에 대해 재검증한다([authority_feedback.py:174-179](../src/dualflow/authority_feedback.py#L174-L179)) — 이는 `run_feedback()` 내부이며, `AuthorityVerifierAgent.verify()`가 이를 호출한다(§4, §5). careless한 `APPROVE`가 예산 밖이면 non-amplification 검사가 이후 단계에서 반드시 다시 걸러낸다([semantic.py:304-306](../src/dualflow/semantic.py#L304-L306) 주석).
 
 **(3) Adaptive reuse(§10).** 검증된 이력도 그대로 신뢰하지 않고 현재 예산과 다시 meet한다([authority_feedback.py:193](../src/dualflow/authority_feedback.py#L193)):
 
@@ -194,7 +202,7 @@ $$
 
 `record(key, interp)`는 새로 확인된 값이 지금까지의 이력과 다르면 낡은 이력을 버리고 새로 시작한다(drift 대응, [authority_feedback.py:106-121](../src/dualflow/authority_feedback.py#L106-L121)). `agreement_ratio(key)`는 가장 많이 확인된 scope가 전체 확인 이력에서 차지하는 비율이다([authority_feedback.py:126-131](../src/dualflow/authority_feedback.py#L126-L131)).
 
-기록은 `framework.DelegationVerifier.run()`이 EXECUTE 확정 후에만 수행하며, 조건은 세 가지를 모두 만족해야 한다 — 실제 negotiation이 있었고(`authority_negotiated`), A에게 실제로 물어봤고(`n_authority_feedback > 0`), auto-restrict로 풀린 게 아니어야 한다(`not authority_auto_restricted`)([framework.py:455-458](../src/dualflow/framework.py#L455-L458)). 즉 이 저장소에 들어가는 것은 "실행됐다"가 아니라 "A가 직접 확인해줬고 그 결과가 실제로 안전하게 실행까지 이어졌다"는 근거를 가진 값뿐이다.
+기록은 (여전히) `framework.DelegationVerifier.run()`이 EXECUTE 확정 후에만 수행하며, 조건은 세 가지를 모두 만족해야 한다 — 실제 negotiation이 있었고(`authority_negotiated`), A에게 실제로 물어봤고(`n_authority_feedback > 0`), auto-restrict로 풀린 게 아니어야 한다(`not authority_auto_restricted`)([framework.py:255-261](../src/dualflow/framework.py#L255-L261)). `AuthorityVerifierAgent`가 아니라 `run()` 자신이 이 조건을 평가하고 `self.verified_authority.record(...)`를 직접 호출한다 — `AuthorityVerdict`가 `negotiated`/`auto_restricted`/`n_feedback` 필드로 필요한 정보를 이미 넘겨주기 때문이다. 즉 이 저장소에 들어가는 것은 "실행됐다"가 아니라 "A가 직접 확인해줬고 그 결과가 실제로 안전하게 실행까지 이어졌다"는 근거를 가진 값뿐이다.
 
 ---
 
@@ -211,7 +219,7 @@ n_confirmed(key) >= verified_n_min(=3)  and  agreement_ratio(key) >= verified_si
       intersected is None(=드리프트) → 실제 Feedback 으로 진행
 ```
 
-자동 재사용은 협상당 **최대 1회**만 시도한다(`tried_auto` 플래그, [authority_feedback.py:170,186-187](../src/dualflow/authority_feedback.py#L170)). 재사용된 값도 다음 반복에서 top의 `check_authority()`로 다시 검증되므로(§8), 경험은 "무엇을 시도해볼지"를 줄여줄 뿐 "허용되는지"를 대신 판단하지 않는다([authority_feedback.py:158-161](../src/dualflow/authority_feedback.py#L158-L161)).
+자동 재사용은 협상당 **최대 1회**만 시도한다(`tried_auto` 플래그, [authority_feedback.py:170,186-187](../src/dualflow/authority_feedback.py#L170)). 재사용된 값도 다음 반복에서 top의 `check_authority()`로 다시 검증되므로(§8), 경험은 "무엇을 시도해볼지"를 줄여줄 뿐 "허용되는지"를 대신 판단하지 않는다([authority_feedback.py:158-161](../src/dualflow/authority_feedback.py#L158-L161)). 이 루프는 (§7에서 설명했듯) 이제 `AuthorityVerifierAgent.verify()`가 호출하지만, `run_feedback()` 자체의 이 분기 로직과 줄 번호는 추출 이전과 동일하다.
 
 이력이 부족하거나 불일치하거나 현재 budget과 안 맞으면(intersection이 `None`) 그대로 §5의 실제 `principal.review_authority()` 문의로 넘어간다 — gate 자체가 단순한 두 수치 비교(`n_confirmed`, `agreement_ratio`)라는 점이 [DESIGN_NOTES.md](DESIGN_NOTES.md) §10이 강조하는 "복잡한 learned risk score 대신 해석 가능한 단순 규칙"이다.
 
@@ -219,34 +227,34 @@ n_confirmed(key) >= verified_n_min(=3)  and  agreement_ratio(key) >= verified_si
 
 ## 11. End-to-end Decision Flow
 
-`framework.DelegationVerifier.run(task)`가 orchestration 진입점이다([framework.py:385-464](../src/dualflow/framework.py#L385-L464)). 단계별로:
+`framework.DelegationVerifier.run(task)`가 orchestration 진입점이다([framework.py:206-267](../src/dualflow/framework.py#L206-L267)). SAGE-decoupling과 agent-extraction 두 리팩터 이후, `run()`의 역할은 각 하위 에이전트를 순서대로 호출하고 그 결과를 결합하는 것으로 좁혀졌다. 단계별로:
 
-**1) Authority Flow — 유효 예산.** `delegation_chain(task.principal_budget, task.ceilings)`로 모든 홉의 예산을 계산하고 마지막 값을 `effective`로 둔다(§8의 단조 감소 수열이 여기서 만들어진다).
+**1) Authority Flow — 유효 예산.** `delegation_chain(task.principal_budget, task.ceilings)`로 모든 홉의 예산을 계산하고 마지막 값을 `effective`로 둔다(§8의 단조 감소 수열이 여기서 만들어진다)([framework.py:211-214](../src/dualflow/framework.py#L211-L214)).
 
-**2) Semantic Flow — 해석 확정.** `_semantic(task, log)`가 `cfg.mode`(fast/slow/and/adaptive/sage)에 따라 분기해 `SemanticOutcome`(interpretation, confirmed, route, h_initial, h_final, n_questions, n_llm, n_reviews)과 `principal` 인스턴스를 반환한다(§3). `semantic_ok = sem.confirmed`.
+**2) Semantic Flow — 해석 확정.** `self._semantic(task, log)`를 호출한다([framework.py:217](../src/dualflow/framework.py#L217)). 이 메서드는 알고리즘 자체를 갖고 있지 않다 — `Principal`을 구성한 뒤([framework.py:196-198](../src/dualflow/framework.py#L196-L198)), `cfg.semantic_engine`이 설정돼 있으면 그것을(baseline 주입, §3 aside), 아니면 `self.semantic_verifier.verify(task, principal, log)`(`semantic.SemanticVerifierAgent`, §3)를 호출해 `SemanticVerdict`를 받는다([framework.py:192-203](../src/dualflow/framework.py#L192-L203)). `route`, `interp = sem.interpretation`, `semantic_ok = sem.confirmed`를 꺼낸다([framework.py:217-219](../src/dualflow/framework.py#L217-L219)).
 
-**3) Joint Verification — Authority 체크.** `check_authority(effective, interp.privilege())`를 호출한다(§4).
+**3) Authority Flow — 권한 검사와 협상.** `self.authority_verifier.verify(interp, effective, principal, log, task.key)`를 한 번 호출한다([framework.py:225](../src/dualflow/framework.py#L225)). `check_authority()` 최초 검사, `scope_exceeded`일 때의 `run_feedback()` 협상, 협상 후 재검사까지 전부 `AuthorityVerifierAgent.verify()` 내부에서 일어난다(§4, §5). `run()`은 반환된 `AuthorityVerdict`에서 `interp = auth_verdict.interpretation`(협상으로 수정됐다면 그 최종본), `n_authority_feedback`, `authority_negotiated`, `authority_auto_restricted`를 꺼낼 뿐이다([framework.py:226-229](../src/dualflow/framework.py#L226-L229)). `task.truth`는 이 경로 어디에서도 보지 않는다 — `principal.review_authority`의 응답만 본다.
 
-**4) Authority Feedback Loop.** `not auth.allowed and auth.failure_kind == "scope_exceeded" and cfg.use_authority_feedback`일 때만 `run_feedback()`을 실행한다(§5, §10). 협상이 풀리면(`neg.resolved`) `interp`를 협상 결과로 교체하고 `check_authority()`로 **재검사**한다 — `n_authority_feedback`, `authority_negotiated`, `authority_auto_restricted`가 이 단계에서 채워진다([framework.py:409-427](../src/dualflow/framework.py#L409-L427)).
+**4) Joint Verification — 매칭.** `match_intent(interp, task.intent_fields, task.sysvars, self.engine, cfg.tau, require_fields=cfg.use_field_match)`로 `MatchResult`를 계산한다([framework.py:232-233](../src/dualflow/framework.py#L232-L233); §6). 여기서 쓰는 `interp`는 3단계에서 협상으로 확정된 최종 해석이지만, `task.intent_fields`는 여전히 `task.truth`에서 유도된 reference다 — §6에서 자세히 다룬 "Evaluation Boundary"이며 의도적으로 바뀌지 않았다.
 
-**5) Joint Verification — 매칭.** `match_intent(interp, task.intent_fields, task.sysvars, engine, cfg.tau, require_fields=cfg.use_field_match)`로 `MatchResult`를 계산한다(§6).
-
-**6) 판정 결합.** 세 게이트를 각각의 ablation 스위치와 함께 평가한다([framework.py:435-446](../src/dualflow/framework.py#L435-L446)):
+**5) 판정 결합.** 세 게이트를 각각의 ablation 스위치와 함께 평가한다([framework.py:238-249](../src/dualflow/framework.py#L238-L249)):
 
 ```text
-authority_ok = auth.allowed or not cfg.use_authority
+authority_ok = auth_verdict.allowed or not cfg.use_authority
 matching_ok  = (m.matched and m.executable) or not cfg.use_matching
 semantic_gate = semantic_ok or not cfg.use_semantic
 
-not authority_ok    → REJECT "권한 위반"
-not semantic_gate   → REJECT "의미 확정 실패"
-not matching_ok     → REJECT "의도 불일치"
+not authority_ok    → REJECT "권한 위반 — {auth_verdict.reason}"
+not semantic_gate   → REJECT "의미 확정 실패 — {route}"
+not matching_ok     → REJECT "의도 불일치 — {m.reason}"
 그 외                → EXECUTE "권한·의미 양쪽 통과"
 ```
 
-**7) Optimization Layer 기록.** `ExperienceStore.record(task.key, interp, decision == EXECUTE)`는 항상 호출되지만 내부적으로 `accepted=False`면 아무것도 쌓지 않는다(§3). EXECUTE이고 §9의 세 조건을 만족하면 `VerifiedAuthorityStore.record()`도 호출된다(§9).
+**6) 경험 기록.** `ExperienceStore.record(task.key, interp, decision == EXECUTE)`는 항상 호출되지만 내부적으로 `accepted=False`면 아무것도 쌓지 않는다([framework.py:252-253](../src/dualflow/framework.py#L252-L253); §3).
 
-**8) Verdict 반환.** 최종적으로 다음 필드를 가진 `Verdict`를 만든다([framework.py:96-114](../src/dualflow/framework.py#L96-L114)):
+**7) Verified Authority 기록.** EXECUTE이고 §9의 세 조건(`authority_negotiated and n_authority_feedback > 0 and not authority_auto_restricted`)을 만족하면 `self.verified_authority.record(task.key, interp)`를 호출한다([framework.py:255-261](../src/dualflow/framework.py#L255-L261); §9).
+
+**8) Verdict 반환.** 최종적으로 다음 필드를 가진 `Verdict`를 만든다([framework.py:90-107](../src/dualflow/framework.py#L90-L107), 생성 호출 [framework.py:263-267](../src/dualflow/framework.py#L263-L267)):
 
 ```text
 decision, reason, route, interpretation,

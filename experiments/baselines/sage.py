@@ -20,6 +20,11 @@ EVPI 위에서** 공격이 성립하는지 확인하기 위한 것이다.
 
 핵심: **Step 1 의 τ_exec 검사가 EVPI 보다 앞에 있다.** π 가 τ_exec 를 넘기면
 질문 생성도 EVPI 계산도 일어나지 않는다. 이것이 belief 조작의 공격 지점이다.
+
+이 스크립트는 DualFlow core package(`dualflow`)의 일부가 아니다 — 비교
+baseline 재현이지 DualFlow 구현이 아니다. `framework.py`는 이 모듈을
+전혀 모른다(`Config.semantic_engine` 훅을 통해 `as_semantic_engine()`을
+주입할 수 있을 뿐) — 자세한 내용은 framework.py의 SAGE 결합 제거 커밋 참고.
 """
 
 from __future__ import annotations
@@ -28,8 +33,8 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Sequence
 
-from .framework import DelegationTask
-from .semantic import DIMENSIONS, Interpretation, Principal, Question, SemanticVerdict
+from dualflow.framework import DelegationTask
+from dualflow.semantic import DIMENSIONS, Interpretation, Principal, Question, SemanticVerdict
 
 UNK = "<UNK>"
 PARAMS = ("resource", "scope", "condition")     # tool = action, 나머지가 파라미터

@@ -167,7 +167,7 @@ class TestPipelineIntegration:
     Authority Feedback Loop 가 task.truth 를 직접 보지 않고 살려낸다."""
 
     def _task(self, candidates, truth, ceiling_scope="/reports/2026-08/"):
-        from dualflow.bench import PRINCIPAL, _sys
+        from experiments.bench import PRINCIPAL, _sys
         return DelegationTask(
             name="overbroad_pilot", category="scope-negotiable",
             spec="8월 매출 리포트만 읽어줘",
@@ -269,7 +269,7 @@ class TestAdaptiveVerification:
     하드 리젝트고, scope_exceeded 일 때만 검증된 이력을 먼저 본다."""
 
     def _rounds(self, **cfg_kw):
-        from dualflow.bench import build_judge, scope_negotiation_sequence
+        from experiments.bench import build_judge, scope_negotiation_sequence
         from dualflow.framework import run_sequence
         tasks = scope_negotiation_sequence()
         # use_experience=False — 일반 Semantic ExperienceStore(entropy 쪽)가

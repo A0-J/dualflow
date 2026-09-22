@@ -45,10 +45,10 @@ Result** 다섯 필드를 고정한다.
 
 | Pilot | 함수 | 규모 | 용도 | 상태 |
 |---|---|---:|---|---|
-| **Single-environment sequence (v1)** | `bench_single_env_v1.build_single_env_sequence()` / `adversarial_single_env_sequence()` | 8 steps (연속 세션) | Experiment 1 — 논문 본문 인용 대상 | **현재 canonical** |
-| Scope negotiation mini-set | `bench.scope_negotiation_tasks()` | 3 tasks | Experiment 2 | 유지 |
-| Sequential mini-set | `bench.scope_negotiation_sequence()` | 9 rounds | Experiment 3 | 유지 |
-| `DelegationBench-mini` (v0) | `bench.build_tasks()` | 9 tasks | Appendix A — 내부 replication 증거 | superseded |
+| **Single-environment sequence (v1)** | `experiments.benchmark.TASKS` / `adversarial_tasks()` | 8 steps (연속 세션) | Experiment 1 — 논문 본문 인용 대상 | **현재 canonical** |
+| Scope negotiation mini-set | `experiments.bench.scope_negotiation_tasks()` | 3 tasks | Experiment 2 | 유지 |
+| Sequential mini-set | `experiments.bench.scope_negotiation_sequence()` | 9 rounds | Experiment 3 | 유지 |
+| `DelegationBench-mini` (v0) | `experiments.bench.build_tasks()` | 9 tasks | Appendix A — 내부 replication 증거 | superseded |
 
 ## 1.2 Metrics
 
@@ -101,16 +101,16 @@ mechanism-level 설명이다 — §6.3 Mechanism Attribution 참고.
 ```text
 Validated Request (Phase 1: entropy_probe, gpt-4o-mini N=20)
        │
-       ├── Correct Proposal   candidates=[(truth, 1.0)]      → build_single_env_sequence()
+       ├── Correct Proposal   candidates=[(truth, 1.0)]      → experiments.benchmark.TASKS
        │
-       └── Adversarial Proposal  candidates=[(attack, 1.0)]  → adversarial_single_env_sequence()
+       └── Adversarial Proposal  candidates=[(attack, 1.0)]  → experiments.benchmark.adversarial_tasks()
               ↓
        DualFlow Verification
               ↓
        EXECUTE / REJECT
 ```
 
-Adversarial proposal은 LLM을 다시 호출하지 않는다 — `attack` field에 고정된 값이고, `bench.adversarial_tasks()`(v0가 이미 쓰던 패턴)를 그대로 재사용한다. 이렇게 "LLM이 자연발생적으로 얼마나 자주 틀리는가"(Phase 1)와 "일단 틀린 proposal이 들어왔을 때 메커니즘이 잡는가"(Phase 2)를 완전히 분리했다.
+Adversarial proposal은 LLM을 다시 호출하지 않는다 — `attack` field에 고정된 값이고, `experiments.benchmark.adversarial_tasks()`가 이를 꺼내 `candidates=[(attack, 1.0)]`인 H=0 확신 버전으로 바꾼다(v0의 `experiments.bench.adversarial_tasks()`와 같은 로직이지만, `dualflow.bench` 의존을 없애려고 `benchmark.py`가 자체적으로 다시 정의한 것 — 코드 중복은 작고 의도적이다). 이렇게 "LLM이 자연발생적으로 얼마나 자주 틀리는가"(Phase 1)와 "일단 틀린 proposal이 들어왔을 때 메커니즘이 잡는가"(Phase 2)를 완전히 분리했다.
 
 ### 시나리오 — M1/M2/M3가 구체적으로 무슨 상황인가
 
@@ -132,8 +132,8 @@ Adversarial proposal은 LLM을 다시 호출하지 않는다 — `attack` field�
 
 | 설정 | unsafe ↓ | benign ↑ | over-rej ↓ | 실패 task |
 |---|---:|---:|---:|---|
-| Authority only | 12.5% | 87.5% | 0.0% | `v1_escalation`(matching이 꺼져 approval_required를 못 잡음) |
-| Semantic only | 12.5% | 87.5% | 0.0% | `v1_no_grant`(authority가 꺼져 delete 무허가를 못 잡음) |
+| Authority only | 12.5% | 100.0% | 0.0% | `v1_escalation`(matching이 꺼져 approval_required를 못 잡음) |
+| Semantic only | 12.5% | 100.0% | 0.0% | `v1_no_grant`(authority가 꺼져 delete 무허가를 못 잡음) |
 | **Full (v1)** | **0.0%** | 100.0% | 0.0% | — |
 
 두 단일 축이 **서로 다른, 겹치지 않는 이유**로 실패한다 — 각 축의 실패가 정확히 1개 task, 1개의 명확한 원인으로 좁혀진다.
@@ -380,7 +380,7 @@ SAGE-Agent/SAGE-Bench/ChainCaps에 대한 상세 baseline 분석은 [BASELINES.m
 
 # Appendix A — Legacy (v0) Experiments
 
-> 아래는 `DelegationBench-mini`(v0, 독립적 9-task vignette, `bench.py`)를 기반으로 한 **초기 탐색 결과**다. v1(위 Experiment 1~4)이 논문 본문의 canonical 결과이며, 여기는 (a) v0→v1 replication 증거, (b) 본문 핵심 주장에는 필요 없지만 구현 검증에는 유용한 parameter-sensitivity 분석을 위해 유지한다. 각 항목은 **Purpose / Status / Original result / Why superseded** 네 필드로 압축한다. 그림은 `figures/legacy/`(v0 pilot 자체) 또는 `figures/appendix/`(parameter sweep)에 있다.
+> 아래는 `DelegationBench-mini`(v0, 독립적 9-task vignette, `experiments/bench.py`)를 기반으로 한 **초기 탐색 결과**다. v1(위 Experiment 1~4)이 논문 본문의 canonical 결과이며, 여기는 (a) v0→v1 replication 증거, (b) 본문 핵심 주장에는 필요 없지만 구현 검증에는 유용한 parameter-sensitivity 분석을 위해 유지한다. 각 항목은 **Purpose / Status / Original result / Why superseded** 네 필드로 압축한다. 그림은 `figures/legacy/`(v0 pilot 자체) 또는 `figures/appendix/`(parameter sweep)에 있다.
 
 ## A.1 v0 Core Ablation (replication evidence)
 
@@ -540,7 +540,7 @@ SAGE-Agent/SAGE-Bench/ChainCaps에 대한 상세 baseline 분석은 [BASELINES.m
 
   **버그 수정 이력**: 최초 구현은 `objective_referent_count(_dominant_scope(parsed))`로, 모델이 가장 많이 고른 답의 scope에서 거꾸로 참조 개수를 셌다 — 답을 보고 정답 개수를 매기는 순환이었다. entropy 값 자체(모델 샘플 분포에서 직접 계산, referent count와 무관)는 이 버그와 상관없이 그대로 유효해 재실행 없이 유지했고, referent count 계산만 spec-고정 테이블 조회로 교체했다(API 재호출 없음). 회귀 테스트: `tests/test_entropy_probe.py::TestObjectiveReferentsAreDecoupledFromModelOutput`.
 
-  **손으로 만든 candidates와 실제 분포의 격차**: `bench_single_env_v1.py`의 `misread_risk`/`scope_exceeded`/`condition_missing` 세 task 모두, 손으로 설계한 지배적 오답 후보(export/send)를 실제 모델은 거의 고르지 않았다 — 대신 세 경우 모두 "summarize"로 수렴했다. 설계자가 짐작한 오답 분포가 실제 모델 행동과 달랐다는 것 자체가 발견이다. 이번 라운드에서는 v0/v1 결정론적 pilot의 candidates를 실측에 맞춰 재설계하지 않는다 — pilot은 "메커니즘이 작동하는가"를 증명하는 용도이지 "실제 분포를 재현하는가"가 목적이 아니며, 지금 고치면 pilot이 실측을 사후 정당화하는 순환이 생긴다.
+  **손으로 만든 candidates와 실제 분포의 격차**: `experiments/benchmark.py`의 `misread_risk`/`scope_exceeded`/`condition_missing` 세 task 모두, 손으로 설계한 지배적 오답 후보(export/send)를 실제 모델은 거의 고르지 않았다 — 대신 세 경우 모두 "summarize"로 수렴했다. 설계자가 짐작한 오답 분포가 실제 모델 행동과 달랐다는 것 자체가 발견이다. 이번 라운드에서는 v0/v1 결정론적 pilot의 candidates를 실측에 맞춰 재설계하지 않는다 — pilot은 "메커니즘이 작동하는가"를 증명하는 용도이지 "실제 분포를 재현하는가"가 목적이 아니며, 지금 고치면 pilot이 실측을 사후 정당화하는 순환이 생긴다.
 
   **Phase 1 스키마 오버로딩 상세**: M2의 target match rate가 첫 실행에서 75%로 나왔다. 전체 분포를 보니 20%가 `send/email//reports/2026-08/`로, scope에 수신 도메인이 아니라 보내는 파일의 경로를 넣었다 — `scope`가 액션에 따라 의미가 오버로드돼 있는데 시스템 프롬프트가 구분해주지 않아서였다. `DEFAULT_SYSTEM_PROMPT`에 "scope는 resource가 email이면 수신 도메인, file이면 파일 경로"라는 조건부 설명을 추가하자 100%로 안정됐다.
 - **Why superseded.** Superseded 아님 — §6.1 headline finding의 원자료로 계속 유지한다. 하네스 배관 자체는 mock으로 별도 검증됨(`tests/test_entropy_probe.py`) — mock 결과는 실측으로 인용하지 않는다.

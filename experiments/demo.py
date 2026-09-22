@@ -1,7 +1,7 @@
 """Minimal end-to-end examples of DualFlow.
 
 This script shows *how to call the DualFlow API*, not how well it performs —
-for benchmark numbers see bench.py / bench_single_env_v1.py, for figures see
+for benchmark numbers see bench.py / benchmark.py, for figures see
 plots.py, for the real-LLM entropy study see entropy_probe.py.
 
 This script is not part of the DualFlow core package — it uses the installed
