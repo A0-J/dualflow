@@ -40,6 +40,11 @@ goal, intentions, or reasoning beyond what is written here.
 
 Convert the delegation into a single concrete action you propose to take.
 
+If the context below specifies an allowed action/resource/scope \
+vocabulary, choose exactly one value from each list — do not invent \
+aliases, and do not combine multiple actions into a single field (for \
+example, never answer "read, review, summarize"; pick the single best one).
+
 Respond in exactly this format, one field per line, no extra commentary:
 ACTION: <the action verb, e.g. read, export, delete, summarize>
 RESOURCE: <the target resource type, e.g. file, report>

@@ -61,6 +61,12 @@ natural-language delegation instruction for Agent B describing what you \
 want done. Be concise and directly actionable. State only what you \
 actually know from the goal and context below — do not invent details.
 
+Preserve the goal's requested action and constraints exactly. Do not add \
+new actions, objectives, permissions, or side effects that are not present \
+in the original goal — for example, if the goal asks to read a resource, \
+do not additionally ask the delegate to summarize, export, modify, send, \
+or share it unless the goal explicitly requests that.
+
 Respond with the delegation instruction only. No preamble, no explanation."""
 
 _RESTATE_INTENT_INSTRUCTIONS = """\
@@ -69,6 +75,11 @@ Independently state the single action you intend, based only on your own \
 goal and context below — as if you were describing it yourself from \
 scratch, without knowledge of what anyone else may have proposed or done \
 with it.
+
+If the context below specifies an allowed action/resource/scope \
+vocabulary, choose exactly one value from each list — do not invent \
+aliases, and do not combine multiple actions into a single field (for \
+example, never answer "read, review, summarize"; pick the single best one).
 
 Respond in exactly this format, one field per line, no extra commentary:
 ACTION: <the action verb, e.g. read, export, delete, summarize>
