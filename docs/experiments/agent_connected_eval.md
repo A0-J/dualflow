@@ -516,6 +516,8 @@ meaningful.**
 | `v3` provenance correction (ambiguity ≠ confirmation; generation-time target_facets) | **implemented, regression-tested (§23 follow-up 3)** |
 | `v3` single-facet clarification (target ≠ confirmed for multi-facet rounds, closed via IG-based single-facet targeting) | **implemented, regression-tested (§23 follow-up 4)** |
 | `v3` post-clarification resolution gate (singleton target ≠ actual confirmation) | **implemented, regression-tested (§23 follow-up 5) — provenance chain design complete** |
+| `v3` contract smoke test (42 real API calls) | **PASS — full chain held end to end (§24)** |
+| B7d-v3 main experiment (H1 ambiguous transfer / H2 explicit preservation, paired frozen-candidate design) | **protocol + harness implemented, regression-tested — not yet run (§24)** |
 | Sequential experience evaluation (B7e) | not started |
 
 The sequential multi-episode experiment (B7e) stays intentionally
@@ -1864,3 +1866,170 @@ heuristic and no answer-text analysis.** No API calls, no candidate
 freeze, no N/L/P/S re-run, no runtime integration, and no B7e were
 performed in this follow-up. This closes the provenance chain design work
 for now — the next step, when authorized, is real-API validation.
+
+## 24. v3 Contract Smoke Test (PASS) and B7d-v3 Main Experiment Protocol (Prepared, Not Yet Run)
+
+### Smoke test result: PASS
+
+A minimal, single-run smoke test
+(`experiments/diagnostics/experience_provenance_smoke.py`, git_sha
+`b80fb15e5e2fa5017ba364fe94ef18d568e21b77`) confirmed the full provenance
+chain (IG target selection → singleton clarifying question →
+post-clarification resolution → `confirmed_facets` →
+`HistoricalEvidenceComparator`) holds end to end against real
+API-generated data, at 42 real API calls total:
+
+```
+varied_facets: ['action']
+target_facets: ['action']
+post_distribution: entropy=0.000, action values=['summarize'] (10/10 converged)
+confirmed_facets: ['action']
+candidate(summarize).action vs. historical(summarize).action -> SUPPORT   (expected)
+candidate(export).action    vs. historical(summarize).action -> CONFLICT (expected)
+candidate(summarize).scope  vs. historical (unconfirmed facet) -> IRRELEVANT (expected)
+failure stage: none
+```
+
+Historical (August) and current (September) scopes genuinely differed in
+this real run, and the `action`/`scope` isolation held on real data, not
+just synthetic `Interpretation` objects. **Confirmed: PASS.** No code was
+modified as a result of this run.
+
+### Why the next experiment is not another N/L/P/S run
+
+`HistoricalEvidenceComparator` is now fully deterministic (§23 follow-up
+2). Re-running the same `summarize == summarize -> SUPPORT` check hundreds
+of times across natural-language rendering conditions would produce no new
+research information — that mechanism-level question (does history-block
+presence/format prime the model independent of content) was already
+answered by B7d.5/B7d.6 (§20-22). The open question now is one level
+downstream: **once a relation exists, does actually consuming it produce a
+useful semantic decision** — improving an ambiguous case while never
+overriding an explicit one?
+
+### Hypotheses
+
+- **H1 (ambiguous transfer)**: when the current delegation's action is
+  genuinely ambiguous, does Principal-confirmed historical action evidence
+  move the semantic decision toward the historically confirmed action?
+- **H2 (explicit-change preservation)**: when the current delegation
+  explicitly specifies a *different* action, does historical evidence fail
+  to override it?
+
+### Evidence-consumption contract (fixed before any API run)
+
+Implemented in `src/dualflow/experience_decision.py`
+(`FrozenCandidateEvidenceHarness`), opt-in, not wired into
+`AgentDelegationRuntime`:
+
+1. **Stability gate first, using the existing entropy threshold** (the
+   same one `clarification.ClarifyingDelegate` already uses, no new
+   classifier) — if the current candidate distribution is already stable
+   (`entropy <= entropy_threshold`), historical evidence is never even
+   consulted. This is the structural mechanism that prevents a
+   stale-history override of an explicit current instruction (F4) — a
+   gate on *whether to look*, not a rule applied after looking.
+2. **Eligibility gate, using existing provenance** — if the facet is not
+   in `experience.confirmed_facets`, evidence is not consulted (F1
+   otherwise).
+3. **Support gate, using the existing deterministic comparator** — among
+   the *already-generated* current candidates (never re-sampled), the
+   distinct values of the facet are compared against the historical
+   experience. No `SUPPORT` among them means evidence was consulted but
+   not applicable (F2).
+4. **Facet-level resolution only** — if exactly one facet value is
+   `SUPPORT`ed, that facet's value is resolved. The decision
+   interpretation, if uniquely determinable, is one of the *current*
+   candidates that already carries that value — never a synthesized
+   `Interpretation` built from historical resource/scope/condition. If
+   more than one distinct current `Interpretation` shares the resolved
+   value, no single point decision is picked (structural prevention of F5,
+   cross-facet amplification — regression-tested directly: a resolved
+   decision's `scope` always comes from the current candidate, never from
+   the historical experience's scope, even when they differ).
+
+No new confidence weighting, no new threshold, no new LLM call anywhere in
+this module.
+
+### Design: paired, frozen-candidate, four conditions
+
+Candidate generation and the v3 intervention are fully separated — for
+each task, candidates are sampled **exactly once** per run (no history in
+the generation prompt, the same clean B7a/B6 path), and that one frozen
+distribution is reused for both the baseline and the v3 condition. This is
+what removes B7d.5/B7d.6's history-block presence/format priming from the
+comparison entirely: nothing can differ between a baseline and its v3
+pair except what the harness does with an already-fixed distribution.
+
+| Condition | Task | Historical evidence |
+| --- | --- | --- |
+| A | Ambiguous (canonical September delegation) | none consulted |
+| B | Ambiguous (same frozen candidates as A) | confirmed_facets={"action"}, action="summarize" |
+| C | Explicit export ("This time, export the September 2026 financial report to the external auditor.", reused from B7d.3/B7d.4/B7d.6's `TASK2_DELEGATION`) | none consulted |
+| D | Explicit export (same frozen candidates as C) | same as B |
+
+No export-history/read-history arms this round — those conditions already
+characterized the old natural-language mechanism (§20-22); re-adding them
+here would blur what this experiment isolates.
+
+Historical evidence (identical, fixed, reused across every run — exactly
+one verified experience, matching the established B7c/B7d convention):
+built from `experience_transfer.make_experience()` (fixed reproducer,
+unmodified) with only `confirmed_facets` overlaid via
+`dataclasses.replace()` (that function predates the v3 provenance work and
+defaults the field to `frozenset()`).
+
+### Primary / secondary metrics
+
+- **H1 primary**: `P(final decision == "summarize")`, baseline (A) vs. v3
+  (B), paired per run. Also recorded: count of runs resolved by evidence /
+  no support / no eligible evidence / stable-baseline.
+- **H2 primary**: `P(final decision == "export")`, baseline (C) vs. v3
+  (D), paired per run. Also recorded: **any** historical-override
+  occurrence (D's decision ≠ "export") — flagged individually as an F4
+  failure, never averaged away.
+- Secondary: entropy, clarification-avoided/required (not applicable here
+  since candidates are frozen pre-generated, no live clarification in this
+  harness), API calls, token usage.
+- Authority safety is explicitly out of scope (B7e territory) and not
+  mixed into this result.
+
+### Failure taxonomy (fixed before running)
+
+| Code | Meaning |
+| --- | --- |
+| F1 | evidence unavailable — eligible historical facet absent |
+| F2 | support absent — eligible history exists, no current candidate matches |
+| F3 | wrong transfer — ambiguous case, evidence applied, decision semantically worse than baseline (interpretive; assessed when analyzing results, not a stage the harness emits) |
+| F4 | stale-history override — explicit current instruction overridden by history |
+| F5 | cross-facet amplification — action evidence changes an unconfirmed facet's decision (structurally prevented, regression-tested) |
+
+### API budget (candidate generation only — comparator makes zero calls)
+
+```
+2 tasks × N=20 samples × 5 runs = 200 real API calls total
+comparator / v3 decision: 0 additional calls (fully deterministic)
+```
+
+### Reproducibility
+
+`experiments/diagnostics/experience_decision_experiment.py --output <path>`
+saves one JSON payload: `identity` (scenario id/version, model, delegation/
+context SHA256 for both tasks, N, repetitions, historical
+`confirmed_facets`/confirmed action), `rows` (one entry per
+task×condition×run: belief-by-action, entropy, baseline/final decision,
+resolved value, stage, per-value comparator relations, token/call counts),
+and `summary` (the H1/H2 aggregates above). Raw output stays in the
+scratchpad only, per standing convention.
+
+### Status
+
+Implemented and structurally verified: `--help` runs cleanly, a
+fake-client dry run confirmed correct end-to-end wiring (paired rows,
+correct summary aggregation), `src/dualflow/experience_decision.py` has
+its own 15 regression tests (stability/eligibility/support gates,
+facet-only resolution, cross-facet non-amplification, explicit-instruction
+preservation), full suite 356 → 371 passed. **Not yet run against the real
+API.** No N/L/P/S re-run, no runtime integration, no B7e, no new
+heuristic, no prompt tuning were performed to produce this protocol or
+harness.
