@@ -54,7 +54,30 @@ class AgentExperience:
     """Principal이 실제로 확인해준 clarification 결과 하나.
 
     `pre_entropy`/`post_entropy`는 `pre_distribution`/`post_distribution`
-    이 이미 갖고 있는 값의 별칭일 뿐이다 — 새로 저장하지 않는다(중복 금지)."""
+    이 이미 갖고 있는 값의 별칭일 뿐이다 — 새로 저장하지 않는다(중복 금지).
+
+    `confirmed_facets` — v3 provenance 보완(2026-09-23,
+    docs/experiments/agent_connected_eval.md §23 follow-up). `confirmed_
+    interpretation`의 action/resource/scope/condition 네 필드는 전부 항상
+    값이 채워져 있지만(빈 값이면 `""`/`frozenset()`), "값이 존재한다"는
+    것과 "Principal이 그 facet을 실제로 clarify/confirm했다"는 것은
+    다르다 — 예를 들어 이 pilot 시나리오는 resource/scope를 항상 환경으로
+    고정해두므로(B6.1 grounded pilot), clarification은 사실상 항상
+    action facet만 겨냥한다. `confirmed_interpretation.scope`에 값이
+    있다고 해서 그 scope가 "이 Principal이 과거에 확인해준 재사용 가능한
+    사실"이 되는 건 아니다 — 그냥 그 episode에서 우연히 그 값이었을
+    뿐이다.
+
+    `build_verified_experience()`가 이 필드를 채운다 — 방법은 `pre_
+    distribution.belief`의 후보들 사이에서 실제로 값이 갈렸던 facet만
+    "confirmed"로 표시한다(아래 `_facets_with_pre_clarification_
+    ambiguity()` 참고). 값이 한 번도 갈린 적 없는 facet은 Principal이
+    그걸 clarify한 적이 없다는 뜻이다. 기본값은 `frozenset()`(아무 facet도
+    confirmed 아님) — 이 클래스를 직접 생성하는 기존 코드(`agent_smoke.py`
+    의 `EXAMPLE_PRIOR_EXPERIENCE`, `experience_transfer.py`의
+    `make_experience()`)는 이 필드를 넘기지 않으므로 그대로
+    `frozenset()`이 되고, 이건 의도적으로 안전한 쪽(fail-closed)이다 —
+    "무엇이 confirmed됐는지 모르면 아무것도 evidence로 쓰지 않는다."""
 
     principal_id: str
     task_category: str
@@ -68,6 +91,7 @@ class AgentExperience:
     pre_distribution: CandidateDistribution
     post_distribution: CandidateDistribution
 
+    confirmed_facets: frozenset[str] = frozenset()
     episode_id: str | None = None
 
     @property
@@ -77,6 +101,26 @@ class AgentExperience:
     @property
     def post_entropy(self) -> float:
         return self.post_distribution.entropy
+
+
+_ALL_FACETS = ("action", "resource", "scope", "condition")
+
+
+def _facets_with_pre_clarification_ambiguity(distribution: CandidateDistribution) -> frozenset[str]:
+    """clarification 이전(pre) candidate 분포에서 실제로 하나 이상의 값으로
+    갈렸던 facet만 돌려준다 — 그 facet에 대해 Delegate가 진짜 불확실했고,
+    그래서 Principal에게 물어 답을 받은 것이라고 볼 수 있는 유일한 근거다.
+    한 번도 갈린 적 없는 facet(이 pilot에서는 거의 항상 resource/scope)은
+    애초에 clarify할 게 없었다는 뜻이다 — `post_distribution`이 이미
+    entropy 0으로 수렴한 상태(`build_verified_experience()`의 기존
+    조건)이므로, "clarification 후 이 facet이 확정됐는가"는 이미
+    보장돼 있고 여기서는 "confirm될 이유가 있었는가"만 본다."""
+    varied: set[str] = set()
+    for facet in _ALL_FACETS:
+        values = {getattr(interp, facet) for interp in distribution.belief}
+        if len(values) > 1:
+            varied.add(facet)
+    return frozenset(varied)
 
 
 def build_verified_experience(result: ClarificationResult, *, principal_id: str,
@@ -110,6 +154,7 @@ def build_verified_experience(result: ClarificationResult, *, principal_id: str,
         confirmed_interpretation=result.final_interpretation,
         pre_distribution=result.pre_distribution,
         post_distribution=result.post_distribution,
+        confirmed_facets=_facets_with_pre_clarification_ambiguity(result.pre_distribution),
         episode_id=episode_id,
     )
 

@@ -111,6 +111,69 @@ class TestBuildVerifiedExperience:
                 f"build_verified_experience has a suspicious parameter: {name}")
 
 
+class TestConfirmedFacetsProvenance:
+    """v3 provenance 보완(§23 follow-up) — build_verified_experience()가
+    confirmed_facets를 pre_distribution의 실제 변동(variance)으로부터
+    계산하는지 확인한다. 새 LLM 호출도, 네트워크도 필요 없다."""
+
+    def test_only_facets_that_varied_pre_clarification_are_confirmed(self):
+        """SUMMARIZE/EXPORT fixture는 action만 다르고 resource/scope/
+        condition은 전부 같다 -- confirmed_facets는 {"action"}이어야
+        하고, 나머지 세 facet은 포함되면 안 된다."""
+        result = _clarified_result(post_entropy=0.0)
+
+        exp = build_verified_experience(
+            result, principal_id="finance_lead_A", task_category="external_audit_report",
+            delegation="Please prepare the August 2026 financial report.")
+
+        assert exp is not None
+        assert exp.confirmed_facets == frozenset({"action"})
+
+    def test_multiple_varying_facets_are_all_confirmed(self):
+        """pre_distribution에서 action과 scope 둘 다 갈렸다면 둘 다
+        confirmed_facets에 들어가야 한다."""
+        summarize_sept = Interpretation("summarize", "file", "/reports/2026-09/", frozenset())
+        export_aug = Interpretation("export", "file", "/reports/2026-08/", frozenset())
+        pre = _distribution({summarize_sept: 0.6, export_aug: 0.4}, 0.971)
+        post = _distribution({summarize_sept: 1.0}, 0.0)
+        question = ClarificationQuestion(
+            question="q", raw_text="q", response=LLMResponse(text="q"),
+            belief=pre.belief, entropy=pre.entropy)
+        answer = PrincipalClarification(answer="a", response=LLMResponse(text="a"))
+        result = ClarificationResult(
+            clarified=True, pre_distribution=pre, post_distribution=post,
+            question=question, answer=answer, final_interpretation=post.top)
+
+        exp = build_verified_experience(
+            result, principal_id="finance_lead_A", task_category="external_audit_report",
+            delegation="x")
+
+        assert exp is not None
+        assert exp.confirmed_facets == frozenset({"action", "scope"})
+
+    def test_no_varying_facets_means_empty_confirmed_facets(self):
+        """pre_distribution의 유일한 candidate가 이미 하나뿐이면(entropy 0
+        이라 애초에 clarify가 트리거되지 않을 상황이지만, 방어적으로)
+        아무 facet도 confirmed로 표시되지 않는다."""
+        only = Interpretation("summarize", "file", "/reports/2026-08/", frozenset())
+        pre = _distribution({only: 1.0}, 0.0)
+        post = _distribution({only: 1.0}, 0.0)
+        question = ClarificationQuestion(
+            question="q", raw_text="q", response=LLMResponse(text="q"),
+            belief=pre.belief, entropy=pre.entropy)
+        answer = PrincipalClarification(answer="a", response=LLMResponse(text="a"))
+        result = ClarificationResult(
+            clarified=True, pre_distribution=pre, post_distribution=post,
+            question=question, answer=answer, final_interpretation=post.top)
+
+        exp = build_verified_experience(
+            result, principal_id="finance_lead_A", task_category="external_audit_report",
+            delegation="x")
+
+        assert exp is not None
+        assert exp.confirmed_facets == frozenset()
+
+
 class TestStoreLookupIsolation:
     def test_isolated_by_principal_id(self):
         store = AgentExperienceStore()

@@ -512,6 +512,7 @@ meaningful.**
 | `v3` prototype — `HistoricalEvidenceComparator` (opt-in, not wired into runtime) | implemented (§22 review, code) |
 | `v3` first pilot (180 calls) | **inconclusive — comparator calibration/semantic-target validity not established, not a verdict on the v3 hypothesis (§23)** |
 | `v3` comparator redesign — structured-facet, deterministic (option B) | **implemented, regression-tested (§23 follow-up)** |
+| `v3` provenance gate (`confirmed_facets`, structured value ≠ confirmed evidence) | **implemented, regression-tested (§23 follow-up 2)** |
 | Sequential experience evaluation (B7e) | not started |
 
 The sequential multi-episode experiment (B7e) stays intentionally
@@ -1529,3 +1530,69 @@ diagnostic was inconclusive (§23 top) → contract audit identified two
 contaminants (§23 audit findings) → structured-facet comparator
 implemented (this subsection), removing the failure surface the audit
 found rather than tuning around it.**
+
+### Follow-up 2: structured value ≠ Principal-confirmed evidence (provenance gate added)
+
+Before any API validation of the structured-facet comparator, a second
+gap was found on review: **a structured value existing in
+`confirmed_interpretation` is not the same as the Principal having
+actually confirmed that facet.** In this pilot scenario, `resource`/
+`scope` are always fixed by the grounded environment (B6.1) — every real
+clarification round only ever targets `action` — so
+`confirmed_interpretation.scope` (e.g. the historical episode's
+`2026-08`) was just whatever the environment happened to fix it to, not
+a reusable fact the Principal confirmed. The revision-3 comparator would
+still let a `scope` query silently become `CONFLICT` evidence, moving the
+exact §23 whole-episode contamination one layer down rather than removing
+it.
+
+**Fix — `AgentExperience` gained a `confirmed_facets: frozenset[str]`
+field** (`src/dualflow/agent_experience.py`, default `frozenset()` for
+backward compatibility with the two existing direct-construction call
+sites, `experiments/agent_smoke.py`'s `EXAMPLE_PRIOR_EXPERIENCE` and
+`experiments/diagnostics/experience_transfer.py`'s `make_experience()` —
+neither touched, neither reads this field, so both are unaffected).
+`build_verified_experience()` now computes it automatically: a facet
+counts as confirmed only if it actually varied across
+`pre_distribution`'s candidates before clarification — the only evidence
+the Delegate was genuinely uncertain about it, since
+`post_distribution.entropy` is already required to have converged
+(existing gate, unchanged). A facet that never varied pre-clarification
+was never in question, regardless of what value ends up in
+`confirmed_interpretation`.
+
+`HistoricalEvidenceComparator.judge()` (revision 4) now takes the whole
+`AgentExperience` (not a bare `Interpretation`) and checks
+`experience.confirmed_facets` before comparing: a facet not in
+`confirmed_facets` returns `IRRELEVANT` unconditionally — even if its
+value happens to coincide with the candidate's. `compare_facets()` itself
+stays a pure, provenance-agnostic value comparison; the gate lives one
+layer up, in `judge()`.
+
+**New tests** (`tests/test_experience_evidence.py`, rewritten again, 23
+tests; `tests/test_agent_experience.py`, +3 tests) lock in exactly the
+requested contract: action-only-confirmed experience supports/conflicts
+correctly on `action` while resource/scope/condition all read
+`IRRELEVANT`; the August-scope-vs-September-scope pair with only `action`
+confirmed no longer produces a spurious scope `CONFLICT` (the exact
+failure mode reproduced and shown fixed) while directly querying `scope`
+on that same pair still correctly returns `IRRELEVANT`, not `SUPPORT` or
+`CONFLICT`, absent provenance; scope activates normally
+(`SUPPORT`/`CONFLICT`) once it actually is in `confirmed_facets`; two
+coincidentally-equal empty values (`""`/`frozenset()`) do not produce
+`SUPPORT` when their facet lacks provenance; provenance for one facet does
+not leak into another's judgment; `build_verified_experience()`'s
+automatic derivation is tested directly (single-facet, multi-facet, and
+zero-facet-variance cases). All pass; full suite 336 → 344 (+8).
+
+This does not reverse the option-B decision — it completes it. Full
+progression: **natural-language comparator → contamination found (§23) →
+deterministic structured-facet comparator → structured value alone found
+insufficient → facet-level confirmation provenance added.** The next
+minimal experiment described in Follow-up 1 above is accordingly revised:
+it is still true that the comparison step itself needs no API calls, but
+it now also depends on `confirmed_facets` being populated correctly by
+`build_verified_experience()` for the historical experience used — which
+this section's regression tests already exercise without any real
+clarification round. No API calls, no candidate freeze, no N/L/P/S re-run,
+no runtime integration, and no B7e were performed in this follow-up.
