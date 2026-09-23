@@ -523,7 +523,7 @@ meaningful.**
 | `v3` Option B redesign (conservative abstention — historical evidence downgraded to advisory/clarification-triggering, automatic override withdrawn) | **implemented, regression-tested, no API calls (§24 follow-up)** |
 | Option B replay of frozen §24 real-API data (0 API calls, not a new experiment) | **complete — 0/5 automatic override on both tasks, 2/5 ambiguous clarification-triggered (§24 follow-up)** |
 | `v3` final contract | **frozen at commit `0f1cf7c` (§24) — Option A left as future work, not pursued** |
-| Sequential experience evaluation (B7e) | **next up — see §25 audit** |
+| B7e Phase 1 — sequential experience chain (design, scenario, driver, 0-API deterministic validation) | **complete — 12/12 tests pass, min/max call budget computed (240/504) — not yet run with real API (§25)** |
 
 The sequential multi-episode experiment (B7e) stays intentionally
 postponed. The canonical-context B7d.3 re-run (§16) removed the
@@ -2527,3 +2527,183 @@ narrative contribution of this arc, not a limitation to explain away.
 Option A remains open as a natural "future work" direction (automatic
 reuse becomes safe once the delegation protocol itself carries
 provenance-aware assertions), not abandoned, just out of scope here.
+
+## 25. B7e Phase 1 — Sequential Experience Chain (Design + Deterministic Validation, Not Yet Run)
+
+v3 is closed as of §24 (frozen at commit `0f1cf7c`). This section starts
+B7e, the sequential multi-episode evaluation §12 deferred until the
+representation problem was fixed — which the whole v2→v3 arc has now
+done. **No API calls have been made for B7e as of this section.**
+Everything below is scenario/driver construction plus deterministic
+(fake-LLM) validation, per instruction.
+
+### B7e audit (before any design work)
+
+- **Original goal** (§6, §12): does a verified experience from an earlier
+  episode carry over into a later, related one — tested here for the
+  first time as a genuine *sequence* (episode → verify → store → next
+  episode reads it → verify → store → …), not the single
+  historical-vs-current pair every experiment through v3 has used.
+- **Already implemented, reused unmodified**: `AgentExperienceStore`
+  already stores a *list* per `(principal_id, task_category)` key and
+  preserves insertion order; `ExperienceAwareDelegate` already established
+  a "most recent experience" recency convention
+  (`all_experiences[-self.max_experiences:]`); the real clarification →
+  verified-experience pipeline (`ClarifyingDelegate.resolve()` →
+  `build_verified_experience()` → `store.add()`) was already validated
+  against real API data by the §24 smoke test.
+- **Gaps found**: no multi-episode scenario data existed; nothing
+  connected `AgentExperienceStore.get()`'s list to
+  `FrozenCandidateEvidenceHarness.decide()`'s single-`experience`
+  parameter; no chain driver existed; `agent_smoke.py`'s `EXAMPLE_*`
+  constants remained hardcoded (a pre-B7e TODO already flagged in
+  `tests/test_scenario_reproducibility.py`); no success criteria existed
+  under the (then-still-open) Option B contract.
+- **Architectural consequence of the v3 freeze**: `ExperienceAwareDelegate`
+  (v1/v2, generation-time natural-language injection) is not used
+  anywhere in B7e — B7d.6 already discredited it (slot+token conjunction,
+  not paraphrase-invariant transfer). Every episode in the chain generates
+  candidates history-free and consumes history only through the frozen
+  v3 offline harness, exactly as §24's main experiment did.
+
+### Design decisions (confirmed)
+
+- **Chain length: 4 episodes** (E1 August seed / E2 September ambiguous /
+  E3 October explicit-change / E4 November sequential-adaptation
+  observation point). 3 episodes cannot show how E3's outcome propagates
+  forward — E4 exists specifically to observe that.
+- **Runs: 3 independent chains** (12 episode executions total). Phase 1's
+  purpose is confirming stateful sequential behavior actually holds
+  together against real API data, not a statistically powered result —
+  explicitly not expanded past 3 runs without reviewing Phase 1 first.
+- **Experience selection: latest-only**, reusing `ExperienceAwareDelegate`'s
+  existing recency convention exactly (`experiences[-1] if experiences
+  else None`). No aggregation, voting, weighting, per-facet search-back,
+  or similarity retrieval — explicitly deferred past B7e Phase 1.
+- **RQ-B7e** (replaces the pre-v3 "does history reduce uncertainty"
+  framing, which no longer matches the Option B contract): *across
+  sequential episodes, can verified historical semantic evidence remain
+  provenance-bounded and non-authoritative while still identifying when
+  clarification is warranted, and while only Principal-verified outcomes
+  — never merely-stable model output — enter the store that the next
+  episode reads?*
+- **Storage invariant**: *only verified experience enters the store.* A
+  stable model output that never went through Principal clarification is
+  never stored, regardless of how confident the model was — "the model
+  was confident" ≠ "the Principal confirmed it." `build_verified_
+  experience()`'s existing gate is reused unchanged; the chain driver adds
+  no new storage criteria beyond its existing `confirmed_facets`
+  non-empty check.
+- **Failure taxonomy**: F1–F5 unchanged. Two sequence-specific codes only
+  (no broader taxonomy expansion): **F6** unverified-store contamination
+  (semantic output enters the store without going through clarification)
+  and **F7** sequence-order violation (an episode consults a "historical"
+  experience that was not actually verified-and-stored before it ran).
+  Both are guarded by explicit `assert` statements inside `run_chain()`
+  (`src/dualflow/experience_decision.py` is not touched — these guards
+  live entirely in the new diagnostic driver), and both are exercised as
+  regression tests (`TestSequenceGuardsDoNotFalselyTrigger`).
+- **Success criteria (S1–S6, Phase 1)**: S1 automatic historical override
+  = 0; S2 unverified episode output never enters the store; S3 only
+  verified clarification updates the store; S4 episode N+1 uses only the
+  latest *stored, verified* experience at its own execution time, never a
+  future one; S5 evidence never expands beyond the historically confirmed
+  facet (action only, in this scenario); S6 ambiguous-plus-eligible-history
+  triggers clarification, never automatic resolution. Which action E4
+  actually confirms (summarize vs. export) is explicitly **not** a success
+  criterion — the path-dependence itself (E4 seeing different history
+  depending on whether E3 was verified) is what Phase 1 is designed to
+  observe, not something to force toward one outcome.
+
+### Scenario and driver (new files, `git diff --stat` confirms only these + a doc-only test comment update)
+
+- `experiments/scenarios/external_audit_finance_chain.json` — 4 ordered
+  episodes with `episode_id`/`month`/`role`/`source` (or literal
+  `goal`/`context`/`delegation` where no prior canonical text exists) per
+  episode. E1's goal/context/delegation are `agent_smoke.py`'s
+  `EXAMPLE_GOAL`/`EXAMPLE_CONTEXT`/`EXAMPLE_AMBIGUOUS_DELEGATION`, reused
+  by reference (not retyped) — the B7d.3 wording-drift lesson
+  (`tests/test_scenario_reproducibility.py`) applies exactly here too. E2
+  reuses `external_audit_finance.json`'s `current_episode` context/
+  delegation the same way; only its `goal` is new (no goal field existed
+  for the current episode before this chain). E3/E4 have no pre-existing
+  canonical source and are this file's own new text — E3 mirrors
+  `experience_representation.py`'s `TASK2_DELEGATION` explicit-change
+  pattern one month later ("This time, export the October 2026 financial
+  report…"); E4 reverts to the habitual ambiguous "prepare" pattern one
+  month after that.
+- `experiments/diagnostics/experience_chain_experiment.py` — `run_chain()`
+  executes the 4 episodes in order against one shared `AgentExperience
+  Store`: reads `store.get(...)[-1]` before each episode (F7-guarded),
+  calls the unmodified `FrozenCandidateEvidenceHarness.decide()` purely
+  for the advisory SUPPORT/CONFLICT audit trail (never fed back into any
+  generation prompt), calls the unmodified `ClarifyingDelegate.resolve()`
+  for the actual (entropy-gated, same 0.8 threshold) clarification
+  decision, and stores the result only if `build_verified_experience()`
+  approves it (F6-guarded). `compute_call_budget()` and `--budget-only`
+  compute the exact min/max real-API call count with zero API calls and
+  no client construction.
+- `tests/test_scenario_reproducibility.py` — one docstring paragraph
+  updated (no code change) recording the decision NOT to migrate
+  `agent_smoke.py` to read from the scenario file now that B7e has
+  started; it stays the frozen reproducer for the pre-v3 experiments,
+  and B7e's chain scenario/driver import its constants instead of
+  duplicating or replacing them.
+
+### Deterministic (0 API calls) validation
+
+`tests/test_experience_chain.py`, 12 tests, all passing, using a fake
+LLM client with two hand-built response paths sharing E1/E2 and diverging
+only at E3:
+
+- **Path A** — E3 samples stable (all `export`, entropy=0): `resolve()`
+  never clarifies, nothing is stored for E3.
+- **Path B** — E3 samples ambiguous (entropy=1.0): `resolve()` clarifies,
+  Principal confirms `"export"`, a new verified experience is stored.
+
+Confirmed: store insertion order and latest-only selection
+(`TestChainIntegrity`); a stable, never-clarified episode is never stored
+(`TestStableEpisodeNeverStored`); a clarified-and-verified episode is
+stored (`TestClarifiedVerifiedEpisodeIsStored`); **E4 selects a genuinely
+different `selected_history_action` between the two paths — `"summarize"`
+in Path A (E3 never overwrote the E1/E2 history), `"export"` in Path B
+(E3's verified change propagated forward)** — this is the core
+path-dependence phenomenon the 4-episode design exists to observe
+(`TestSequentialAdaptation`); `automatic_override` is `False` on every
+episode in both paths, and the SUPPORT/CONFLICT relation is still
+computed and recorded even though it is never applied — including the
+relation direction flipping between the two paths' E4 (`export`/`summarize`
+swap sides depending on which action the selected history confirms)
+(`TestNonAuthoritativeSafety`); and, most directly demonstrating the
+"advisory, not authoritative" principle: **in Path B, E4's selected
+history says `"export"`, but E4's own Principal-confirmed outcome is
+still `"summarize"`** — conflicting history never forces the outcome
+(`test_e4_outcome_itself_stays_governed_by_principal_not_history_in_
+either_path`). The F6/F7 guards inside `run_chain()` never fire on either
+well-formed path (`TestSequenceGuardsDoNotFalselyTrigger`). Full
+`pytest -q` suite green throughout (no existing test file's behavior
+changed).
+
+### API call budget (computed, zero API calls made to compute it)
+
+```
+$ python experiments/diagnostics/experience_chain_experiment.py --budget-only --samples 20 --chains 3
+chain length: 4 episodes x 3 chains = 12 episode executions
+N per sampling call: 20
+fixed candidate calls (every episode always pre-samples): 240
+per-ambiguous-episode extra (1 question + 1 answer + 20 post-samples): 22
+minimum total calls (0/12 episodes ambiguous): 240
+maximum total calls (12/12 episodes ambiguous): 504
+```
+
+Real token usage will only be recorded after an actual run — not
+estimated here, per instruction.
+
+### Not done in this pass
+
+Per instruction: no API calls, no expansion past 3 runs, no multi-history
+aggregation/similarity retrieval/weighting, no Option A `asserted_facets`
+protocol, no `ExperienceAwareDelegate` natural-language injection
+anywhere in this chain, no threshold tuning, no prompt tuning, no B7f or
+any step beyond B7e Phase 1. Awaiting review of this design before any
+real-API execution.
