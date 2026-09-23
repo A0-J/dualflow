@@ -106,6 +106,16 @@ class AgentExperience:
         return self.post_distribution.entropy
 
 
+def _facet_resolved(distribution: CandidateDistribution, facet: str) -> bool:
+    """`distribution`의 candidate들이 이 facet 하나에 대해 정확히 하나의
+    값으로 수렴했는지. `clarification._facets_that_varied()`와 정확히
+    같은 저수준 연산("이 facet의 값이 몇 종류인가")을 반대 방향(pre가
+    아니라 post, 여러 facet이 아니라 특정 facet 하나)으로 재사용한 것뿐
+    — 새 heuristic이 아니다."""
+    values = {getattr(interp, facet) for interp in distribution.belief}
+    return len(values) == 1
+
+
 def build_verified_experience(result: ClarificationResult, *, principal_id: str,
                               task_category: str, delegation: str,
                               max_verified_entropy: float = 0.0,
@@ -115,13 +125,22 @@ def build_verified_experience(result: ClarificationResult, *, principal_id: str,
     않는다 — 호출자가 반환값이 `None`이 아닐 때만 명시적으로
     `store.add(...)`해야 한다(B7c는 의도적으로 자동 저장을 하지 않는다).
 
-    `confirmed_facets`는 `result.question.target_facets`를 그대로
-    물려받는다 — 이 함수 자체는 어떤 facet이 confirmed인지 다시 계산하지
-    않는다(v3 §23 follow-up 2의 실수를 반복하지 않기 위해서다: "pre_
-    distribution에서 값이 갈렸다"는 사후 추론과 "질문이 실제로 그 facet을
-    겨냥해서 만들어졌다"는 사전 제약은 다르다 — 후자만 `clarification.py`
-    의 `_facets_that_varied()`가 `resolve()` 안에서 질문을 만들기 *전에*
-    계산해서 넘긴다).
+    `confirmed_facets` 최종 계약(v3 §23 follow-up 5) — `result.question.
+    target_facets`(항상 0개 또는 1개, follow-up 4)를 그대로 승격하지
+    않는다. singleton이 보장하는 건 "이번 round에서 confirmed 후보가 될 수
+    있는 facet은 최대 하나"까지이지, "Principal이 실제로 그 facet에 명확히
+    답했다"까지는 아니다(모호하거나 회피하는 답변일 가능성은 singleton
+    구조로도 없어지지 않는다). answer 텍스트를 재해석하지 않고 이걸
+    구조적으로 확인할 방법은 이미 있다 — `result.post_distribution`이다:
+    target facet에 대해 post-clarification candidate들이 실제로 하나의
+    값으로 수렴했는지(`_facet_resolved()`)를 본다. 수렴하지 않았다면(예:
+    `max_verified_entropy`를 느슨하게 설정해서, joint entropy 조건은
+    통과했지만 target facet 자체는 여전히 갈리는 경우) 그 facet은
+    confirmed로 승격하지 않는다 — `confirmed_facets = frozenset()`.
+    기본값 `max_verified_entropy=0.0`에서는 joint entropy가 이미 0으로
+    수렴해야 하므로(위 조건) 이 추가 검사가 사실상 항상 참이지만,
+    `max_verified_entropy`를 느슨하게 준 호출에서는 이 검사가 실제로
+    막아주는 경우가 생긴다 — 그게 이 검사를 추가한 이유다.
 
     `delegation`을 별도 인자로 받는 이유: `ClarificationResult`는
     `resolve()`에 넘겼던 원본 delegation 텍스트를 자체적으로 갖고 있지
@@ -134,6 +153,11 @@ def build_verified_experience(result: ClarificationResult, *, principal_id: str,
     if result.post_distribution.entropy > max_verified_entropy:
         return None
 
+    confirmed_facets = frozenset(
+        facet for facet in result.question.target_facets
+        if _facet_resolved(result.post_distribution, facet)
+    )
+
     return AgentExperience(
         principal_id=principal_id,
         task_category=task_category,
@@ -143,7 +167,7 @@ def build_verified_experience(result: ClarificationResult, *, principal_id: str,
         confirmed_interpretation=result.final_interpretation,
         pre_distribution=result.pre_distribution,
         post_distribution=result.post_distribution,
-        confirmed_facets=result.question.target_facets,
+        confirmed_facets=confirmed_facets,
         episode_id=episode_id,
     )
 

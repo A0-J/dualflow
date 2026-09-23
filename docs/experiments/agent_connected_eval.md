@@ -515,6 +515,7 @@ meaningful.**
 | `v3` provenance gate (`confirmed_facets`, structured value ≠ confirmed evidence) | **implemented, regression-tested (§23 follow-up 2)** |
 | `v3` provenance correction (ambiguity ≠ confirmation; generation-time target_facets) | **implemented, regression-tested (§23 follow-up 3)** |
 | `v3` single-facet clarification (target ≠ confirmed for multi-facet rounds, closed via IG-based single-facet targeting) | **implemented, regression-tested (§23 follow-up 4)** |
+| `v3` post-clarification resolution gate (singleton target ≠ actual confirmation) | **implemented, regression-tested (§23 follow-up 5) — provenance chain design complete** |
 | Sequential experience evaluation (B7e) | not started |
 
 The sequential multi-episode experiment (B7e) stays intentionally
@@ -1771,12 +1772,95 @@ from candidate variance to comparator behavior, in one test. All 17 tests
 in the file pass (16 → 17, one replaced + one added). Full suite
 353 → 354.
 
-Progression, now actually complete for this arc: **natural-language
-comparator → contamination found → deterministic structured-facet
-comparator → structured value alone insufficient → ambiguity-based
-provenance → ambiguity ≠ confirmation → generation-time target provenance
-→ target ≠ confirmed when multi-facet → single-facet-per-round
-clarification (reusing existing legacy IG machinery), closing the gap
-without new heuristics.** No API calls, no candidate freeze, no N/L/P/S
-re-run, no runtime integration, no B7e, and no answer-text heuristic were
-used to produce this follow-up.
+Progression as of Follow-up 4: **natural-language comparator →
+contamination found → deterministic structured-facet comparator →
+structured value alone insufficient → ambiguity-based provenance →
+ambiguity ≠ confirmation → generation-time target provenance → target ≠
+confirmed when multi-facet → single-facet-per-round clarification (reusing
+existing legacy IG machinery), closing the gap without new heuristics.**
+(Again called "complete" at the time; Follow-up 5 below found one final,
+narrower gap before any API validation — left unedited here, same policy
+as Follow-up 3.)
+
+### Follow-up 5: singleton target ≠ actual confirmation (post-clarification resolution gate)
+
+Follow-up 4's singleton `target_facets` guarantees only **"at most one
+facet can be a confirmation candidate per round"** — it does not by
+itself guarantee the Principal's free-text answer was clear, on-topic, or
+unambiguous. A vague, evasive, or off-topic answer is not structurally
+ruled out by singleton targeting alone. The precise statement of what
+remained missing: singleton targeting bounds *how many* facets could be
+confirmed, not *whether* the one targeted facet actually *was*.
+
+**Audit of the post-clarification path**
+(target facet selection → question → answer → `post_distribution` →
+`final_interpretation` → `build_verified_experience()`) found an existing,
+already-computed structural signal that directly answers this, with no
+new heuristic and no answer-text analysis: **`ClarificationResult.
+post_distribution`** — the *already re-sampled* candidate distribution
+taken *after* the Principal's answer was folded into context. If the
+target facet's value is still split across more than one distinct value
+among `post_distribution`'s candidates, the clarification round did not
+actually resolve it, regardless of what `target_facets` said should have
+been asked. This is exactly the same primitive already used for
+`varied_facets` (`_facets_that_varied()`, "how many distinct values does
+this facet have among these candidates") — reused here in single-facet
+form on the *post* distribution instead of the *pre* distribution.
+
+One subtlety found: `build_verified_experience()`'s **existing**
+`max_verified_entropy` gate (default `0.0`) already requires the *joint*
+`post_distribution` entropy to have converged before returning anything at
+all — at the default, this means every facet (including the target one)
+has necessarily collapsed to a single value, making the new per-facet
+check redundant *at the default threshold*. It becomes load-bearing
+specifically when a caller configures a **looser** `max_verified_entropy`
+(already a supported, tested code path —
+`test_high_post_entropy_accepted_with_looser_configured_threshold`): the
+joint-entropy gate can pass while the target facet specifically still
+shows real variance, and only the new per-facet check catches that case.
+
+**Fix**: `agent_experience.py` gains `_facet_resolved(distribution, facet)`
+(counts distinct values for one facet across a distribution's candidates —
+the same low-level operation `_facets_that_varied()` already performs, not
+a new one). `build_verified_experience()` now computes `confirmed_facets`
+as the intersection of `result.question.target_facets` with the facets
+that pass `_facet_resolved(result.post_distribution, facet)` — not a blind
+copy of `target_facets` anymore. A facet that was targeted but never
+resolved post-clarification is dropped, `confirmed_facets` becomes
+`frozenset()` in that case rather than falsely reporting the target facet
+as confirmed. `clarification.py`, `delegate_agent.py`, and
+`experience_evidence.py` are all unchanged — the fix is entirely inside
+`build_verified_experience()`, one filtering step added to an existing
+function.
+
+**`PrincipalAgent.answer_clarification()` audited again, still not
+modified** — same conclusion as Follow-up 4: the post-clarification
+resolution signal already available (`post_distribution`) is sufficient to
+close this gap without needing any change to answer generation or any
+answer-text analysis.
+
+**Tests** (`tests/test_agent_experience.py`, `TestConfirmedFacetsProvenance`
+rewritten, 6 tests): the default-threshold case (`confirmed_facets ==
+target_facets` when the joint gate already forces full convergence); the
+requested failure case with a deliberately loosened
+`max_verified_entropy` where the target facet (`action`) still shows two
+distinct post-clarification values — `confirmed_facets == frozenset()`,
+not `{"action"}`; a non-target facet (`scope`) that happens to trivially
+"resolve" (because `post_distribution` collapsed to one candidate) is
+still never confirmed, because it was never in `target_facets` to begin
+with (the Follow-up 4 subset invariant re-verified under the new gate);
+and a defensive test confirming `build_verified_experience()` correctly
+intersects even if (hypothetically) more than one target facet were ever
+passed in. All pass; full suite 354 → 356 (+2).
+
+Progression, now complete for this arc: **natural-language comparator →
+contamination found → deterministic structured-facet comparator →
+structured value alone insufficient → ambiguity-based provenance →
+ambiguity ≠ confirmation → generation-time target provenance → target ≠
+confirmed when multi-facet → single-facet-per-round clarification → a
+singleton target still ≠ actual confirmation → post-clarification
+resolution gate added, using only an already-computed distribution, no new
+heuristic and no answer-text analysis.** No API calls, no candidate
+freeze, no N/L/P/S re-run, no runtime integration, and no B7e were
+performed in this follow-up. This closes the provenance chain design work
+for now — the next step, when authorized, is real-API validation.

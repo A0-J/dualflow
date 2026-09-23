@@ -115,15 +115,21 @@ class TestBuildVerifiedExperience:
 
 
 class TestConfirmedFacetsProvenance:
-    """v3 provenance 보완, revision 2(§23 follow-up 3) — build_verified_
-    experience()는 더 이상 confirmed_facets를 스스로 계산하지 않는다.
-    `result.question.target_facets`(clarification.py의 `_facets_that_
-    varied()`가 질문을 만들기 *전에* 계산해서 넘긴 값)를 그대로
-    물려받을 뿐이다 — 이 클래스는 그 pass-through만 확인한다. "어떤
-    facet이 실제로 질문 대상이었는가"를 계산하는 로직 자체의 테스트는
-    tests/test_clarification.py의 TestTargetFacets에 있다."""
+    """v3 provenance 최종 계약(§23 follow-up 5) — `confirmed_facets`는
+    `result.question.target_facets`를 무조건 승격한 값이 아니다.
+    `target_facets`에 있으면서 *동시에* `post_distribution`에서 실제로
+    하나의 값으로 수렴한 facet만 confirmed로 승격한다
+    (`build_verified_experience._facet_resolved()`). "이 facet이 질문
+    대상으로 지정됐다"(target)와 "Principal이 실제로 이 facet을 확인했다"
+    (confirmed)는 여전히 다른 사실이고, singleton 구조(§23 follow-up 4)
+    만으로는 "모호하거나 회피하는 답변"까지 걸러지지 않는다는 게 이
+    follow-up의 출발점이다 — 답변 텍스트를 재해석하지 않고 이미 있는
+    `post_distribution` 구조로 그 잔여 위험을 닫는다."""
 
-    def test_confirmed_facets_is_exactly_the_question_target_facets(self):
+    def test_confirmed_facets_requires_both_target_and_post_resolution(self):
+        """기본(엄격한) max_verified_entropy=0.0에서는 post_distribution
+        자체가 이미 완전히 수렴해 있어야 하므로, target facet도 당연히
+        수렴돼 있다 -- confirmed_facets == target_facets."""
         result = _clarified_result(post_entropy=0.0, target_facets=frozenset({"action"}))
 
         exp = build_verified_experience(
@@ -132,9 +138,69 @@ class TestConfirmedFacetsProvenance:
 
         assert exp is not None
         assert exp.confirmed_facets == frozenset({"action"})
-        assert exp.confirmed_facets is result.question.target_facets
 
-    def test_multiple_target_facets_are_all_passed_through(self):
+    def test_target_facet_unresolved_post_clarification_is_not_confirmed(self):
+        """핵심 케이스: max_verified_entropy를 느슨하게 줘서 joint-entropy
+        gate는 통과하지만, target facet(action) 자체는 post-clarification
+        에서도 여전히 두 값으로 갈려 있다 -- 이 경우 target=action이어도
+        confirmed_facets는 비어 있어야 한다(모호한/미해결 답변을 confirmed로
+        승격하지 않는다)."""
+        summarize_aug = Interpretation("summarize", "file", "/reports/2026-08/", frozenset())
+        export_aug = Interpretation("export", "file", "/reports/2026-08/", frozenset())
+        pre = _distribution({summarize_aug: 0.6, export_aug: 0.4}, 0.971)
+        post = _distribution({summarize_aug: 0.7, export_aug: 0.3}, 0.881)  # action STILL varies
+        question = ClarificationQuestion(
+            question="Summarize or export?", raw_text="Summarize or export?",
+            response=LLMResponse(text="Summarize or export?"),
+            belief=pre.belief, entropy=pre.entropy, target_facets=frozenset({"action"}))
+        answer = PrincipalClarification(answer="Not totally sure, maybe summarize.",
+                                       response=LLMResponse(text="Not totally sure, maybe summarize."))
+        result = ClarificationResult(
+            clarified=True, pre_distribution=pre, post_distribution=post,
+            question=question, answer=answer, final_interpretation=post.top)
+
+        exp = build_verified_experience(
+            result, principal_id="finance_lead_A", task_category="external_audit_report",
+            delegation="x", max_verified_entropy=0.9)  # loose enough for the joint gate to pass
+
+        assert exp is not None  # joint gate passed
+        assert exp.confirmed_facets == frozenset()  # but action itself never resolved
+
+    def test_non_target_facet_never_confirmed_even_if_it_happens_to_resolve(self):
+        """target_facets={"action"}뿐인데 post_distribution이 우연히
+        단일 candidate로 수렴해서 scope도 "resolve된 것처럼" 보이는
+        경우에도, scope는 애초에 target이 아니었으므로 confirmed_facets에
+        들어가면 안 된다 -- follow-up 4의 불변식(confirmed_facets는
+        항상 target_facets의 부분집합)이 이 gate 추가 후에도 유지되는지
+        확인."""
+        summarize_sept = Interpretation("summarize", "file", "/reports/2026-09/", frozenset())
+        pre = _distribution({summarize_sept: 0.6,
+                            Interpretation("export", "file", "/reports/2026-08/", frozenset()): 0.4},
+                           0.971)
+        post = _distribution({summarize_sept: 1.0}, 0.0)  # single candidate -> every facet "resolves"
+        question = ClarificationQuestion(
+            question="Summarize or export?", raw_text="Summarize or export?",
+            response=LLMResponse(text="Summarize or export?"),
+            belief=pre.belief, entropy=pre.entropy,
+            target_facets=frozenset({"action"}))  # only action was ever targeted
+        answer = PrincipalClarification(answer="Summarize.", response=LLMResponse(text="Summarize."))
+        result = ClarificationResult(
+            clarified=True, pre_distribution=pre, post_distribution=post,
+            question=question, answer=answer, final_interpretation=post.top)
+
+        exp = build_verified_experience(
+            result, principal_id="finance_lead_A", task_category="external_audit_report",
+            delegation="x")
+
+        assert exp is not None
+        assert exp.confirmed_facets == frozenset({"action"})
+        assert "scope" not in exp.confirmed_facets
+
+    def test_defensive_multi_target_facets_are_intersected_with_resolution(self):
+        """build_verified_experience() 자체는 target_facets가 여러 개
+        들어와도(실제 resolve()는 항상 singleton-or-empty만 만들지만,
+        이 함수 자체의 계약은 그것에 의존하지 않는다) 방어적으로 동작한다
+        -- 실제로 post에서 수렴한 것만 승격된다."""
         result = _clarified_result(post_entropy=0.0,
                                    target_facets=frozenset({"action", "scope"}))
 
@@ -143,6 +209,8 @@ class TestConfirmedFacetsProvenance:
             delegation="x")
 
         assert exp is not None
+        # post_entropy=0.0 -> _clarified_result()의 post는 단일 candidate이므로
+        # action/scope 둘 다 (우연히) 수렴 상태 -- 방어적 필터를 통과해 둘 다 남는다.
         assert exp.confirmed_facets == frozenset({"action", "scope"})
 
     def test_no_target_facets_means_empty_confirmed_facets(self):
