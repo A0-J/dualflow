@@ -511,6 +511,7 @@ meaningful.**
 | `v2` representation investigation | **closed — moving to `v3` architectural redesign (§22)** |
 | `v3` prototype — `HistoricalEvidenceComparator` (opt-in, not wired into runtime) | implemented (§22 review, code) |
 | `v3` first pilot (180 calls) | **inconclusive — comparator calibration/semantic-target validity not established, not a verdict on the v3 hypothesis (§23)** |
+| `v3` comparator redesign — structured-facet, deterministic (option B) | **implemented, regression-tested (§23 follow-up)** |
 | Sequential experience evaluation (B7e) | not started |
 
 The sequential multi-episode experiment (B7e) stays intentionally
@@ -1463,3 +1464,68 @@ Not recorded in `docs/unexpected_findings/`: per instruction, a design/
 calibration gap discovered before the intended hypothesis could be tested
 is not the kind of "materially changed our interpretation of a result"
 finding that directory is for.
+
+### Follow-up: structured-facet comparator (implemented, option B)
+
+Following the audit above, `src/dualflow/experience_evidence.py` was
+rewritten (not extended — the natural-language path is removed, this is
+revision 3 of the same file, with its full history kept in the module
+docstring) to implement recommendation **B**:
+
+- `HistoricalEvidenceComparator.judge()` no longer takes `delegation`/
+  `evidence_text` at all — its signature is now exactly `candidate:
+  Interpretation, historical: Interpretation, facet: str = "action"`.
+  There is no parameter left through which prose (an episode's wording, a
+  paraphrase, the reused `v2` header) could enter the comparison.
+- The comparison itself reuses `rule_engine.field_match()` unchanged (via
+  a small `Fields` adapter that only fills the four raw value fields it
+  reads) — no new equality/compatibility rule was invented, per
+  instruction. Each facet (`action`/`resource`/`scope`/`condition`) is
+  compared completely independently; a scope mismatch cannot affect the
+  action relation, structurally (`field_match()` already returns four
+  independent booleans — see rule_engine.py's own docstring at that
+  function).
+- No LLM call happens anywhere in this module now — it is fully
+  deterministic, so `HistoricalEvidenceComparator`'s constructor no
+  longer takes an `LLMClient`.
+
+**Regression tests** (`tests/test_experience_evidence.py`, rewritten, 18
+tests, no LLM/network needed) pin down exactly the contract requested:
+`historical=summarize`/`candidate=summarize` → action `SUPPORT`;
+`historical=export`/`candidate=summarize` → action `CONFLICT`;
+`historical` scope `2026-08` vs. `candidate` scope `2026-09` with both
+actions `summarize` → action relation stays `SUPPORT` (the exact §23
+failure reproduced and shown fixed) while the *scope* facet, if queried
+directly, correctly still reports the mismatch; `judge()`'s signature
+audited to contain no free-text parameter at all; the reused `v2` header
+and `render_experience_block_v2*` confirmed unreachable from this module
+(`hasattr` on the actual namespace); existing independence checks
+(`DelegateAgent`/`Budget`/`check_authority`/`AuthorityVerifierAgent`/
+`AgentDelegationRuntime`) re-verified against the rewritten module.
+All 18 pass; full suite 351 → 336 (the 33 old LLM-based tests replaced by
+18 new ones, net −15, everything else unchanged).
+
+**`experiments/diagnostics/experience_evidence_comparator.py` (the N/L/P/S
+diagnostic from the first pilot) is now stale** — it still calls
+`judge(delegation=..., candidate=..., evidence_text=...)`, which raises
+`TypeError` against the new signature (confirmed, not fixed). It is not
+rewritten in this pass, per instruction (no new diagnostic, no N/L/P/S
+re-run yet). A minimal next diagnostic, when authorized, would freeze one
+candidate set exactly as before, retrieve the one verified historical
+experience, and call the new `judge()` directly for each candidate — no
+API calls would be needed at all for the comparison step itself (it is
+deterministic), so the only real-API cost left would be the one
+`sample_candidates()` freeze call. This turns the "does structured
+comparison remove slot-token dependence" question into something that no
+longer needs a paid experiment to answer for the comparison step in
+isolation — what still needs real-API validation is the *upstream* step
+questioned in the design recommendation above: whether a new paraphrase
+like "produce a concise account of the report's contents" can be reliably
+structured into `confirmed_interpretation.action = "summarize"` at
+experience-creation time.
+
+Progression preserved, not overwritten: **old natural-language comparator
+diagnostic was inconclusive (§23 top) → contract audit identified two
+contaminants (§23 audit findings) → structured-facet comparator
+implemented (this subsection), removing the failure surface the audit
+found rather than tuning around it.**

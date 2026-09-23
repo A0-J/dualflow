@@ -1,21 +1,46 @@
 """
-V3 PROTOTYPE — HISTORICAL EXPERIENCE AS SEMANTIC EVIDENCE (opt-in,
-diagnostic-only, not wired into any runtime yet).
+V3 STRUCTURED-FACET COMPARATOR (opt-in, not wired into any runtime yet).
 
-B7d.6(docs/experiments/agent_connected_eval.md §22)이 보여준 것: v2가
-Delegate의 candidate-generation prompt에 historical experience를 직접
-주입하는 한, paraphrase를 아무리 바꿔도 "literal action token +
-structured confirmed-interpretation slot"의 결합에서만 효과가 나타나는
-slot-token interaction을 피하기 어려웠다(neither the literal token nor a
-paraphrase alone reproduced the effect; only their conjunction did,
-interaction contrast +0.225). v3의 핵심 원칙(사용자 승인):
+REVISION HISTORY OF THIS MODULE (kept here so the reasoning survives —
+see docs/experiments/agent_connected_eval.md §22/§23 for the full record):
 
-    Historical experience should be semantic evidence for verification,
-    not an instruction injected into Delegate candidate generation.
+  1. First version (commit 52de6824e6376867a998e0e36f0573a21f4b5b08):
+     `HistoricalEvidenceComparator` re-rendered historical experience as
+     natural-language text (reusing B7d.5/B7d.6's N/L/P/S renderers) and
+     asked an LLM to classify SUPPORT/CONFLICT/IRRELEVANT/UNCERTAIN
+     against a fixed candidate.
+  2. A 180-call pilot against that version was **inconclusive** (§23):
+     even the maximally-aligned case (structured evidence confirming
+     `summarize`, candidate `summarize`) produced CONFLICT more often
+     than SUPPORT. A no-API audit of the exact prompts found two
+     concrete contaminants: (a) the historical evidence text exposed the
+     *whole* past episode, including the non-transferable `August 2026`
+     scope, right next to the current candidate's `September 2026` scope
+     -- risking a whole-episode mismatch being read as an action
+     conflict; (b) the reused `v2` header ("If the current delegation
+     explicitly specifies an action, follow the current delegation...")
+     was written as an instruction for whoever decides an action, not as
+     evidence data, and was contaminating a classification prompt it was
+     never designed for.
+  3. **This version**: the natural-language re-rendering step is removed
+     entirely. `AgentExperience.confirmed_interpretation` is already a
+     structured `Interpretation` (`src/dualflow/agent_experience.py`) --
+     there is no need to serialize it back into prose and ask an LLM to
+     re-interpret it. The comparator now does a plain, deterministic,
+     per-facet comparison between the current candidate's fields and the
+     historical confirmed interpretation's fields. No LLM call, no
+     prompt, no wording sensitivity possible -- there is no channel left
+     for prose to enter this comparison at all.
 
-이 모듈은 그 원칙의 첫 구현 조각이다 — `HistoricalEvidenceComparator`.
+Because of (3), paraphrase invariance is no longer this module's
+responsibility. It moves earlier in the pipeline, to whichever step turns
+a Principal's natural-language clarification answer (e.g. "produce a
+concise account of the report's contents") into a canonical
+`confirmed_interpretation.action` at experience-creation time
+(`build_verified_experience()`, `agent_experience.py`) -- that step is
+unchanged by this module and is out of scope here.
 
-이 모듈이 하지 않는 것 (전부 의도적):
+이 모듈이 하지 않는 것 (전부 의도적, revision 3에서도 변하지 않음):
   - Delegate candidate generation에 관여하는 것. `DelegateAgent`를 import
     조차 하지 않는다 — candidate는 항상 호출자가 이미 만들어서(history
     없이 생성된) `Interpretation`으로 넘겨준다. 이 모듈은 그 candidate를
@@ -25,26 +50,18 @@ interaction contrast +0.225). v3의 핵심 원칙(사용자 승인):
   - `AgentDelegationRuntime.run()`에 연결되는 것 — 아직 연결되지 않는다.
     기존 runtime/Authority Flow/`SemanticVerifierAgent.
     verify_agent_proposal()`의 동작은 이 모듈로 인해 전혀 바뀌지 않는다.
-  - entropy 기준으로 "history를 볼지 말지"를 정하는 것 — 그 게이트는
-    나중 설계 조각이고, 구현되더라도 "현재 지시가 explicit하다"는 판정이
-    아니라 "history를 consult할 필요가 있는가"라는 훨씬 좁은 판단으로
-    한정되어야 한다(v3 아키텍처 리뷰에서 명시적으로 합의됨).
-    explicit-current-instruction 안전장치는 여전히 기존
-    `PrincipalAgent.restate_intent()` + `AgentDelegationRuntime`의
-    deterministic principal-match가 담당하며, 이 모듈은 그 검사를
-    우회할 수 없다(우회할 방법 자체가 없다 — 이 모듈은 runtime에 연결돼
-    있지 않다).
   - 여러 verified experience를 하나로 합치거나 우선순위를 매기는 것 —
-    `judge()`는 `evidence_text` 문자열 하나만 받는다. 첫 v3 pilot은
-    정확히 1개의 verified experience만 다룬다(multi-experience
-    aggregation/순서는 나중 문제).
+    `judge()`는 historical experience 하나(`Interpretation` 하나)만
+    받는다. multi-experience aggregation/순서는 여전히 나중 문제다.
+  - facet 사이에 서로 영향을 주는 것 — `compare_facets()`는 각 facet을
+    완전히 독립적으로 비교한다. historical scope가 다르다고 해서
+    action 비교 결과가 오염되지 않는다(§23 audit이 지적한 정확히 그
+    실패를 구조적으로 막는다).
 
 핵심 invariant: `judge()`는 주어진 `candidate: Interpretation`을 그대로
-반환한다(생성/수정하지 않는다) — 오직 그 candidate와 historical evidence
-사이의 관계 하나(`EvidenceRelation`)만 판단한다. 이건 `LLMJudge`(기존,
-`llm.py`)가 "이미 구조화된 후보 중 하나를 고르는" 좁은 계약을 갖는 것과
-같은 설계 원칙이다 — 자유 생성이 아니라 닫힌 분류(classification)이므로
-환각/파싱 실패가 줄고, candidate 자체가 오염될 경로가 없다.
+반환한다(생성/수정하지 않는다) — 오직 그 candidate와 historical
+confirmed interpretation 사이의, 지정한 facet 하나에 대한 관계만
+판단한다.
 """
 
 from __future__ import annotations
@@ -52,14 +69,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from .llm import LLMClient, LLMResponse
+from .rule_engine import Fields, field_match
 from .semantic import Interpretation
+
+FACETS = ("action", "resource", "scope", "condition")
 
 
 class EvidenceRelation(str, Enum):
-    """`HistoricalEvidenceComparator.judge()`가 반환할 수 있는 유일한
-    네 가지 값. 다섯 번째 값(예: 새 action 이름)은 존재하지 않는다 —
-    닫힌 분류 문제로 설계했다는 것 자체가 구조적 안전장치다."""
+    """이 comparator가 반환할 수 있는 값의 전체 집합. `compare_facets()`/
+    `judge()`는 이 중 `SUPPORT`/`CONFLICT` 두 값만 실제로 만든다 —
+    action/resource/scope/condition 네 필드 모두 `Interpretation`에
+    항상 값이 채워져 있어서(빈 값은 `""`/`frozenset()`로 존재한다),
+    "값이 없어서 판단 불가"인 `IRRELEVANT`/`UNCERTAIN` 케이스가 이
+    deterministic 경로에서는 구조적으로 발생하지 않는다. 이 두 값은
+    인터페이스 안정성을 위해 열거형에 남겨둔다(다른/미래의 comparator
+    구현이 쓸 수 있다)."""
 
     SUPPORT = "SUPPORT"
     CONFLICT = "CONFLICT"
@@ -67,102 +91,56 @@ class EvidenceRelation(str, Enum):
     UNCERTAIN = "UNCERTAIN"
 
 
-_VALID_RELATIONS = {r.value: r for r in EvidenceRelation}
-
-_COMPARE_INSTRUCTIONS = """\
-You are checking whether a piece of historical evidence about a \
-Principal's past confirmed intent supports, conflicts with, or is \
-irrelevant to ONE SPECIFIC candidate interpretation of the CURRENT \
-delegation.
-
-You are NOT deciding what the current delegation means, and you must NOT \
-propose a different interpretation. The candidate interpretation given to \
-you is already fixed by an earlier, independent step.
-
-Read the historical evidence and the candidate interpretation, then \
-answer with EXACTLY ONE of these four words and nothing else:
-
-SUPPORT     - the historical evidence indicates this Principal would
-              likely confirm this same candidate action again for a task
-              like the current one.
-CONFLICT    - the historical evidence indicates this Principal would
-              likely NOT confirm this candidate action for a task like
-              the current one.
-IRRELEVANT  - the historical evidence has no real bearing on this
-              candidate (e.g. it concerns an unrelated kind of task).
-UNCERTAIN   - the historical evidence does not clearly favor either
-              SUPPORT or CONFLICT for this candidate.
-
-Output only the single word — no punctuation, no explanation."""
-
-
-def parse_evidence_relation(text: str) -> EvidenceRelation:
-    """`text`에서 `EvidenceRelation` 값 정확히 하나만 엄격하게 파싱한다.
-    `parse_structured_action()`(semantic.py)과 같은 fail-closed 원칙 —
-    네 값 중 정확히 하나가 아니면(다른 말이 섞였거나, 값이 없거나, 다섯
-    번째 값이면) `ValueError`. 호출자가 이 실패를 "파싱 실패"로 세고
-    분포에서 제외해야 한다(`DelegateAgent.sample_candidates()`와 동일한
-    관례)."""
-    words = text.strip().split()
-    if len(words) != 1:
-        raise ValueError(
-            f"parse_evidence_relation(): {text!r} must be exactly one word, "
-            f"one of {sorted(_VALID_RELATIONS)}")
-    token = words[0].strip(".,!:;\"'").upper()
-    if token not in _VALID_RELATIONS:
-        raise ValueError(
-            f"parse_evidence_relation(): {text!r} is not exactly one of "
-            f"{sorted(_VALID_RELATIONS)}")
-    return _VALID_RELATIONS[token]
-
-
-def _render_compare_input(*, delegation: str, candidate: Interpretation,
-                          evidence_text: str) -> str:
-    condition = ",".join(sorted(candidate.condition)) or "none"
-    return (
-        f"Current delegation: {delegation}\n\n"
-        f"Candidate interpretation (already fixed — do not change it):\n"
-        f"ACTION: {candidate.action}\n"
-        f"RESOURCE: {candidate.resource}\n"
-        f"SCOPE: {candidate.scope}\n"
-        f"CONDITION: {condition}\n\n"
-        f"Historical evidence:\n{evidence_text}"
+def _as_fields(interp: Interpretation) -> Fields:
+    """`rule_engine.Fields`로 감싸는 최소 어댑터 — `field_match()`를
+    그대로 재사용하기 위해서다(새 동일성 규칙을 만들지 않는다). SOP
+    분류값(action_type/sensitivity/scope_breadth/condition_met)은
+    `sysvars`가 있어야 `classify()`로 계산되는데, 이 비교는 그 분류가
+    전혀 필요 없다 — `field_match()`가 실제로 읽는 건
+    action/resource/scope/condition 원본 값뿐이다(rule_engine.py
+    117-130행). 그래서 분류값은 자리만 채우는 placeholder다."""
+    return Fields(
+        action_type="", sensitivity="", scope_breadth="", condition_met=False,
+        action=interp.action, resource=interp.resource,
+        scope=interp.scope, condition=interp.condition,
     )
+
+
+def compare_facets(candidate: Interpretation,
+                   historical: Interpretation) -> dict[str, EvidenceRelation]:
+    """`candidate`의 네 facet 각각을 `historical`의 같은 facet과 독립적으로
+    비교한다. `rule_engine.field_match()`를 그대로 재사용한다 — action이
+    같으면 그 facet만 SUPPORT, 다르면 그 facet만 CONFLICT. 다른 facet의
+    일치/불일치는 전혀 영향을 주지 않는다(`field_match()`가 애초에 네
+    독립된 boolean을 반환하도록 설계돼 있다 — rule_engine.py 117행)."""
+    fm = field_match(_as_fields(candidate), _as_fields(historical))
+    return {facet: (EvidenceRelation.SUPPORT if matched else EvidenceRelation.CONFLICT)
+            for facet, matched in fm.items()}
 
 
 @dataclass(frozen=True)
 class EvidenceJudgment:
-    """`judge()` 호출 1회의 결과. `candidate`는 호출자가 넘긴 값 그대로다
-    (이 클래스도, `HistoricalEvidenceComparator`도 이 필드를 절대 다른
-    값으로 바꾸지 않는다 — 그 자체가 "새 action을 생성하지 않는다"는
-    invariant의 실제 코드 표현이다)."""
+    """`judge()` 호출 1회의 결과. `candidate`/`historical`은 호출자가 넘긴
+    값 그대로다 — 이 클래스도, `HistoricalEvidenceComparator`도 이 필드를
+    절대 다른 값으로 바꾸지 않는다."""
 
     candidate: Interpretation
+    historical: Interpretation
+    facet: str
     relation: EvidenceRelation
-    response: LLMResponse
 
 
 class HistoricalEvidenceComparator:
-    """이미 생성된(freeze된) `Interpretation` candidate 각각에 대해,
-    주어진 historical evidence 텍스트와의 관계만 판단한다.
+    """Principal-confirmed historical experience(`Interpretation`)를
+    자연어로 다시 렌더링하지 않고, 이미 구조화된 값끼리 결정론적으로
+    비교한다. LLM 호출이 전혀 없다 — 그래서 생성자도 아무것도 받지
+    않는다. `judge()`는 지정한 facet 하나에 대한 관계만 돌려준다(기본값
+    `"action"` — 이 시나리오에서 transfer 대상인 facet)."""
 
-    `judge()`는 `DelegateAgent`를 참조하지 않고, 새 `Interpretation`을
-    구성하지도 않는다 — 인자로 받은 `candidate`를 그대로 결과에 담아
-    돌려줄 뿐이다. `evidence_text`가 무엇으로 렌더링되는지(neutral/
-    lexical-only/semantic-paraphrase/structured 등)는 이 클래스의 관심사가
-    아니다 — 그건 호출자(diagnostic 스크립트)가 정한다."""
-
-    def __init__(self, llm: LLMClient):
-        self.llm = llm
-
-    def judge(self, *, delegation: str, candidate: Interpretation,
-             evidence_text: str) -> EvidenceJudgment:
-        """`ValueError`를 던질 수 있다(파싱 실패) — 호출자가 그 경우를
-        "이 샘플은 판단 불가"로 처리하고 제외해야 한다. 이 메서드는 그
-        예외를 삼키지 않는다."""
-        input_text = _render_compare_input(
-            delegation=delegation, candidate=candidate, evidence_text=evidence_text)
-        response = self.llm.generate(
-            instructions=_COMPARE_INSTRUCTIONS, input_text=input_text)
-        relation = parse_evidence_relation(response.text)
-        return EvidenceJudgment(candidate=candidate, relation=relation, response=response)
+    def judge(self, *, candidate: Interpretation, historical: Interpretation,
+             facet: str = "action") -> EvidenceJudgment:
+        if facet not in FACETS:
+            raise ValueError(f"unknown facet: {facet!r} (expected one of {FACETS})")
+        relations = compare_facets(candidate, historical)
+        return EvidenceJudgment(candidate=candidate, historical=historical,
+                                facet=facet, relation=relations[facet])
