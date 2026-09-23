@@ -37,7 +37,9 @@ import pytest
 _DIAGNOSTICS_DIR = Path(__file__).resolve().parents[1] / "experiments" / "diagnostics"
 sys.path.insert(0, str(_DIAGNOSTICS_DIR))
 
-from experience_chain_experiment import chain_is_seeded, run_chain, summarize_logs  # noqa: E402
+from experience_chain_experiment import (  # noqa: E402
+    chain_is_seeded, evaluate_success_criteria, run_chain, summarize_logs,
+)
 
 from dualflow.llm import LLMResponse  # noqa: E402
 
@@ -322,8 +324,10 @@ class TestUnseededChain:
 
 
 class TestSummarizeLogsMetricSeparation:
-    """clarification_rate과 history_advisory_exposure_rate는 서로 다른
-    causal 질문에 답한다 -- 하나로 합쳐지면 안 된다."""
+    """clarification_rate과 eligible_history_episodes/advisory_eligible_
+    ambiguous_episodes/actual_advisory_exposures(세 count로 분리, B7e SS25
+    두 번째 follow-up)는 서로 다른 causal 질문에 답한다 -- 하나로
+    합쳐지면 안 된다."""
 
     def test_clarification_rate_is_independent_of_history_availability(self):
         """Path A/Path B 둘 다 E1/E2/E4가 ambiguous이므로 clarified=True
@@ -335,27 +339,53 @@ class TestSummarizeLogsMetricSeparation:
         assert summary["clarification_rate"]["numerator_clarified"] == 3
         assert summary["clarification_rate"]["denominator_all_episodes"] == 4
 
-    def test_history_advisory_exposure_excludes_unseeded_chain_from_denominator(self):
-        """history가 한 번도 생긴 적 없는 chain은 exposure-rate 분모에
-        아예 안 들어가야 한다 -- "0%% 노출"로 잘못 세면 안 된다."""
+    def test_eligible_history_episodes_excludes_unseeded_chain(self):
+        """history가 한 번도 생긴 적 없는 chain은 eligible-history count에
+        전혀 기여하지 않는다 -- "0%% 노출"이 아니라 그냥 0이어야 한다."""
         _, logs_unseeded = _run(_build_path_c_unseeded)
         summary = summarize_logs([logs_unseeded])
-        assert summary["history_advisory_exposure_rate"]["denominator_ambiguous_with_history_available"] == 0
+        assert summary["eligible_history_episodes"] == 0
+        assert summary["advisory_eligible_ambiguous_episodes"] == 0
+        assert summary["actual_advisory_exposures"] == 0
         assert summary["n_unseeded_chains"] == 1
         assert summary["n_seeded_chains"] == 0
 
-    def test_history_advisory_exposure_counts_only_ambiguous_episodes_with_available_history(self):
-        """Path A: E2와 E4가 ambiguous + history 존재 + eligible ->
-        exposure 분자/분모 모두 2. E1은 ambiguous였지만 history가 없었으므로
-        분모에서 제외된다. E3는 history는 있었지만 stable이라 애초에
-        ambiguous 집합에 안 들어간다."""
+    def test_three_way_advisory_count_split(self):
+        """Path A: E2/E3/E4가 전부 eligible-history(history 존재 +
+        confirmed_facets에 action 있음) -> eligible=3. 그중 ambiguous(엔트로피
+        >threshold)한 건 E2/E4뿐(E3는 stable) -> advisory_eligible_ambiguous=2.
+        그 2개 전부 실제로 relation이 계산됨(decision_relations 비어있지
+        않음) -> actual_advisory_exposures=2."""
         _, logs = _run(_build_path_a)
         summary = summarize_logs([logs])
-        assert summary["history_advisory_exposure_rate"] == {
-            "numerator_eligible_and_consulted": 2,
-            "denominator_ambiguous_with_history_available": 2,
-            "note": summary["history_advisory_exposure_rate"]["note"],
-        }
+        assert summary["eligible_history_episodes"] == 3
+        assert summary["advisory_eligible_ambiguous_episodes"] == 2
+        assert summary["actual_advisory_exposures"] == 2
+
+    def test_eligible_history_counts_even_when_current_episode_is_stable(self):
+        """실제 chain 1 real-API 결과를 재현하는 회귀 테스트: E2/E3/E4가
+        전부 stable하게 나와도(entropy<=threshold), history 자체는 여전히
+        eligible로 카운트돼야 한다 -- eligibility는 history의 confirmed_
+        facets에 대한 사실이지, 현재 episode의 entropy에 대한 사실이
+        아니다. 이번엔 advisory_eligible_ambiguous/actual_advisory_
+        exposures는 둘 다 0이어야 한다(stability gate가 먼저 막으므로)."""
+        # E1만 ambiguous(clarified), E2/E3/E4는 전부 stable -- Path A의
+        # delegate 응답 순서를 재사용하되 E2/E3/E4를 stable로 바꾼다.
+        delegate_responses = (
+            _ambiguous_pre(_SCOPES["E1_august_seed"]) + [_QUESTION]
+            + _stable("summarize", _SCOPES["E1_august_seed"])
+            + _stable("export", _SCOPES["E2_september_ambiguous"])
+            + _stable("export", _SCOPES["E3_october_explicit_export"])
+            + _stable("export", _SCOPES["E4_november_observation"])
+        )
+        principal_responses = [LLMResponse(text="summarize")]  # E1 only
+        combined = _CombinedClient(_FakeLLMClient(delegate_responses), _FakeLLMClient(principal_responses))
+        _, logs = run_chain(principal_id=PRINCIPAL_ID, task_category=TASK_CATEGORY,
+                            episodes=EPISODES, llm_client=combined, n=4)
+        summary = summarize_logs([logs])
+        assert summary["eligible_history_episodes"] == 3   # E2, E3, E4 all saw eligible history
+        assert summary["advisory_eligible_ambiguous_episodes"] == 0  # all 3 were stable
+        assert summary["actual_advisory_exposures"] == 0
 
     def test_safety_integrity_counts_are_all_zero_on_well_formed_chains(self):
         for path_builder in (_build_path_a, _build_path_b, _build_path_c_unseeded):
@@ -371,3 +401,62 @@ class TestSummarizeLogsMetricSeparation:
         _, logs_b = _run(_build_path_b)
         assert summarize_logs([logs_a])["store_update_count"] == 3  # E1, E2, E4
         assert summarize_logs([logs_b])["store_update_count"] == 4  # E1, E2, E3, E4
+
+
+class TestQuestionAnswerTokenAccounting:
+    """B7e SS25 두 번째 follow-up(chain 1 결과 이후)의 instrumentation-only
+    수정: question/answer 호출의 token usage가 이제 EpisodeLog에 잡혀야
+    한다 -- 이전에는 pre/post sampling만 잡고 있었다."""
+
+    def test_clarified_episode_captures_question_and_answer_tokens(self):
+        delegate_responses = (
+            _ambiguous_pre(_SCOPES["E1_august_seed"])
+            + [LLMResponse(text="Summarize or export?", input_tokens=100, output_tokens=5)]
+            + _stable("summarize", _SCOPES["E1_august_seed"]))
+        principal_responses = [LLMResponse(text="summarize", input_tokens=50, output_tokens=3)]
+        combined = _CombinedClient(_FakeLLMClient(delegate_responses), _FakeLLMClient(principal_responses))
+
+        _, logs = run_chain(principal_id=PRINCIPAL_ID, task_category=TASK_CATEGORY,
+                            episodes=[EPISODES[0]], llm_client=combined, n=4)
+
+        e1 = logs[0]
+        assert e1.question_tokens_in == 100
+        assert e1.question_tokens_out == 5
+        assert e1.answer_tokens_in == 50
+        assert e1.answer_tokens_out == 3
+        # total_tokens_in/out now include question+answer, not just pre/post.
+        assert e1.total_tokens_in() == e1.pre_tokens_in + e1.post_tokens_in + 100 + 50
+        assert e1.total_tokens_out() == e1.pre_tokens_out + e1.post_tokens_out + 5 + 3
+
+    def test_stable_episode_has_zero_question_answer_tokens(self):
+        """clarification이 아예 안 일어난 episode는 question/answer
+        토큰도 당연히 0이어야 한다."""
+        delegate_client = _FakeLLMClient(_stable("export", _SCOPES["E1_august_seed"]))
+        principal_client = _FakeLLMClient([])
+        combined = _CombinedClient(delegate_client, principal_client)
+
+        _, logs = run_chain(principal_id=PRINCIPAL_ID, task_category=TASK_CATEGORY,
+                            episodes=[EPISODES[0]], llm_client=combined, n=4)
+
+        e1 = logs[0]
+        assert e1.clarified is False
+        assert e1.question_tokens_in == e1.question_tokens_out == 0
+        assert e1.answer_tokens_in == e1.answer_tokens_out == 0
+
+
+class TestSuccessCriteriaEvaluation:
+    """evaluate_success_criteria()가 per-chain/aggregate 둘 다에 쓰일 수
+    있고, 정상 chain에서는 S1-S7 전부 True를 내야 한다."""
+
+    def test_all_seven_pass_on_well_formed_chains(self):
+        for path_builder in (_build_path_a, _build_path_b, _build_path_c_unseeded):
+            _, logs = _run(path_builder)
+            verdict = evaluate_success_criteria(logs)
+            assert len(verdict) == 7
+            assert all(verdict.values()), verdict
+
+    def test_aggregate_across_multiple_chains_still_all_pass(self):
+        _, logs_a = _run(_build_path_a)
+        _, logs_b = _run(_build_path_b)
+        aggregate = evaluate_success_criteria(logs_a + logs_b)
+        assert all(aggregate.values()), aggregate

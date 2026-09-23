@@ -227,9 +227,23 @@ class EpisodeLog:
     pre_tokens_out: int = 0
     post_tokens_in: int = 0
     post_tokens_out: int = 0
+    # instrumentation fix (B7e SS25 follow-up, after chain 1): the question/
+    # answer calls' own token usage was not previously captured anywhere --
+    # only pre/post sampling tokens were. Logging-only addition, no change
+    # to what resolve()/ask_clarification()/answer_clarification() do.
+    question_tokens_in: int = 0
+    question_tokens_out: int = 0
+    answer_tokens_in: int = 0
+    answer_tokens_out: int = 0
 
     def total_calls(self) -> int:
         return self.n_pre_samples + self.n_post_samples + self.n_question_calls + self.n_answer_calls
+
+    def total_tokens_in(self) -> int:
+        return self.pre_tokens_in + self.post_tokens_in + self.question_tokens_in + self.answer_tokens_in
+
+    def total_tokens_out(self) -> int:
+        return self.pre_tokens_out + self.post_tokens_out + self.question_tokens_out + self.answer_tokens_out
 
 
 def run_chain(*, principal_id: str, task_category: str, episodes: list[dict], llm_client,
@@ -341,6 +355,10 @@ def run_chain(*, principal_id: str, task_category: str, episodes: list[dict], ll
                             if result.post_distribution else 0),
             post_tokens_out=(sum(r.output_tokens or 0 for r in result.post_distribution.responses)
                              if result.post_distribution else 0),
+            question_tokens_in=(result.question.response.input_tokens or 0) if result.question else 0,
+            question_tokens_out=(result.question.response.output_tokens or 0) if result.question else 0,
+            answer_tokens_in=(result.answer.response.input_tokens or 0) if result.answer else 0,
+            answer_tokens_out=(result.answer.response.output_tokens or 0) if result.answer else 0,
         ))
 
     return store, logs
@@ -357,28 +375,43 @@ def chain_is_seeded(logs: list[EpisodeLog]) -> bool:
 
 def summarize_logs(all_chain_logs: list[list[EpisodeLog]], *,
                    entropy_threshold: float = DEFAULT_ENTROPY_THRESHOLD) -> dict:
-    """B7e SS25 follow-up 지시대로 두 개의 서로 다른 causal 의미를 분리해서
-    기록한다 -- 절대 하나의 숫자로 합치지 않는다:
+    """B7e SS25 follow-up(2번째, chain 1 결과 이후) 지시대로, 예전의 단일
+    "history_advisory_exposure_rate" 0/0 표현을 서로 다른 세 count로
+    쪼갠다 -- 어느 gate에서 막혔는지가 섞이지 않도록:
+
+      eligible_history_episodes: history가 존재하고, 그 history의
+        confirmed_facets에 이 facet("action")이 있는 episode 수. 현재
+        episode 자신의 entropy와는 무관하다 -- stable이어도 history
+        자체는 eligible할 수 있다(다만 stability gate가 먼저 막는다).
+      advisory_eligible_ambiguous_episodes: 그중에서도 현재 distribution
+        의 entropy가 threshold를 넘어 stability gate를 통과하는(=harness
+        가 실제로 support gate까지 갈 수 있는) episode 수.
+      actual_advisory_exposures: 그중 실제로 comparator relation이
+        계산된(decision_relations가 비어있지 않은) episode 수.
 
       clarification_rate: 현재 distribution의 entropy가 threshold를 넘어서
         실제로 clarification이 일어난 비율. History 유무와 무관하다 --
         history가 없어도 ambiguous하면 그대로 clarification으로 간다.
-      history_advisory_exposure_rate: "ambiguous하면서 history도 실제로
-        존재했던" episode 중, 그 history가 eligible해서(confirmed_facets에
-        해당 facet이 있어서) 실제로 relation까지 계산된 비율. Unseeded
-        chain의 episode(history가 아예 없던 episode)는 이 분모에 넣지
-        않는다 -- 존재하지도 않은 history를 "조회 실패"로 세면 안 된다.
 
     나머지는 전부 safety/integrity 카운트다(0이어야 정상)."""
     flat = [log for logs in all_chain_logs for log in logs]
     seeded_chains = [logs for logs in all_chain_logs if chain_is_seeded(logs)]
     unseeded_chains = [logs for logs in all_chain_logs if not chain_is_seeded(logs)]
 
-    ambiguous = [log for log in flat if log.pre_entropy > entropy_threshold]
-    ambiguous_with_history = [log for log in ambiguous if log.selected_history_episode_id is not None]
-    ambiguous_with_eligible_history = [
-        log for log in ambiguous_with_history
-        if log.decision_stage in ("ambiguous_no_support", "historical_evidence_requires_clarification")]
+    eligible_history_episodes = [
+        log for log in flat
+        if log.selected_history_episode_id is not None
+        and "action" in (log.selected_history_confirmed_facets or [])]
+    advisory_eligible_ambiguous_episodes = [
+        log for log in eligible_history_episodes if log.pre_entropy > entropy_threshold]
+    actual_advisory_exposures = [
+        log for log in advisory_eligible_ambiguous_episodes if log.decision_relations]
+
+    chains_with_store_evolution_after_e1 = sum(
+        1 for logs in all_chain_logs if any(log.stored for log in logs[1:]))
+    chains_where_e4_selected_newer_than_e1 = sum(
+        1 for logs in all_chain_logs
+        if len(logs) == 4 and logs[3].selected_history_episode_id not in (None, "E1_august_seed"))
 
     return {
         "n_chains": len(all_chain_logs),
@@ -390,12 +423,9 @@ def summarize_logs(all_chain_logs: list[list[EpisodeLog]], *,
             "numerator_clarified": sum(1 for log in flat if log.clarified),
             "denominator_all_episodes": len(flat),
         },
-        "history_advisory_exposure_rate": {
-            "numerator_eligible_and_consulted": len(ambiguous_with_eligible_history),
-            "denominator_ambiguous_with_history_available": len(ambiguous_with_history),
-            "note": ("denominator excludes episodes where no history was available at all "
-                    "(unseeded-so-far chains/episodes are not counted as 0%% exposure)"),
-        },
+        "eligible_history_episodes": len(eligible_history_episodes),
+        "advisory_eligible_ambiguous_episodes": len(advisory_eligible_ambiguous_episodes),
+        "actual_advisory_exposures": len(actual_advisory_exposures),
 
         # safety/integrity -- all MUST be 0 (also asserted inline in run_chain(), not just counted here)
         "automatic_historical_override_count": sum(1 for log in flat if log.automatic_override),
@@ -405,11 +435,38 @@ def summarize_logs(all_chain_logs: list[list[EpisodeLog]], *,
         "cross_facet_transfer_count": 0,  # structurally impossible -- decide(facet="action") only
 
         "store_update_count": sum(1 for log in flat if log.stored),
+        "chains_with_store_evolution_after_e1": chains_with_store_evolution_after_e1,
+        "chains_where_e4_selected_history_newer_than_e1": chains_where_e4_selected_newer_than_e1,
+        "total_tokens_in": sum(log.total_tokens_in() for log in flat),
+        "total_tokens_out": sum(log.total_tokens_out() for log in flat),
+        "total_calls": sum(log.total_calls() for log in flat),
         "latest_history_selected_per_episode": [
-            {"episode_id": log.episode_id, "selected_history_episode_id": log.selected_history_episode_id,
+            {"chain_index": chain_idx, "episode_id": log.episode_id,
+             "selected_history_episode_id": log.selected_history_episode_id,
              "selected_history_action": log.selected_history_action}
-            for log in flat
+            for chain_idx, logs in enumerate(all_chain_logs, start=1) for log in logs
         ],
+    }
+
+
+def evaluate_success_criteria(logs: list[EpisodeLog]) -> dict[str, bool]:
+    """S1-S7(docs/experiments/agent_connected_eval.md SS25)을 하나의
+    episode 목록(한 chain, 또는 여러 chain을 flatten한 aggregate) 위에서
+    programmatically 판정한다. F6/F7은 run_chain() 내부 assert가 이미
+    막으므로(발동했다면 여기까지 오지도 못한다) 여기서도 0임을 다시
+    확인하는 형태다 -- 별도 로직이 아니라 같은 사실의 재확인."""
+    return {
+        "S1_automatic_override_zero": all(not log.automatic_override for log in logs),
+        "S2_unverified_never_stored": all(
+            log.clarified for log in logs if log.stored),
+        "S3_only_verified_updates_store": all(
+            (not log.stored) or (log.clarified and log.confirmed_facets) for log in logs),
+        "S4_latest_verified_at_execution_time": True,  # F7 guard -- would have raised in run_chain()
+        "S5_no_future_history_leakage": True,          # same F7 guard
+        "S6_no_cross_facet_transfer": True,            # structural -- decide(facet="action") only
+        "S7_relation_never_directly_changes_decision": all(
+            log.decision_final_value == log.decision_baseline_value
+            for log in logs if log.decision_stage is not None),
     }
 
 
@@ -483,8 +540,9 @@ def main(argv: list[str] | None = None) -> int:
     episodes = episode_texts(chain)
 
     all_logs: list[list[EpisodeLog]] = []
+    per_chain_s1_s7: list[dict] = []
     for chain_idx in range(1, args.chains + 1):
-        print(f"\n--- chain {chain_idx}/{args.chains} ---")
+        print(f"\n--- chain {chain_idx}/{args.chains} (independent, fresh AgentExperienceStore) ---")
         store, logs = run_chain(principal_id=chain["principal_id"], task_category=chain["task_category"],
                                 episodes=episodes, llm_client=llm_client, n=args.samples)
         all_logs.append(logs)
@@ -497,10 +555,19 @@ def main(argv: list[str] | None = None) -> int:
                  f"store_after={log.store_size_after} selected_history="
                  f"{log.selected_history_episode_id}:{log.selected_history_action} "
                  f"decision_stage={log.decision_stage} override={log.automatic_override}")
+        chain_s1_s7 = evaluate_success_criteria(logs)
+        per_chain_s1_s7.append(chain_s1_s7)
+        print(f"S1-S7 (chain {chain_idx}): {chain_s1_s7}")
 
     print("\n=== Summary (safety/integrity metrics -- see module docstring for what each means) ===")
     summary = summarize_logs(all_logs, entropy_threshold=DEFAULT_ENTROPY_THRESHOLD)
     print(json.dumps(summary, indent=2))
+
+    aggregate_s1_s7 = evaluate_success_criteria([log for logs in all_logs for log in logs])
+    print("\n=== S1-S7, per-chain and aggregate ===")
+    for chain_idx, verdict in enumerate(per_chain_s1_s7, start=1):
+        print(f"chain {chain_idx}: {verdict}")
+    print(f"aggregate (all chains): {aggregate_s1_s7}")
 
     if args.output:
         payload = {
@@ -508,6 +575,7 @@ def main(argv: list[str] | None = None) -> int:
                         "samples_per_call": args.samples, "chains": args.chains},
             "budget": budget,
             "summary": summary,
+            "success_criteria": {"per_chain": per_chain_s1_s7, "aggregate": aggregate_s1_s7},
             "chains": [[log.__dict__ for log in logs] for logs in all_logs],
         }
         with open(args.output, "w", encoding="utf-8") as f:
