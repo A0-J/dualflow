@@ -390,6 +390,18 @@ earlier pilots had shown real variance). Scenario strings that reach the
 model now have to be treated with the same rigor as the independent
 variable being tested, not assembled fresh by each script.
 
+A fourth lesson was added in §22: **a positive effect relative to the
+wrong control can look like content sensitivity when it is actually a
+slot-token conjunction.** B7d.5/B7d.5R's counter-prior effect was real and
+replicated against a properly-matched neutral control — but B7d.6 showed
+it depends on the literal action token and the structured
+`Confirmed interpretation` relation being present *together*; neither
+alone reproduces it. Injecting historical text directly into the
+Delegate's own candidate-generation prompt makes this kind of slot/token
+priming difficult to rule out no matter how the injected text is worded —
+this is what motivated moving history out of generation and into
+verification for `v3` (§22).
+
 ## 12. Current Interpretation
 
 The current implementation successfully demonstrates:
@@ -460,6 +472,21 @@ meaningful.**
   not be read as evidence of bidirectional content sensitivity — see §18's
   conclusion and B7d.5 (§19) for the follow-up needed to separate
   block-presence priming from genuine content effects.
+- **`v2`'s counter-prior effect (§20/§21) is real and replicated, but is a
+  slot-token conjunction, not paraphrase-invariant semantic transfer** —
+  §22: a properly-matched neutral control did reveal a genuine,
+  reproducible counter-prior `summarize` effect (two independent 800-call
+  batches, `B>D` 10/10 both times). But B7d.6 found neither the literal
+  token `"summarize"` alone (`lexical_effect=0.000`) nor a paraphrased
+  version of the confirmed-meaning relation without that token
+  (`semantic_without_token_effect=-0.005`) reproduces it — only their
+  conjunction does (`interaction contrast +0.225`). Do not describe this as
+  "semantic-content transfer is ruled out": B7d.6 tested exactly one
+  paraphrase, not the space of all possible phrasings. The precise,
+  supported claim is narrower: under the current `v2` representation,
+  paraphrased semantic relation without the literal action token did not
+  reproduce the observed effect. This is the finding that closed the `v2`
+  investigation (§22) in favor of a `v3` architectural redesign.
 
 ## 14. Current Status
 
@@ -478,7 +505,10 @@ meaningful.**
 | Experiment reproducibility fix (canonical wording + fingerprinting) | complete (§15) |
 | B7d.3 canonical-context re-validation (600 calls) | **complete — v1 harmful, v2 weak/inconsistent (§16)** |
 | Semantic-content ablation (B7d.4) | **complete — asymmetric/prior-congruent priming, not established transfer (§18)** |
-| Neutral-format control (B7d.5) | script prepared, not yet run (§19) |
+| Neutral-format control (B7d.5) | **complete — real counter-prior content effect found, confounded by ceiling on export side (§20)** |
+| Exact replication (B7d.5R) | **complete — counter-prior effect replicated, 10/10 both batches (§21)** |
+| Lexical vs. semantic control (B7d.6) | **complete — effect depends on slot+token conjunction, not paraphrase-invariant (§22)** |
+| `v2` representation investigation | **closed — moving to `v3` architectural redesign (§22)** |
 | Sequential experience evaluation (B7e) | not started |
 
 The sequential multi-episode experiment (B7e) stays intentionally
@@ -491,11 +521,20 @@ verified experience reliably transfers semantic content. B7d.4 (§18) ran
 that content-sensitivity check and found an asymmetric, prior-congruent
 result: `export`-history collapsed deterministically toward the model's
 pre-existing `export` lean (10/10 runs), while `summarize`-history showed
-no consistent improvement over no-experience at all — so `v2` semantic
-transfer is still not established. B7d.5 (§19) is designed to separate
-whether that collapse comes from `v2`'s block presence/format alone or
-specifically from prior-congruent content, before any `v3` redesign is
-considered. The original plan for B7d.3 was to redesign the experience
+no consistent improvement over no-experience at all. B7d.5/B7d.5R (§20/§21)
+then found — twice, in independent 800-call batches — a real, replicated
+counter-prior effect against a properly-matched neutral control
+(`summarize_content_effect` +0.270 then +0.220, `B>D` 10/10 both times).
+B7d.6 (§22) separated the literal token `"summarize"` from the structured
+confirmed-meaning relation and found neither alone reproduces the effect
+(`lexical_effect=0.000`, `semantic_without_token_effect=-0.005`) — only
+their conjunction does (`interaction contrast +0.225`). This is enough
+evidence to close the `v2` investigation: the effect depends on a specific
+structural-slot + literal-token combination rather than demonstrating
+paraphrase-invariant semantic transfer under the current representation.
+The next step is a `v3` architectural redesign (reviewed as a proposal
+before any implementation), not further `v2` prompt tuning and not B7e. The
+original plan for B7d.3 was to redesign the experience
 representation so it presents ambiguity → clarification → confirmed-meaning
 as a
 relationship, not a bare action label — conceptually:
@@ -940,6 +979,11 @@ B7e remains not started.
 
 ## 19. B7d.5 — Neutral-Format Control (Prepared, Not Yet Run)
 
+> **Status update**: this experiment has since been run, and replicated,
+> and followed by a lexical-vs-semantic control (B7d.6) — see §20/§21/§22.
+> This section is left unedited below as the original design record, per
+> this document's standing policy of not overwriting earlier sections.
+
 §18's B7d.4 result cannot distinguish two explanations for
 `export`-history's 10/10 deterministic collapse toward `export`: (a) `v2`'s
 block presence/format alone reinforces whatever the model's existing prior
@@ -1024,3 +1068,269 @@ file and on `experience_aware_delegate.py`) — not yet run against the real
 API. No prompt tuning is planned after seeing results, and B7e remains not
 started regardless of this control's outcome, per the current gating order
 (§14).
+
+## 20. B7d.5 — Neutral-Format Control (Results)
+
+### Experiment identity
+
+```
+experiment_id:          b7d5_v2_neutral_format_control
+git_sha:                 8aa313e42ee1a88679c0caa89d8883ef2fa9e50c
+scenario_id:             external_audit_finance
+scenario_version:        1.1
+delegation_sha256:
+  38b8fc2394a7bc9a4d043dd8078ecd6194f3855d710710d1fce23727a4a5fab1
+context_sha256:
+  a1a5da5674cab40190610056581c30802e13277b70c058eb2317569085233892
+model:                   gpt-4o-mini
+samples_per_condition:   20
+repetitions:             10
+total calls:             800
+script:                  experiments/diagnostics/experience_neutral_control.py
+```
+
+### Aggregate results
+
+| Condition | Mean H | P(read) | P(summarize) | P(export) |
+| --- | --- | --- | --- | --- |
+| A no experience | 0.478 | 0.00 | 0.115 | 0.885 |
+| B `v2` summarize-history | 0.768 | 0.00 | 0.275 | 0.725 |
+| C `v2` export-history | 0.000 | 0.00 | 0.000 | 1.000 |
+| D `v2` neutral-history | 0.029 | 0.00 | 0.005 | 0.995 |
+
+`B` beats `A` in 9/10 runs (only run 7 lower). `C` and `D` are both
+essentially at the `export` ceiling (`P(export)` 1.000 and 0.995), barely
+distinguishable from each other — `D` alone (no content at all) already
+collapses almost as completely as `C` (real export content) does.
+
+### Primary effects
+
+```
+format_effect            = P(export|neutral) - P(export|no-exp)          = 0.995 - 0.885 = +0.110
+summarize_content_effect = P(summarize|sumhist) - P(summarize|neutral)   = 0.275 - 0.005 = +0.270
+export_content_effect    = P(export|exphist) - P(export|neutral)         = 1.000 - 0.995 = +0.005
+```
+
+### Structural checks
+
+Scope preservation 800/800 (`/reports/2026-09/` only, 0 August leakage);
+parse failures 0; clarification calls 0; Authority calls 0; `task.truth`
+usage 0. Total tokens: 389,000 input / 20,483 output across 800 calls.
+
+### Conclusion — does not fit cleanly into the three pre-registered cases (§19)
+
+- The pre-registered Rule-A trigger ("neutral also strongly collapses
+  toward export") is **literally true** — `D`'s `P(export)=0.995` is
+  nearly identical to `C`'s `1.000`. Taken alone, this would support "`v2`
+  block presence/format itself reinforces the pre-existing export prior."
+- But `summarize_content_effect = +0.270` is large and real, and cannot be
+  explained by format/presence alone — `D` (format only) sits at
+  `P(summarize)=0.005`, actually *below* the raw no-experience baseline
+  (`0.115`), while `B` (summarize content, same format) reaches `0.275`.
+  This is evidence of genuine content sensitivity in the counter-prior
+  direction that the "format explains everything" reading misses.
+- `export_content_effect ≈ 0` **cannot be read as "export content doesn't
+  matter"** — `D` already sits at `P(export)=0.995`, a near-ceiling value
+  that leaves almost no headroom (`0.005`) for any additional content
+  effect to show up, regardless of whether one exists. This is a genuine
+  measurement confound (ceiling effect), not evidence against content
+  sensitivity on the `export` side.
+- **Honest summary**: format/presence dominates and likely saturates the
+  prior-congruent (`export`) direction (masking any possible content
+  effect there); the counter-prior (`summarize`) direction shows a real,
+  substantial, format-independent content effect. This does not match any
+  single one of the three pre-registered interpretation buckets cleanly —
+  reported as such rather than forced into one.
+
+## 21. B7d.5R — Exact Replication
+
+Per instruction, an exact replication (same code, same scenario, same
+config, zero changes) was run before drawing any conclusion from a single
+800-call batch.
+
+### Experiment identity
+
+```
+experiment_id:  b7d5r_v2_neutral_format_control_replication
+git_sha:         9da9ab3939abe143d40ab54761452d5bd18f496c
+```
+
+Confirmed via `git diff --stat 8aa313e..9da9ab3` on every experiment-relevant
+file (the diagnostic script, the scenario file, `experience_aware_delegate.py`)
+before running: **zero differences** — the only commit between the two SHAs
+added `docs/unexpected_findings/`, which does not touch any code or
+scenario path this experiment depends on. Same scenario/delegation/context
+hashes, same model, same `N=20`/`repetitions=10`/800 calls.
+
+### B7d.5 vs B7d.5R — direct comparison
+
+| metric | B7d.5 | B7d.5R |
+| --- | --- | --- |
+| P(summarize\|A) | 0.115 | 0.190 |
+| P(summarize\|B) | 0.275 | 0.225 |
+| P(summarize\|C) | 0.000 | 0.000 |
+| P(summarize\|D) | 0.005 | 0.005 |
+| P(export\|D) (ceiling) | 0.995 | 0.995 |
+| format_effect | +0.110 | +0.185 |
+| **summarize_content_effect (B−D)** | **+0.270** | **+0.220** |
+| export_content_effect | +0.005 | +0.005 |
+| run-level B > D | 10/10 | 10/10 |
+
+`P(summarize|A)` (raw no-experience baseline) itself varies noticeably
+between the two independent batches (0.115 vs 0.190) despite identical
+scenario/model/hashes — a reminder that even canonical, fingerprinted
+10-run batches carry real sampling variance in absolute terms, and that
+**within-batch** comparisons (B vs D, computed from conditions run
+contemporaneously) are far more trustworthy than **across-batch** absolute
+comparisons. This is exactly why B7d.5/B7d.5R/B7d.6 all run every
+condition together in one batch rather than reusing an earlier batch's
+numbers for one condition.
+
+### Conclusion: replicated
+
+`B > D` in 10/10 runs in **both** independent 800-call batches, with a
+consistent, large effect size (`+0.270` then `+0.220`). Per instruction,
+this is **not** called "semantic transfer" — only that the counter-prior
+`summarize`-history vs. structurally-matched `neutral`-history effect is a
+real, reproducible phenomenon, not a one-batch fluke. What causes it
+(structured semantic content vs. the literal token "summarize" vs. their
+interaction) is exactly what B7d.6 was designed to separate.
+
+## 22. B7d.6 — Lexical vs. Semantic Control (Results) — v2 Investigation Closed
+
+### Experiment identity
+
+```
+experiment_id:          b7d6_lexical_vs_semantic_control
+git_sha:                 9da9ab3939abe143d40ab54761452d5bd18f496c
+scenario_id:             external_audit_finance
+scenario_version:        1.1
+delegation_sha256:
+  38b8fc2394a7bc9a4d043dd8078ecd6194f3855d710710d1fce23727a4a5fab1
+context_sha256:
+  a1a5da5674cab40190610056581c30802e13277b70c058eb2317569085233892
+model:                   gpt-4o-mini
+samples_per_condition:   20
+repetitions:             10
+total calls:             800
+script:                  experiments/diagnostics/experience_lexical_semantic_control.py
+```
+
+Zero diff confirmed on every previously-fixed diagnostic file and on
+`experience_aware_delegate.py` before running. A pre-run structural check
+(`verify_blocks()`) rendered and asserted all four experience blocks BEFORE
+any billed API call: `N` contains no `summar`-root token; `L` contains the
+literal token `"summarize"` but not on its `Confirmed interpretation` line
+(i.e. not presented as the confirmed historical action); `P` contains no
+`summar`-root token at all (the structured relation is preserved via
+paraphrase — see design below); `S` is byte-identical to
+`render_experience_block_v2`'s own real output. All four assertions passed.
+
+### Design (2×2)
+
+| Condition | Structured confirmed-meaning relation | Literal token "summarize" |
+| --- | --- | --- |
+| N neutral | ✗ | ✗ |
+| L lexical-only | ✗ | ✓ (present, but disconnected from the confirmed action) |
+| P semantic-paraphrase | ✓ (expressed as "produce a concise account of the report's contents") | ✗ |
+| S structured summarize-history (existing `v2` condition, unchanged) | ✓ | ✓ |
+
+### Aggregate results
+
+| Condition | Mean H | P(summarize) | P(export) | top1 |
+| --- | --- | --- | --- | --- |
+| N neutral | 0.047 | 0.010 | 0.990 | export 10/10 |
+| L lexical-only | 0.114 | 0.010 | 0.980 | export 10/10 |
+| P semantic-paraphrase | 0.029 | 0.005 | 0.995 | export 10/10 |
+| S structured summarize-history | 0.723 | **0.230** | 0.770 | export 10/10 |
+
+### Primary effects and the 2×2 interaction contrast
+
+```
+lexical_effect                = P(sum|L) - P(sum|N) =  0.010 - 0.010 =  0.000
+semantic_without_token_effect = P(sum|P) - P(sum|N) =  0.005 - 0.010 = -0.005
+full_structured_effect        = P(sum|S) - P(sum|N) =  0.230 - 0.010 = +0.220
+
+interaction contrast: S - L - P + N = 0.230 - 0.010 - 0.005 + 0.010 = +0.225
+```
+
+The interaction contrast (`+0.225`) is large — nearly the entire
+`full_structured_effect` is *not* explained by the sum of the two
+individual "arms" (`L` and `P` alone contribute almost nothing; their
+combination in `S` produces almost all of it).
+
+### Run-level (10 runs)
+
+| run | N | L | P | S | S−N |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 0.00 | 0.00 | 0.00 | 0.20 | +0.20 |
+| 2 | 0.00 | 0.05 | 0.00 | 0.15 | +0.15 |
+| 3 | 0.00 | 0.00 | 0.00 | 0.40 | +0.40 |
+| 4 | 0.10 | 0.05 | 0.00 | 0.35 | +0.25 |
+| 5 | 0.00 | 0.00 | 0.00 | 0.30 | +0.30 |
+| 6 | 0.00 | 0.00 | 0.00 | 0.35 | +0.35 |
+| 7 | 0.00 | 0.00 | 0.00 | 0.10 | +0.10 |
+| 8 | 0.00 | 0.00 | 0.05 | 0.15 | +0.15 |
+| 9 | 0.00 | 0.00 | 0.00 | 0.05 | +0.05 |
+| 10 | 0.00 | 0.00 | 0.00 | 0.25 | +0.25 |
+
+`N`, `L`, and `P` are at or near zero in essentially every run (only one
+isolated `0.05` sample each in a couple of runs — noise-floor level, out of
+20 samples per row). `S` is above `N` in **10/10 runs**, ranging `+0.05` to
+`+0.40`.
+
+### Out-of-vocabulary action note
+
+Two samples out of 800 total (2/200 within the `lexical_only` condition
+specifically, 0/200 in every other condition) produced `ACTION=prepare` —
+echoing the current delegation's own verb — instead of a vocabulary action
+(`read`/`summarize`/`export`). This is not a parse failure (the response
+parsed successfully as a valid `Interpretation`; `n_llm_calls` stayed at
+20 for both affected rows) — it is a vocabulary-adherence lapse, distinct
+from the fail-closed exclusion `DelegateAgent.sample_candidates()` already
+applies to genuinely unparseable text. It does not change `P(summarize)`
+for either affected row and does not affect any of the primary-effect
+conclusions above. No rerun was performed or needed.
+**Going forward, future diagnostic reports should include an
+`out_of_vocabulary_action_rate` field alongside parse-failure counts** —
+this run's rate was `2/800` overall (`2/200` within `lexical_only`). This
+is a reporting-checklist addition only; the already-completed reproducer
+scripts (`experience_transfer.py`/`experience_representation.py`/
+`experience_semantic_ablation.py`/`experience_neutral_control.py`/
+`experience_lexical_semantic_control.py`) are not modified retroactively.
+
+### Conclusion — cautious wording, not over-generalized
+
+**Under the current `v2` representation, paraphrased semantic relation
+without the literal action token did not produce the observed counter-prior
+effect. The effect appeared only when the structured `Confirmed
+interpretation` relation and the literal `summarize` action token were
+present together.** This is *not* the same claim as "semantic-content
+transfer is universally ruled out" — `P` tested exactly one paraphrase
+("produce a concise account of the report's contents"); it does not
+sample the space of all possible semantically-equivalent phrasings, so the
+correct scope of this finding is specifically about this representation and
+this paraphrase, not a general proof that no wording could ever work.
+
+What is established, precisely: the replicated B7d.5/B7d.5R effect is not
+explained by either factor alone (`lexical_effect=0.000`,
+`semantic_without_token_effect=-0.005`, both indistinguishable from zero
+noise), and is almost entirely explained by their conjunction
+(`interaction contrast = +0.225`). This is evidence that the current `v2`
+effect is highly dependent on a specific structural slot + literal action
+label combination, rather than evidence of paraphrase-invariant semantic
+transfer.
+
+### Decision: v2 investigation closed; move to v3 design
+
+This provides sufficient evidence to close the `v2` representation
+investigation here rather than continue probing the same injection-based
+mechanism. `render_experience_block_v1`/`_v2` and `ExperienceAwareDelegate`
+are not modified as a result of this finding — no further `v2` prompt
+tuning is planned. The next step is a `v3` architectural redesign proposal
+(reviewed before any implementation), motivated directly by this failure
+mode: history injected into the Delegate's own candidate-generation prompt
+is structurally prone to slot/token priming effects that are difficult to
+distinguish from genuine semantic transfer no matter how the injected text
+is reworded, because the model's own generation process is what's being
+primed. B7e remains not started.
