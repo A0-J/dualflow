@@ -20,12 +20,21 @@ Consumption contract (fixed before any main-experiment API run):
   1. **Stability gate first, using the existing criterion.** If the
      current candidate distribution's entropy is already at or below
      `entropy_threshold` (the same threshold `ClarifyingDelegate` uses),
-     the current facet is already stable/explicit — historical evidence
-     is never even consulted, and the baseline decision (`distribution.
-     top`) is returned unchanged. This is what structurally prevents
-     `stale-history override` (a historical value overriding an explicit
-     current instruction) — it's a gate on *consulting* evidence, not a
-     rule applied after generating a decision.
+     historical evidence is never even consulted, and the baseline
+     decision (`distribution.top`) is returned unchanged — a gate on
+     *consulting* evidence, not a rule applied after generating a
+     decision. **Precise scope**: this gate does not recognize "this is an
+     explicit instruction" as a natural-language property — it only
+     checks whether the *already-sampled* distribution happens to satisfy
+     the existing stability criterion. When it does, a historical value
+     cannot override it, by construction. But if real sampling on an
+     explicit-change delegation turns out unstable despite the text being
+     explicit, this harness *will* proceed to consult history — and if
+     that changes the decision away from the explicit instruction, that
+     is a real, observed `stale-history override` (F4), not automatically
+     a contract bug. Whether that actually happens is an empirical
+     question for the main experiment to measure, not something assumed
+     true here.
   2. **Eligibility gate, using existing provenance.** If the facet under
      consideration is not in `experience.confirmed_facets`, there is
      nothing safe to consult — evidence is not looked at, decision stays
@@ -70,7 +79,10 @@ from .experience_evidence import EvidenceRelation, HistoricalEvidenceComparator
 from .semantic import Interpretation
 
 # 각 stage 이름은 그대로 failure-taxonomy 매핑에 쓰인다(문서 참고):
-#   STABLE_BASELINE                -> 애초에 evidence를 볼 필요 없음 (F4 방지 지점)
+#   STABLE_BASELINE                -> 이번 candidate distribution이 안정적이어서
+#                                      evidence를 아예 안 봄 (실제 sampling이
+#                                      불안정하면 이 stage로 안 떨어질 수 있다 —
+#                                      F4는 그때 실측으로 확인하는 것)
 #   AMBIGUOUS_NO_ELIGIBLE_EVIDENCE -> F1 (evidence unavailable)
 #   AMBIGUOUS_NO_SUPPORT           -> F2 (support absent)
 #   AMBIGUOUS_RESOLVED_BY_EVIDENCE -> 성공 경로 (H1이 측정하는 것)

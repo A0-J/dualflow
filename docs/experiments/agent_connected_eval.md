@@ -1926,9 +1926,20 @@ Implemented in `src/dualflow/experience_decision.py`
    same one `clarification.ClarifyingDelegate` already uses, no new
    classifier) — if the current candidate distribution is already stable
    (`entropy <= entropy_threshold`), historical evidence is never even
-   consulted. This is the structural mechanism that prevents a
-   stale-history override of an explicit current instruction (F4) — a
-   gate on *whether to look*, not a rule applied after looking.
+   consulted. **Precise scope of this guarantee**: the gate does not
+   recognize "this is an explicit instruction" as a natural-language
+   property — it only checks whether the *already-sampled* current
+   distribution happens to satisfy the existing stability criterion. When
+   it does, history cannot override it, by construction (a gate on
+   *whether to look*, not a rule applied after looking). But if real
+   sampling on an explicit-change delegation turns out unstable (entropy >
+   `entropy_threshold`) despite the instruction being explicit in the
+   text, the harness *will* proceed to consult history — and if that
+   consultation then changes the decision away from the explicit
+   instruction, that is a real, observed F4 (stale-history override), not
+   automatically a contract bug. This distinction is exactly what the main
+   experiment's H2 is designed to measure empirically, not something
+   assumed true by the code.
 2. **Eligibility gate, using existing provenance** — if the facet is not
    in `experience.confirmed_facets`, evidence is not consulted (F1
    otherwise).
