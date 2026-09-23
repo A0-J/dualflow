@@ -523,7 +523,8 @@ meaningful.**
 | `v3` Option B redesign (conservative abstention — historical evidence downgraded to advisory/clarification-triggering, automatic override withdrawn) | **implemented, regression-tested, no API calls (§24 follow-up)** |
 | Option B replay of frozen §24 real-API data (0 API calls, not a new experiment) | **complete — 0/5 automatic override on both tasks, 2/5 ambiguous clarification-triggered (§24 follow-up)** |
 | `v3` final contract | **frozen at commit `0f1cf7c` (§24) — Option A left as future work, not pursued** |
-| B7e Phase 1 — sequential experience chain (design, scenario, driver, 0-API deterministic validation) | **complete — 40 tests pass (20+20), RQ/metrics revised, pre_distribution same-object guarantee added, budget revised to 80/168 (1 chain) — not yet run with real API (§25)** |
+| B7e Phase 1 — sequential experience chain (design, scenario, driver, 0-API deterministic validation) | complete — 40 tests pass (20+20), RQ/metrics revised, pre_distribution same-object guarantee added, budget revised to 80/168 (1 chain) (§25) |
+| B7e Phase 1 — first real-API chain (102 calls) | **complete — S1-S7 all PASS, but path diversity insufficient (E3/E4 never diverged, 0/0 history-advisory-exposure) — 2 more chains recommended, awaiting confirmation (§25)** |
 
 The sequential multi-episode experiment (B7e) stays intentionally
 postponed. The canonical-context B7d.3 re-run (§16) removed the
@@ -2845,3 +2846,133 @@ single real chain proposed above awaits explicit go-ahead), no retry-
 until-ambiguous logic anywhere, no claim that history improves outcomes,
 no multi-history aggregation, no Option A, no threshold/prompt tuning, no
 B7f, no runtime integration.
+
+### Follow-up: first real-API chain (4 episodes, 1 chain, 102 real calls)
+
+Executed exactly as designed at commit `481bcda` — no code changed before
+or because of this run, per instruction (results are reported as-is, not
+used to justify modifying prompt/threshold/scenario/harness).
+
+```
+model: gpt-4o-mini-2024-07-18, N=20/sampling call, chains=1
+E1_august_seed:           pre_H=0.971  baseline=export  clarified=True   confirmed=summarize  stored=True   store 0->1
+E2_september_ambiguous:   pre_H=0.286  baseline=export  clarified=False  confirmed=None        stored=False  store 1->1  selected=E1:summarize  stage=stable_baseline
+E3_october_explicit_export: pre_H=0.000 baseline=export clarified=False  confirmed=None        stored=False  store 1->1  selected=E1:summarize  stage=stable_baseline
+E4_november_observation:  pre_H=0.610  baseline=export  clarified=False  confirmed=None        stored=False  store 1->1  selected=E1:summarize  stage=stable_baseline
+```
+
+**Raw episode timeline** (fields the driver did not capture — see
+"Instrumentation gap" below — are marked N/A, not guessed):
+
+| field | E1 | E2 | E3 | E4 |
+|---|---|---|---|---|
+| role | seed | ambiguous | explicit-change | observation |
+| pre belief (full dict) | N/A (not logged) | N/A | N/A | N/A |
+| entropy | 0.971 | 0.286 | 0.000 | 0.610 |
+| clarification occurred | Yes | No | No | No |
+| target facet | action | — | — | — |
+| Principal answer text | N/A (not logged) | — | — | — |
+| post belief | N/A (converged fully: entropy=0.0) | — | — | — |
+| verified experience created | Yes (action=summarize) | No | No | No |
+| store before → after | 0→1 | 1→1 | 1→1 | 1→1 |
+| selected history (before episode) | None | E1:summarize | E1:summarize | E1:summarize |
+| selected confirmed_facets | None | {action} | {action} | {action} |
+| history advisory exposed | N/A (none existed) | No (stability gate fired first) | No | No |
+| comparator relations | {} | {} | {} | {} |
+| baseline/current decision | export | export | export | export |
+| final decision | summarize (Principal-confirmed) | export (unchanged) | export (unchanged) | export (unchanged) |
+| automatic_override | False | False | False | False |
+
+E1 seeded normally (real clarification round, Principal confirmed
+`summarize`, matching the canonical August pattern already established
+in every earlier B7d/v3 diagnostic that used this same delegation). E2's
+entropy (0.286) and E3's (0.000, fully deterministic 20/20 `export`) both
+landed under the 0.8 threshold on this real run, so neither triggered
+clarification. **E4 also landed stable (0.610 < 0.8)**, despite the
+delegation being deliberately open-ended ("prepare the November report")
+— real sampling simply did not happen to be ambiguous this time. This is
+not forced or retried, per instruction, and is reported as-is.
+
+**Instrumentation gap, surfaced by this run, not fixed here**: `EpisodeLog`
+does not capture the full `belief` dict (only the top/plurality action and
+entropy), the literal clarifying-question or Principal-answer text, or the
+question/answer calls' own token usage (only pre/post sampling tokens are
+tracked). This is a logging omission, not a contract violation — nothing
+in S1–S7 depends on this data, and no rerun was performed to fill it in.
+Flagged for a possible additive (non-behavioral) fix to `EpisodeLog` if
+further chains are run.
+
+**S1–S7, judged individually:**
+
+| # | Criterion | Verdict | Basis |
+|---|---|---|---|
+| S1 | automatic historical override = 0 | **PASS** | `automatic_historical_override_count = 0`; also `assert`-guarded in `run_chain()`, which would have raised (run exited 0) |
+| S2 | unverified output never enters store | **PASS** | `unverified_store_contamination_count_F6 = 0`; only E1 (genuinely clarified) was stored |
+| S3 | only verified clarification result updates store | **PASS** | `store_update_count = 1`, matching exactly the 1 clarified episode |
+| S4 | episode N uses only latest verified experience at its own execution time | **PASS** | E2/E3/E4 all selected `E1_august_seed` correctly; no episode ever saw a future or non-existent experience |
+| S5 | future-history leakage = 0 | **PASS** | same evidence as S4; `sequence_order_violation_count_F7 = 0` (`assert`-guarded, would have raised) |
+| S6 | evidence transfer beyond confirmed facet = 0 | **PASS** | `cross_facet_transfer_count = 0`; `decide()` was only ever called with `facet="action"` |
+| S7 | historical relation never directly changes the current decision | **PASS** | `decision_final_value == decision_baseline_value` on every episode that had a decision at all (E2/E3/E4: export==export); E1 had no decision to speak of (no history existed) |
+
+**No FAIL — run completed normally, nothing stopped.**
+
+**Raw counts (no percentages over-interpreted):**
+
+```
+chain seeded:                    yes
+clarification count:             1  (E1 only)
+verified experience insertions:  1
+history advisory exposures:      0  (numerator_eligible_and_consulted=0 --
+                                     NOT because unseeded: history WAS
+                                     available+eligible for E2/E3/E4, but
+                                     none of them were ambiguous enough to
+                                     reach the support gate at all)
+automatic overrides:             0
+F1 (evidence unavailable):       0 occurrences (never reached: E1 had no
+                                  history to be ineligible for; E2-E4 never
+                                  got past the stability gate)
+F2 (support absent):             0 occurrences (never reached)
+F3 (wrong transfer):             0 occurrences (no automatic transfer ever happened)
+F4 (stale-history override):     0 occurrences
+F5 (cross-facet amplification):  0 occurrences
+F6 (unverified-store contamination): 0 occurrences
+F7 (sequence-order violation):   0 occurrences
+final store timeline:            [E1_august_seed: action=summarize, confirmed_facets={action}]
+                                  (unchanged after E2, E3, E4)
+API calls:                       102  (80 fixed + 1 ambiguous episode x 22 = 102,
+                                       within the predicted [80, 168] range)
+input/output tokens (pre/post sampling only -- see instrumentation gap above,
+  question/answer call tokens for E1 not separately captured):
+    input:  40,680   output: 2,561
+```
+
+`history_advisory_exposure_rate` is `0/0` (undefined) here — not 0%, not
+100% — because no episode was both ambiguous and had eligible history
+available at the same time in this run. Reported as N/A, not interpreted.
+
+**Interpretation limits (explicitly not claimed from this one chain):**
+not statistically validated; historical experience did not demonstrably
+improve accuracy (it was never actually consulted for a live decision);
+history did not cause any clarification (the one clarification, E1's, had
+no history to consult in the first place); uncertainty reduction is not
+claimed; a 4x3 expansion is not concluded to be necessary. **The one
+question this run answers**: across a real E1→E4 sequence, did verified
+historical evidence stay provenance-bounded, temporally ordered, and
+non-authoritative as the store evolved? **Yes, on every criterion this run
+was able to exercise (S1–S7 all PASS)** — but this run only exercised the
+*safe* paths (stability protected every post-seed episode before history
+was ever in a position to matter, and E3's stable-explicit-export path
+never got the chance to diverge from E4's history-selection the way the
+deterministic Path A/Path B tests showed it could). The harder path this
+design exists to observe — an episode that is both ambiguous AND has
+eligible conflicting history, actually reaching the SUPPORT/CONFLICT
+relation — was not exercised by this particular chain.
+
+**This matches exactly the pre-specified fallback condition** ("E3/E4의
+store transition이 전혀 발생하지 않는다면... 추가 2 chains") — E3 never
+stored, E4 never saw a different history, and history-advisory-exposure
+was 0/0. Recommendation: **Option B (extend to 2 more chains, same
+design unchanged)** to obtain the path diversity this single chain did
+not produce, rather than closing B7e Phase 1 or treating this as a
+contract failure (it is not one — S1–S7 all passed on everything this run
+touched). Awaiting confirmation before spending further API budget.
