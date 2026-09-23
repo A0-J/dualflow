@@ -1990,6 +1990,20 @@ unmodified) with only `confirmed_facets` overlaid via
 `dataclasses.replace()` (that function predates the v3 provenance work and
 defaults the field to `frozenset()`).
 
+**This experiment deliberately isolates decision-consumption from
+provenance-generation.** Whether the provenance chain (IG target
+selection → singleton clarifying question → post-clarification resolution
+→ `confirmed_facets`) holds against real API-generated data was already
+verified separately by the smoke test above (§24 top, PASS). This
+experiment does not re-verify that chain — it fixes a known-good verified
+experience (built via the fixed-reproducer + `confirmed_facets` overlay,
+not a fresh real clarification round) and asks a different, downstream
+question: given a trustworthy piece of evidence, does *consuming* it
+(`FrozenCandidateEvidenceHarness`) produce a good decision? Conflating the
+two would make a negative result ambiguous (did decision-consumption fail,
+or did provenance-generation fail?) — keeping them separate is what lets
+this experiment's result be interpreted cleanly.
+
 ### Primary / secondary metrics
 
 - **H1 primary**: `P(final decision == "summarize")`, baseline (A) vs. v3
