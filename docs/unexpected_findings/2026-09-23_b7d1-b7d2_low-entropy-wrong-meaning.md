@@ -1,69 +1,57 @@
-# B7d.1/B7d.2 — Entropy는 0까지 떨어졌는데 의미는 틀렸다
+# B7d.1–B7d.2: 불확실성은 줄었지만 의미는 더 틀려졌다
 
 **날짜:** 2026-09-23
 **experiment ID:** b7d1_semantic_transfer_diagnostic, b7d2_structure_only_control
-**관련 커밋:** `f572673` (B7d.1 기록), `c35770a` (B7d.2 기록) — 두 실험 모두 지금 쓰는
-`scenario_fingerprint()`/exact-string scenario 체계가 생기기 *이전*의 ad-hoc 스크립트로
-돌린 결과라, "이 SHA의 코드로 재현된다"는 의미의 git_sha는 없다. 여기 적은 커밋은 그
-결과가 저장소에 기록된 시점이다. 자세한 원자료는
-[`docs/experiments/agent_connected_eval.md`](../experiments/agent_connected_eval.md) §7–§11
-참고.
 
-## 무슨 실험이었나
+B7d.1과 B7d.2에서는 Principal이 이전에 확인한 experience를 제공하면, ambiguous delegation을 해석할 때 그 경험이 현재 의미를 올바른 방향으로 유도할 것으로 예상했다.
 
-`ExperienceAwareDelegate`가 과거 Principal-confirmed experience(예: "이 Principal은
-이전에 summarize로 확인해줬다")를 현재 delegation의 context에 넣어주면, Delegate가 다음에
-같은 종류의 애매한 delegation을 받았을 때 그 경험을 반영해서 더 정확하게(=Principal이
-의도한 쪽으로) 해석할 거라고 기대하고 만든 기능이다. B7d.1/B7d.2는 이게 실제로 작동하는지
-확인하려고 만든 첫 real-API 진단이다 — no-experience 조건과 summarize-experience/
-export-experience/read-experience 조건, 그리고 (B7d.2에서 추가한) 아무 내용도 없는
-neutral 조건을 비교했다.
+특히 이전 episode에서 Principal이 `summarize`를 의도했다고 확인한 experience를 제공하면, 현재 ambiguous request에서도 `summarize`의 가능성이 높아지고 uncertainty가 낮아질 것으로 예상했다.
 
-## 기대했던 결과
+하지만 실제 결과는 반대였다.
 
-historical experience의 confirmed action을 summarize로 넣으면 현재 delegation에서도
-`P(summarize)`가 올라갈 것 — 즉 experience의 *내용*이 실제로 응답 방향을 바꿀 것이라고
-기대했다.
+| Condition | Entropy (H) | P(summarize) | 핵심 관찰 |
+| --- | ---: | ---: | --- |
+| No experience | 0.644 | 0.17 | 기존에는 export 쪽이 우세했지만 일부 ambiguity가 남아 있었음 |
+| Summarize experience | 0.000 | 0.00 | 모든 sample이 export로 수렴 |
+| Export experience | 0.000 | 0.00 | summarize experience와 동일하게 export로 수렴 |
+| Read experience | 0.878 | 0.70 | 다른 experience에서는 분포가 크게 달라짐 |
 
-## 실제로 나온 결과
+가장 예상 밖이었던 것은 `summarize experience` 조건이었다.
 
-- No experience: `H=0.644`, `P(summarize)=0.17`, `P(export)=0.83`
-- summarize-experience: `H=0.000`, `P(summarize)=0.00` (5/5 runs 전부 export로 확정)
-- export-experience: `H=0.000`, `P(summarize)=0.00` — **summarize-experience와 완전히
-  동일한 결과**
-- read-experience: `H=0.878`, `P(summarize)=0.70` (전혀 다른 방향)
+Principal이 이전 episode에서 `summarize`로 확인한 경험을 제공했는데도 `P(summarize)`는 no-experience의 0.17에서 0.00으로 떨어졌다. 반대로 entropy는 0.644에서 0.000까지 감소했다.
 
-summarize 조건만 놓고 보면 `H: 0.644 → 0.000`으로 entropy는 극적으로 줄었는데,
-`P(summarize): 0.17 → 0.00`으로 오히려 더 나빠졌다 (ΔP = −0.17). 그리고
-summarize-experience와 export-experience가 완전히 같은 분포를 만들어냈다는 건, historical
-experience의 실제 내용(summarize였는지 export였는지)이 결과에 거의 영향을 주지 못했다는
-뜻이다. 뒤이은 B7d.2(아무 내용 없는 neutral history block)도 summarize/export 조건과
-거의 비슷하게 움직여서, 이게 "내용"이 아니라 "historical block이 있다는 사실 자체"가
-모델의 기존 prior(export)를 강화하는 효과라는 걸 다시 확인했다.
+즉, 모델의 uncertainty는 완전히 사라졌지만 그 결과는 Principal이 확인했던 의미와 일치하지 않았다. 모델은 더 확신하게 되었지만, 그 확신은 오히려 기존의 export 방향으로 굳어졌다.
 
-## 왜 의외였나
+이 결과는 처음 생각했던
 
-entropy가 0으로 떨어지는 건 보통 "모델이 확신을 가졌다"는 신호로 읽기 쉽다. 그런데 여기선
-그 확신이 틀린 방향으로 향했다 — 심지어 "정답(summarize)을 알려주는 experience"를 넣었을
-때 오히려 정답 확률이 떨어졌다. entropy만 보고 있었다면 "experience가 효과가 있다"고
-잘못 결론 내렸을 상황이다.
+> experience가 uncertainty를 줄이면 semantic alignment도 함께 좋아질 것이다
 
-## 지금 해석
+라는 가정이 성립하지 않을 수 있음을 보여줬다.
 
-이 실험은 uncertainty(entropy `H`)와 semantic alignment(`P(Principal-confirmed action)`)가
-서로 다른 것이고, 둘 중 하나만 보고 성공/실패를 판단하면 안 된다는 걸 보여주는 첫 번째
-직접 증거다. entropy 감소는 "모델이 무언가로 수렴했다"는 뜻일 뿐, "그 수렴한 곳이 맞다"는
-뜻이 아니다.
+특히 summarize experience와 export experience는 서로 다른 confirmed action을 담고 있었음에도 둘 다 동일하게 `P(export)=1.0`으로 수렴했다.
 
-## DualFlow 연구에 왜 중요한가
+따라서 현재 representation에서는 historical experience의 confirmed action이 현재 action으로 일관되게 전달된다고 보기 어려웠다.
 
-이 발견 이후로 모든 B7d 계열 실험에서 entropy를 주 지표로 쓰지 않고, `P(target action)`을
-primary, entropy를 secondary로 명시적으로 분리해서 보고하게 됐다. 이게 이 프로젝트의
-평가 방법론 전체를 바꾼 첫 계기였다.
+반면 read experience에서는 전혀 다른 분포가 나타났기 때문에, experience의 내용이 항상 무의미했다고 볼 수도 없다. 문제는 **경험의 의미가 현재 interpretation에 안정적이고 일관된 방식으로 전달되지 않았다는 것**이었다.
 
-## 다음 실험/결정에 어떤 영향을 줬나
+## 왜 중요했나
 
-- B7c/B7d의 verified-experience representation을 "confirmed action을 한 줄 라벨로
-  보여주는" 방식(v1)에서 재설계(v2, B7d.3)하도록 이끈 직접적인 동기가 됐다.
-- 이후 모든 diagnostic 스크립트(`experience_transfer.py` 등)가 entropy와 P(action)을
-  항상 같이, 그리고 별도로 보고하도록 설계됐다.
+이 실험 전에는 entropy 감소를 semantic verification이 잘 작동하고 있다는 긍정적인 신호로 해석할 가능성이 있었다.
+
+하지만 B7d.1–B7d.2에서는 가장 낮은 entropy가 가장 올바른 interpretation을 의미하지 않았다.
+
+오히려 잘못된 방향으로 분포가 완전히 수렴하면서 entropy가 0이 될 수 있었다.
+
+이 결과 이후 DualFlow에서는 다음 원칙을 명확하게 분리해서 보기 시작했다.
+
+**Low uncertainty ≠ Correct delegation**
+
+즉, uncertainty는 모델이 얼마나 한 해석에 집중되어 있는지를 보여줄 수는 있지만, 그 해석이 Principal의 실제 의도와 맞는지는 별도로 검증해야 한다.
+
+또한 historical experience가 존재한다는 사실만으로 semantic transfer가 일어났다고 볼 수 없으며, experience의 내용이 현재 interpretation에 어떤 방식으로 영향을 주는지를 별도의 실험으로 확인할 필요가 생겼다.
+
+이 예상 밖의 결과가 이후 B7d 계열에서 experience representation, prompt wording, content sensitivity를 따로 분리해 확인하게 된 출발점이 되었다.
+
+> 참고: B7d.1–B7d.2는 현재 사용 중인 exact-string scenario 및 fingerprint 기반 reproducibility 체계가 도입되기 전에 수행된 초기 diagnostic이다. 따라서 이 파일은 당시 관찰된 현상과 그로 인해 바뀐 연구 방향을 기록하기 위한 것이며, 최신 재현성 기준에 따른 최종 성능 결과로 사용하지 않는다.
+
+상세 실험 기록과 당시 조건은 [`docs/experiments/agent_connected_eval.md`](../experiments/agent_connected_eval.md)의 B7d.1–B7d.2 관련 섹션을 참조.
