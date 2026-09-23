@@ -303,6 +303,47 @@ class TestAskClarification:
             assert not any(f in lowered for f in forbidden), (
                 f"ask_clarification has a suspicious parameter: {name}")
 
+    def test_default_target_facets_produces_byte_identical_prompt(self):
+        """v3 provenance 보완(§23 follow-up 3) -- target_facets를 생략하면
+        (기본값 빈 frozenset) instructions/input_text가 이전과 완전히
+        동일해야 한다(하위 호환)."""
+        from dualflow.delegate_agent import ClarificationQuestion
+
+        fake = _FakeLLMClient([LLMResponse(text="?")])
+        agent = DelegateAgent(llm=fake)
+        dist = _distribution({"summarize": 0.6, "export": 0.4}, entropy_value=0.97)
+
+        agent.ask_clarification(delegation="Please prepare the report.", distribution=dist)
+
+        input_text = fake.calls[0]["input_text"]
+        assert "Fields that are actually uncertain" not in input_text
+
+    def test_explicit_target_facets_appear_in_prompt_and_result(self):
+        from dualflow.delegate_agent import ClarificationQuestion
+
+        fake = _FakeLLMClient([LLMResponse(text="Summarize or export?")])
+        agent = DelegateAgent(llm=fake)
+        dist = _distribution({"summarize": 0.6, "export": 0.4}, entropy_value=0.97)
+
+        result = agent.ask_clarification(delegation="Please prepare the report.",
+                                         distribution=dist, target_facets=frozenset({"action"}))
+
+        input_text = fake.calls[0]["input_text"]
+        assert "Fields that are actually uncertain" in input_text
+        assert "action" in input_text
+        assert result.target_facets == frozenset({"action"})
+
+    def test_target_facets_defaults_to_empty_frozenset(self):
+        from dualflow.delegate_agent import ClarificationQuestion
+
+        fake = _FakeLLMClient([LLMResponse(text="?")])
+        agent = DelegateAgent(llm=fake)
+        dist = _distribution({"summarize": 0.6, "export": 0.4}, entropy_value=0.97)
+
+        result = agent.ask_clarification(delegation="Please prepare the report.", distribution=dist)
+
+        assert result.target_facets == frozenset()
+
 
 def _distribution(action_probs: dict, entropy_value: float):
     """`ask_clarification()` 단위 테스트용 최소 `CandidateDistribution`.

@@ -512,6 +512,13 @@ meaningful.**
 | `v3` prototype — `HistoricalEvidenceComparator` (opt-in, not wired into runtime) | implemented (§22 review, code) |
 | `v3` first pilot (180 calls) | **inconclusive — comparator calibration/semantic-target validity not established, not a verdict on the v3 hypothesis (§23)** |
 | `v3` comparator redesign — structured-facet, deterministic (option B) | **implemented, regression-tested (§23 follow-up)** |
+| `v3` provenance gate (`confirmed_facets`, structured value ≠ confirmed evidence) | **implemented, regression-tested (§23 follow-up 2)** |
+| `v3` provenance correction (ambiguity ≠ confirmation; generation-time target_facets) | **implemented, regression-tested (§23 follow-up 3)** |
+| `v3` single-facet clarification (target ≠ confirmed for multi-facet rounds, closed via IG-based single-facet targeting) | **implemented, regression-tested (§23 follow-up 4)** |
+| `v3` post-clarification resolution gate (singleton target ≠ actual confirmation) | **implemented, regression-tested (§23 follow-up 5) — provenance chain design complete** |
+| `v3` contract smoke test (42 real API calls) | **PASS — full chain held end to end (§24)** |
+| B7d-v3 main experiment (200 real API calls) | **complete — H1 partial positive signal (2/2 conditional success); H2's 5/5 preservation found to reflect stability, not explicitness (§24)** |
+| H2 structural counterexample (stale-history override reachable when sampling is unstable) | **confirmed via deterministic regression test, no API — open design question, not yet fixed (§24)** |
 | Sequential experience evaluation (B7e) | not started |
 
 The sequential multi-episode experiment (B7e) stays intentionally
@@ -1529,3 +1536,648 @@ diagnostic was inconclusive (§23 top) → contract audit identified two
 contaminants (§23 audit findings) → structured-facet comparator
 implemented (this subsection), removing the failure surface the audit
 found rather than tuning around it.**
+
+### Follow-up 2: structured value ≠ Principal-confirmed evidence (provenance gate added)
+
+Before any API validation of the structured-facet comparator, a second
+gap was found on review: **a structured value existing in
+`confirmed_interpretation` is not the same as the Principal having
+actually confirmed that facet.** In this pilot scenario, `resource`/
+`scope` are always fixed by the grounded environment (B6.1) — every real
+clarification round only ever targets `action` — so
+`confirmed_interpretation.scope` (e.g. the historical episode's
+`2026-08`) was just whatever the environment happened to fix it to, not
+a reusable fact the Principal confirmed. The revision-3 comparator would
+still let a `scope` query silently become `CONFLICT` evidence, moving the
+exact §23 whole-episode contamination one layer down rather than removing
+it.
+
+**Fix — `AgentExperience` gained a `confirmed_facets: frozenset[str]`
+field** (`src/dualflow/agent_experience.py`, default `frozenset()` for
+backward compatibility with the two existing direct-construction call
+sites, `experiments/agent_smoke.py`'s `EXAMPLE_PRIOR_EXPERIENCE` and
+`experiments/diagnostics/experience_transfer.py`'s `make_experience()` —
+neither touched, neither reads this field, so both are unaffected).
+`build_verified_experience()` now computes it automatically: a facet
+counts as confirmed only if it actually varied across
+`pre_distribution`'s candidates before clarification — the only evidence
+the Delegate was genuinely uncertain about it, since
+`post_distribution.entropy` is already required to have converged
+(existing gate, unchanged). A facet that never varied pre-clarification
+was never in question, regardless of what value ends up in
+`confirmed_interpretation`.
+
+`HistoricalEvidenceComparator.judge()` (revision 4) now takes the whole
+`AgentExperience` (not a bare `Interpretation`) and checks
+`experience.confirmed_facets` before comparing: a facet not in
+`confirmed_facets` returns `IRRELEVANT` unconditionally — even if its
+value happens to coincide with the candidate's. `compare_facets()` itself
+stays a pure, provenance-agnostic value comparison; the gate lives one
+layer up, in `judge()`.
+
+**New tests** (`tests/test_experience_evidence.py`, rewritten again, 23
+tests; `tests/test_agent_experience.py`, +3 tests) lock in exactly the
+requested contract: action-only-confirmed experience supports/conflicts
+correctly on `action` while resource/scope/condition all read
+`IRRELEVANT`; the August-scope-vs-September-scope pair with only `action`
+confirmed no longer produces a spurious scope `CONFLICT` (the exact
+failure mode reproduced and shown fixed) while directly querying `scope`
+on that same pair still correctly returns `IRRELEVANT`, not `SUPPORT` or
+`CONFLICT`, absent provenance; scope activates normally
+(`SUPPORT`/`CONFLICT`) once it actually is in `confirmed_facets`; two
+coincidentally-equal empty values (`""`/`frozenset()`) do not produce
+`SUPPORT` when their facet lacks provenance; provenance for one facet does
+not leak into another's judgment; `build_verified_experience()`'s
+automatic derivation is tested directly (single-facet, multi-facet, and
+zero-facet-variance cases). All pass; full suite 336 → 344 (+8).
+
+This does not reverse the option-B decision — it completes it. Full
+progression: **natural-language comparator → contamination found (§23) →
+deterministic structured-facet comparator → structured value alone found
+insufficient → facet-level confirmation provenance added.** The next
+minimal experiment described in Follow-up 1 above is accordingly revised:
+it is still true that the comparison step itself needs no API calls, but
+it now also depends on `confirmed_facets` being populated correctly by
+`build_verified_experience()` for the historical experience used — which
+this section's regression tests already exercise without any real
+clarification round. No API calls, no candidate freeze, no N/L/P/S re-run,
+no runtime integration, and no B7e were performed in this follow-up.
+
+### Follow-up 3: ambiguity provenance ≠ confirmation provenance
+
+Follow-up 2's `confirmed_facets` had its own gap, found on review before
+any API validation: it was computed by
+`_facets_with_pre_clarification_ambiguity()` from which facets *varied* in
+`pre_distribution` — but **a facet being ambiguous before clarification is
+not the same as the Principal having actually been asked about, or having
+actually confirmed, that facet.** If a future scenario had `pre_
+distribution` vary in both `action` and `scope` simultaneously, but the
+free-text clarifying question (generated by `DelegateAgent.
+ask_clarification()`, which lets the model choose freely what to ask
+about) only actually addressed `action`, the old computation would still
+mark `scope` as "confirmed" — reintroducing exactly the whole-episode
+contamination Follow-up 1 removed, just moved to a different derivation
+point. The precise, correct name for what Follow-up 2 computed was
+`ambiguous_facets_before_clarification`, not `confirmed_facets`.
+
+**Audit of the clarification-generation path** (`clarification.py`'s
+`ClarifyingDelegate.resolve()` → `DelegateAgent.ask_clarification()` →
+`PrincipalAgent.answer_clarification()`) found **no existing structural
+signal for which facet a question actually targets**:
+`ask_clarification()`'s prompt shows the model every candidate's full
+`Interpretation` and asks it to "write a single, direct clarifying
+question... that would resolve this specific uncertainty" — entirely the
+model's free choice, with nothing recorded about which field(s) it chose
+to address. `ClarificationQuestion`/`PrincipalClarification` are both
+plain free-text (`question: str`/`answer: str`) with no facet metadata.
+The only structural (non-text) signal available anywhere in the pipeline
+is exactly the pre-distribution variance Follow-up 2 already used — which
+is why Follow-up 2 conflated the two concepts: it was the only signal
+that existed at the time.
+
+**Fix — move the same computation earlier and use it as a generation
+constraint, not a post-hoc label.** `clarification.py` gains
+`_facets_that_varied(belief) -> frozenset[str]` (the same per-facet
+variance check, now computed *before* the question is generated, in
+`ClarifyingDelegate.resolve()`). This is passed to `DelegateAgent.
+ask_clarification()` as a new `target_facets: frozenset[str] = frozenset()`
+parameter (default empty — omitting it reproduces the exact prior
+prompt/behavior byte-for-byte, confirmed by test). When non-empty, `_render_
+clarify_input()` appends one line naming exactly which fields are "actually
+uncertain (ask only about these)" — turning "which facet is this question
+about" from an unconstrained model choice into an explicit input
+constraint. `ClarificationQuestion` gains a `target_facets` field carrying
+this value through. `build_verified_experience()` (`agent_experience.py`)
+no longer recomputes anything from `pre_distribution` — it simply copies
+`result.question.target_facets` into `AgentExperience.confirmed_facets`.
+
+**This does change `ask_clarification()`'s real model-visible prompt** for
+any future real clarification round where `ClarifyingDelegate.resolve()`
+finds genuine pre-distribution variance (which is every real clarification
+round recorded so far — B7b's real pilot always had exactly `action`
+varying). The previously-recorded B7b real-API pilot numbers
+(§4/agent_connected_eval.md) were produced under the prior, unconstrained
+prompt and are unaffected (nothing here is retroactive), but any future
+real run of `ClarifyingDelegate.resolve()` will use this new,
+facet-constrained prompt — a deliberate, documented revision (B7b
+clarification prompt, revision 2), not a silent drift.
+
+**Known, accepted limitation, not solved here**: this constrains the
+*question* to the target facets structurally, but does not verify that
+the Principal's free-text *answer* actually engaged with them — doing so
+would require re-interpreting the answer text, which was explicitly
+out of scope (no answer-text heuristics, no keyword matching, no LLM
+re-analysis of the answer). The correctness of `confirmed_facets` past
+this point rests on the prompt constraint being followed by the model
+generating the question, not on independently verifying the answer.
+
+**Tests**: `tests/test_delegate_agent.py` (+3) confirm omitting
+`target_facets` reproduces the byte-identical prior prompt, that supplying
+it adds the constraint line and is carried onto the result, and the
+default is empty. `tests/test_clarification.py` (+5, new `TestTargetFacets`)
+confirm single- and multi-facet variance produce the correct
+`target_facets`, that the value actually reaches `ask_clarification()`'s
+prompt, that no clarification means no question to carry it, and —
+directly addressing "no answer-text heuristics" — that changing the
+Principal's answer wording does not change the computed `target_facets`
+(it is computed purely from `pre_distribution`'s structured candidates,
+before the answer even exists). `tests/test_agent_experience.py`'s
+provenance tests are rewritten to test pure pass-through, plus one
+regression test reproducing Follow-up 2's exact failure shape (`pre_
+distribution` varies in both `action` and `scope`, but `question.
+target_facets` is only `{"action"}`) and confirming `confirmed_facets`
+follows the question's target, not the raw pre-distribution variance.
+All pass; full suite 344 → 353 (+9).
+
+Progression as of Follow-up 3: **natural-language comparator →
+contamination found (§23) → deterministic structured-facet comparator →
+structured value alone found insufficient → ambiguity-based provenance
+added → ambiguity provenance found insufficient (confirmed ≠ ambiguous) →
+explicit generation-time confirmation provenance added.** (This was called
+"complete" at the time — Follow-up 4 below found one more gap in it,
+before any API validation, so the label was premature; left unedited here
+per this document's policy.)
+
+### Follow-up 4: target facets ≠ confirmed facets (single-facet clarification)
+
+Follow-up 3's `target_facets` closed the "ambiguity vs. confirmation" gap
+for the single-facet case, but a subtler gap remained, found on review
+before any API validation: `target_facets` could legitimately hold
+**more than one facet** (whenever more than one facet varies together in
+`pre_distribution`), while a clarification round is still exactly **one**
+free-text question and **one** free-text answer. `build_verified_
+experience()` copied the whole `target_facets` set into `confirmed_facets`
+regardless — so if `action` and `scope` both varied and both became
+`target_facets`, but the Principal's one-sentence answer only clearly
+addressed `action`, `scope` would still be silently promoted to
+"confirmed" evidence with no verification that it was actually addressed.
+The precise distinction needed, restated: `target_facets` = "the question
+was structurally constrained to ask about these facets"; `confirmed_
+facets` = "these facets are safe to use as transferable historical
+evidence" — the two are only trustworthy as identical when there is
+exactly one facet in play, because then there is no "did the one answer
+cover *all* of several targeted facets" ambiguity left to resolve.
+
+**Fix: make every clarification round target exactly one facet, chosen by
+information gain — reusing existing legacy logic, not inventing a new
+one.** `src/dualflow/semantic.py` already has exactly this machinery from
+the Phase A controlled framework: `Question`/`candidate_questions()`/
+`conditional_entropy()`/`information_gain()`/`select_question()` — pick
+the single dimension whose conditional entropy reduction (mutual
+information with the answer) is largest, with an optional repeat penalty
+(`asked: Counter`, unused here since B7b is single-round). `clarification.py`
+gains `_select_target_facet(belief)`, calling `select_question(belief,
+Counter())` and returning `question.dimension` (or `None` in the
+mathematically-unreachable case where no facet has positive information
+gain while `pre.entropy` already exceeds a positive `entropy_threshold` —
+handled defensively as "confirm nothing," not asserted-and-crashed).
+`ClarifyingDelegate.resolve()` now passes `target_facets = frozenset({facet})`
+(or `frozenset()`) to `ask_clarification()` instead of the old
+multi-facet `_facets_that_varied()` result — that function is kept, but
+repurposed as **diagnostic-only**: `ClarificationResult` gains a new
+`varied_facets: frozenset[str] = frozenset()` field carrying it, explicitly
+documented as *not* usable for evidence eligibility (`varied_facets ⊇
+target_facets` always holds; only `target_facets`, via `confirmed_facets`,
+is ever evidence-eligible). `agent_experience.py`/`experience_evidence.py`
+are unchanged — `confirmed_facets` still just copies `question.
+target_facets`, which is now always a singleton-or-empty set, closing the
+gap without any new gating logic needed downstream.
+
+**`PrincipalAgent.answer_clarification()` audited, not modified.** It
+takes `question: str` (the free-text question only, not the
+`ClarificationQuestion` object) — there is no structural channel by which
+`target_facets` could reach the Principal's answer-generation prompt today.
+Threading it through (as an additional labeling/prompt-hint parameter, not
+answer-text analysis) was considered and is a legitimate future
+strengthening, but is **not implemented here**: once clarification targets
+exactly one facet, the "did the answer cover every targeted facet"
+ambiguity that motivated this whole follow-up no longer applies (there is
+only one facet, and the one free-text answer is definitionally in response
+to a question already constrained to it) — so this additional step is not
+required to close the gap, only a possible future reinforcement. No
+answer-text heuristic (keyword matching, LLM re-classification, wording
+analysis) was added anywhere, per instruction.
+
+**Tests**: `tests/test_clarification.py`'s `TestTargetFacets` — the
+previous multi-facet test (which had asserted `target_facets ==
+{"action", "scope"}`, now the *wrong* expectation) is replaced by
+`test_multi_facet_variance_selects_exactly_one_target_facet` (same
+perfectly-co-varying `action`+`scope` fixture; `varied_facets ==
+{"action", "scope"}` while `target_facets` is a strict, length-1 subset of
+it) and a new end-to-end `test_unselected_varied_facet_is_not_confirmed_
+end_to_end` — the exact failure case requested: `varied_facets={action,
+scope}`, only `action` selected as `target_facets`, carried through
+`build_verified_experience()` into `AgentExperience.confirmed_facets ==
+{"action"}` (`"scope" not in confirmed_facets`, asserted directly), and
+then through `HistoricalEvidenceComparator.judge()`: querying `scope`
+returns `IRRELEVANT`, querying `action` returns `SUPPORT` — the full chain
+from candidate variance to comparator behavior, in one test. All 17 tests
+in the file pass (16 → 17, one replaced + one added). Full suite
+353 → 354.
+
+Progression as of Follow-up 4: **natural-language comparator →
+contamination found → deterministic structured-facet comparator →
+structured value alone insufficient → ambiguity-based provenance →
+ambiguity ≠ confirmation → generation-time target provenance → target ≠
+confirmed when multi-facet → single-facet-per-round clarification (reusing
+existing legacy IG machinery), closing the gap without new heuristics.**
+(Again called "complete" at the time; Follow-up 5 below found one final,
+narrower gap before any API validation — left unedited here, same policy
+as Follow-up 3.)
+
+### Follow-up 5: singleton target ≠ actual confirmation (post-clarification resolution gate)
+
+Follow-up 4's singleton `target_facets` guarantees only **"at most one
+facet can be a confirmation candidate per round"** — it does not by
+itself guarantee the Principal's free-text answer was clear, on-topic, or
+unambiguous. A vague, evasive, or off-topic answer is not structurally
+ruled out by singleton targeting alone. The precise statement of what
+remained missing: singleton targeting bounds *how many* facets could be
+confirmed, not *whether* the one targeted facet actually *was*.
+
+**Audit of the post-clarification path**
+(target facet selection → question → answer → `post_distribution` →
+`final_interpretation` → `build_verified_experience()`) found an existing,
+already-computed structural signal that directly answers this, with no
+new heuristic and no answer-text analysis: **`ClarificationResult.
+post_distribution`** — the *already re-sampled* candidate distribution
+taken *after* the Principal's answer was folded into context. If the
+target facet's value is still split across more than one distinct value
+among `post_distribution`'s candidates, the clarification round did not
+actually resolve it, regardless of what `target_facets` said should have
+been asked. This is exactly the same primitive already used for
+`varied_facets` (`_facets_that_varied()`, "how many distinct values does
+this facet have among these candidates") — reused here in single-facet
+form on the *post* distribution instead of the *pre* distribution.
+
+One subtlety found: `build_verified_experience()`'s **existing**
+`max_verified_entropy` gate (default `0.0`) already requires the *joint*
+`post_distribution` entropy to have converged before returning anything at
+all — at the default, this means every facet (including the target one)
+has necessarily collapsed to a single value, making the new per-facet
+check redundant *at the default threshold*. It becomes load-bearing
+specifically when a caller configures a **looser** `max_verified_entropy`
+(already a supported, tested code path —
+`test_high_post_entropy_accepted_with_looser_configured_threshold`): the
+joint-entropy gate can pass while the target facet specifically still
+shows real variance, and only the new per-facet check catches that case.
+
+**Fix**: `agent_experience.py` gains `_facet_resolved(distribution, facet)`
+(counts distinct values for one facet across a distribution's candidates —
+the same low-level operation `_facets_that_varied()` already performs, not
+a new one). `build_verified_experience()` now computes `confirmed_facets`
+as the intersection of `result.question.target_facets` with the facets
+that pass `_facet_resolved(result.post_distribution, facet)` — not a blind
+copy of `target_facets` anymore. A facet that was targeted but never
+resolved post-clarification is dropped, `confirmed_facets` becomes
+`frozenset()` in that case rather than falsely reporting the target facet
+as confirmed. `clarification.py`, `delegate_agent.py`, and
+`experience_evidence.py` are all unchanged — the fix is entirely inside
+`build_verified_experience()`, one filtering step added to an existing
+function.
+
+**`PrincipalAgent.answer_clarification()` audited again, still not
+modified** — same conclusion as Follow-up 4: the post-clarification
+resolution signal already available (`post_distribution`) is sufficient to
+close this gap without needing any change to answer generation or any
+answer-text analysis.
+
+**Tests** (`tests/test_agent_experience.py`, `TestConfirmedFacetsProvenance`
+rewritten, 6 tests): the default-threshold case (`confirmed_facets ==
+target_facets` when the joint gate already forces full convergence); the
+requested failure case with a deliberately loosened
+`max_verified_entropy` where the target facet (`action`) still shows two
+distinct post-clarification values — `confirmed_facets == frozenset()`,
+not `{"action"}`; a non-target facet (`scope`) that happens to trivially
+"resolve" (because `post_distribution` collapsed to one candidate) is
+still never confirmed, because it was never in `target_facets` to begin
+with (the Follow-up 4 subset invariant re-verified under the new gate);
+and a defensive test confirming `build_verified_experience()` correctly
+intersects even if (hypothetically) more than one target facet were ever
+passed in. All pass; full suite 354 → 356 (+2).
+
+Progression, now complete for this arc: **natural-language comparator →
+contamination found → deterministic structured-facet comparator →
+structured value alone insufficient → ambiguity-based provenance →
+ambiguity ≠ confirmation → generation-time target provenance → target ≠
+confirmed when multi-facet → single-facet-per-round clarification → a
+singleton target still ≠ actual confirmation → post-clarification
+resolution gate added, using only an already-computed distribution, no new
+heuristic and no answer-text analysis.** No API calls, no candidate
+freeze, no N/L/P/S re-run, no runtime integration, and no B7e were
+performed in this follow-up. This closes the provenance chain design work
+for now — the next step, when authorized, is real-API validation.
+
+## 24. v3 Contract Smoke Test (PASS) and B7d-v3 Main Experiment Protocol (Prepared, Not Yet Run)
+
+### Smoke test result: PASS
+
+A minimal, single-run smoke test
+(`experiments/diagnostics/experience_provenance_smoke.py`, git_sha
+`b80fb15e5e2fa5017ba364fe94ef18d568e21b77`) confirmed the full provenance
+chain (IG target selection → singleton clarifying question →
+post-clarification resolution → `confirmed_facets` →
+`HistoricalEvidenceComparator`) holds end to end against real
+API-generated data, at 42 real API calls total:
+
+```
+varied_facets: ['action']
+target_facets: ['action']
+post_distribution: entropy=0.000, action values=['summarize'] (10/10 converged)
+confirmed_facets: ['action']
+candidate(summarize).action vs. historical(summarize).action -> SUPPORT   (expected)
+candidate(export).action    vs. historical(summarize).action -> CONFLICT (expected)
+candidate(summarize).scope  vs. historical (unconfirmed facet) -> IRRELEVANT (expected)
+failure stage: none
+```
+
+Historical (August) and current (September) scopes genuinely differed in
+this real run, and the `action`/`scope` isolation held on real data, not
+just synthetic `Interpretation` objects. **Confirmed: PASS.** No code was
+modified as a result of this run.
+
+### Why the next experiment is not another N/L/P/S run
+
+`HistoricalEvidenceComparator` is now fully deterministic (§23 follow-up
+2). Re-running the same `summarize == summarize -> SUPPORT` check hundreds
+of times across natural-language rendering conditions would produce no new
+research information — that mechanism-level question (does history-block
+presence/format prime the model independent of content) was already
+answered by B7d.5/B7d.6 (§20-22). The open question now is one level
+downstream: **once a relation exists, does actually consuming it produce a
+useful semantic decision** — improving an ambiguous case while never
+overriding an explicit one?
+
+### Hypotheses
+
+- **H1 (ambiguous transfer)**: when the current delegation's action is
+  genuinely ambiguous, does Principal-confirmed historical action evidence
+  move the semantic decision toward the historically confirmed action?
+- **H2 (explicit-change preservation)**: when the current delegation
+  explicitly specifies a *different* action, does historical evidence fail
+  to override it?
+
+### Evidence-consumption contract (fixed before any API run)
+
+Implemented in `src/dualflow/experience_decision.py`
+(`FrozenCandidateEvidenceHarness`), opt-in, not wired into
+`AgentDelegationRuntime`:
+
+1. **Stability gate first, using the existing entropy threshold** (the
+   same one `clarification.ClarifyingDelegate` already uses, no new
+   classifier) — if the current candidate distribution is already stable
+   (`entropy <= entropy_threshold`), historical evidence is never even
+   consulted. **Precise scope of this guarantee**: the gate does not
+   recognize "this is an explicit instruction" as a natural-language
+   property — it only checks whether the *already-sampled* current
+   distribution happens to satisfy the existing stability criterion. When
+   it does, history cannot override it, by construction (a gate on
+   *whether to look*, not a rule applied after looking). But if real
+   sampling on an explicit-change delegation turns out unstable (entropy >
+   `entropy_threshold`) despite the instruction being explicit in the
+   text, the harness *will* proceed to consult history — and if that
+   consultation then changes the decision away from the explicit
+   instruction, that is a real, observed F4 (stale-history override), not
+   automatically a contract bug. This distinction is exactly what the main
+   experiment's H2 is designed to measure empirically, not something
+   assumed true by the code.
+2. **Eligibility gate, using existing provenance** — if the facet is not
+   in `experience.confirmed_facets`, evidence is not consulted (F1
+   otherwise).
+3. **Support gate, using the existing deterministic comparator** — among
+   the *already-generated* current candidates (never re-sampled), the
+   distinct values of the facet are compared against the historical
+   experience. No `SUPPORT` among them means evidence was consulted but
+   not applicable (F2).
+4. **Facet-level resolution only** — if exactly one facet value is
+   `SUPPORT`ed, that facet's value is resolved. The decision
+   interpretation, if uniquely determinable, is one of the *current*
+   candidates that already carries that value — never a synthesized
+   `Interpretation` built from historical resource/scope/condition. If
+   more than one distinct current `Interpretation` shares the resolved
+   value, no single point decision is picked (structural prevention of F5,
+   cross-facet amplification — regression-tested directly: a resolved
+   decision's `scope` always comes from the current candidate, never from
+   the historical experience's scope, even when they differ).
+
+No new confidence weighting, no new threshold, no new LLM call anywhere in
+this module.
+
+### Design: paired, frozen-candidate, four conditions
+
+Candidate generation and the v3 intervention are fully separated — for
+each task, candidates are sampled **exactly once** per run (no history in
+the generation prompt, the same clean B7a/B6 path), and that one frozen
+distribution is reused for both the baseline and the v3 condition. This is
+what removes B7d.5/B7d.6's history-block presence/format priming from the
+comparison entirely: nothing can differ between a baseline and its v3
+pair except what the harness does with an already-fixed distribution.
+
+| Condition | Task | Historical evidence |
+| --- | --- | --- |
+| A | Ambiguous (canonical September delegation) | none consulted |
+| B | Ambiguous (same frozen candidates as A) | confirmed_facets={"action"}, action="summarize" |
+| C | Explicit export ("This time, export the September 2026 financial report to the external auditor.", reused from B7d.3/B7d.4/B7d.6's `TASK2_DELEGATION`) | none consulted |
+| D | Explicit export (same frozen candidates as C) | same as B |
+
+No export-history/read-history arms this round — those conditions already
+characterized the old natural-language mechanism (§20-22); re-adding them
+here would blur what this experiment isolates.
+
+Historical evidence (identical, fixed, reused across every run — exactly
+one verified experience, matching the established B7c/B7d convention):
+built from `experience_transfer.make_experience()` (fixed reproducer,
+unmodified) with only `confirmed_facets` overlaid via
+`dataclasses.replace()` (that function predates the v3 provenance work and
+defaults the field to `frozenset()`).
+
+**This experiment deliberately isolates decision-consumption from
+provenance-generation.** Whether the provenance chain (IG target
+selection → singleton clarifying question → post-clarification resolution
+→ `confirmed_facets`) holds against real API-generated data was already
+verified separately by the smoke test above (§24 top, PASS). This
+experiment does not re-verify that chain — it fixes a known-good verified
+experience (built via the fixed-reproducer + `confirmed_facets` overlay,
+not a fresh real clarification round) and asks a different, downstream
+question: given a trustworthy piece of evidence, does *consuming* it
+(`FrozenCandidateEvidenceHarness`) produce a good decision? Conflating the
+two would make a negative result ambiguous (did decision-consumption fail,
+or did provenance-generation fail?) — keeping them separate is what lets
+this experiment's result be interpreted cleanly.
+
+### Primary / secondary metrics
+
+- **H1 primary**: `P(final decision == "summarize")`, baseline (A) vs. v3
+  (B), paired per run. Also recorded: count of runs resolved by evidence /
+  no support / no eligible evidence / stable-baseline.
+- **H2 primary**: `P(final decision == "export")`, baseline (C) vs. v3
+  (D), paired per run. Also recorded: **any** historical-override
+  occurrence (D's decision ≠ "export") — flagged individually as an F4
+  failure, never averaged away.
+- Secondary: entropy, clarification-avoided/required (not applicable here
+  since candidates are frozen pre-generated, no live clarification in this
+  harness), API calls, token usage.
+- Authority safety is explicitly out of scope (B7e territory) and not
+  mixed into this result.
+
+### Failure taxonomy (fixed before running)
+
+| Code | Meaning |
+| --- | --- |
+| F1 | evidence unavailable — eligible historical facet absent |
+| F2 | support absent — eligible history exists, no current candidate matches |
+| F3 | wrong transfer — ambiguous case, evidence applied, decision semantically worse than baseline (interpretive; assessed when analyzing results, not a stage the harness emits) |
+| F4 | stale-history override — explicit current instruction overridden by history |
+| F5 | cross-facet amplification — action evidence changes an unconfirmed facet's decision (structurally prevented, regression-tested) |
+
+### API budget (candidate generation only — comparator makes zero calls)
+
+```
+2 tasks × N=20 samples × 5 runs = 200 real API calls total
+comparator / v3 decision: 0 additional calls (fully deterministic)
+```
+
+### Reproducibility
+
+`experiments/diagnostics/experience_decision_experiment.py --output <path>`
+saves one JSON payload: `identity` (scenario id/version, model, delegation/
+context SHA256 for both tasks, N, repetitions, historical
+`confirmed_facets`/confirmed action), `rows` (one entry per
+task×condition×run: belief-by-action, entropy, baseline/final decision,
+resolved value, stage, per-value comparator relations, token/call counts),
+and `summary` (the H1/H2 aggregates above). Raw output stays in the
+scratchpad only, per standing convention.
+
+### Status
+
+Implemented and structurally verified: `--help` runs cleanly, a
+fake-client dry run confirmed correct end-to-end wiring (paired rows,
+correct summary aggregation), `src/dualflow/experience_decision.py` has
+its own 15 regression tests (stability/eligibility/support gates,
+facet-only resolution, cross-facet non-amplification), full suite
+356 → 371 passed. No N/L/P/S re-run, no runtime integration, no B7e, no
+new heuristic, no prompt tuning were performed to produce this protocol
+or harness.
+
+### Main experiment results (200 real API calls)
+
+```
+git_sha: 79ce2cc7c26cac97e8894b5cb8c53259964ff8dc
+model: gpt-4o-mini-2024-07-18
+N=20, runs=5, 200 candidate-generation calls, 0 comparator calls
+```
+
+| run | ambiguous entropy | ambiguous belief | ambiguous baseline | ambiguous v3 | stage | explicit entropy | explicit v3 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 0.722 | export .80/summarize .20 | export | export | stable_baseline | 0.000 | export |
+| 2 | 0.811 | export .75/summarize .25 | export | **summarize** | ambiguous_resolved_by_evidence | 0.000 | export |
+| 3 | 0.469 | export .90/summarize .10 | export | export | stable_baseline | 0.000 | export |
+| 4 | 0.934 | export .65/summarize .35 | export | **summarize** | ambiguous_resolved_by_evidence | 0.000 | export |
+| 5 | 0.469 | export .90/summarize .10 | export | export | stable_baseline | 0.000 | export |
+
+**H1, reported as three separated metrics (per instruction — never
+collapsed into one "v3 accuracy" number):**
+
+```
+gate_activation_rate       = 2/5   (runs where entropy > 0.8, evidence path entered)
+conditional_transfer_success = 2/2 (of the runs that activated, resolved to "summarize")
+overall_semantic_outcome    = 2/5  (P(summarize) across all 5 runs)
+
+P(summarize | baseline) = 0.0
+P(summarize | v3)       = 0.4
+F2 (support absent) occurrences: 0
+F3 (wrong transfer) occurrences: 0
+```
+
+Every run where the evidence path activated resolved correctly toward the
+historically confirmed action — a small but clean signal (2/2), not a
+strong statistical claim.
+
+**H2, raw (see counterexample below for the interpretation correction):**
+
+```
+P(export | baseline) = 1.0
+P(export | v3)        = 1.0
+stability-gate-passed runs = 5/5
+history-consultation-occurred runs = 0/5
+F4 (stale-history override) occurrences in this batch: 0
+```
+
+Tokens: 200 calls total, 80,800 input / 5,113 output (candidate generation
+only; comparator/v3 decision made zero additional calls, confirmed by
+`input_tokens=0`/`output_tokens=0` on every v3 row).
+
+**Interpretation limits, as instructed**: the 20 candidate samples within
+each run are not treated as 20 independent trials; no statistical
+significance is claimed from 5 runs; this result does not validate the
+full v3 architecture, and it does not conflate provenance-generation
+(separately verified by the smoke test above) with decision-consumption
+(what this experiment measures).
+
+### H2 structural counterexample (deterministic, no additional API calls)
+
+The 5/5 explicit-export preservation above happened because every one of
+those 5 real runs sampled to `entropy = 0.000` — the stability gate never
+let the decision path reach history consultation at all. That leaves open
+exactly the case the corrected contract note (above, "Precise scope of
+this guarantee") warned about: what happens when real sampling on an
+explicit-change delegation is *unstable*? This does not require another
+API call to check — it is a deterministic consequence of already-committed
+code, confirmed directly:
+
+```python
+belief = {Interpretation("export", ...): 0.55, Interpretation("summarize", ...): 0.45}
+# entropy(belief) == 0.9928  (> 0.8 threshold)
+harness.decide(distribution=..., experience=<confirmed_facets={"action"}, action="summarize">, facet="action")
+# -> stage=AMBIGUOUS_RESOLVED_BY_EVIDENCE, baseline_value="export", final_value="summarize"
+```
+
+**`FrozenCandidateEvidenceHarness`, completely unmodified, overrides an
+explicit-export decision to "summarize" whenever sampling on that
+delegation happens to land above the entropy threshold.** This is now
+fixed as a regression test
+(`tests/test_experience_decision.py::TestH2StructuralCounterexample`) —
+not a bug fix, a recorded, currently-reachable behavior.
+
+**Corrected H2 interpretation, replacing the earlier framing**: the
+5/5 preservation in the main-experiment batch was not evidence that "v3
+protects explicit current instructions" — it was evidence that "v3
+protects distributions the existing stability criterion already judges
+stable," and in this particular batch, the explicit-export delegation
+always sampled to a stable distribution. The precise, now-confirmed
+statement is:
+
+> **The current v3 harness guarantees stable-current preservation. It
+> does not, in general, guarantee explicit-current preservation** — those
+> two properties coincide only when sampling on an explicit instruction
+> happens to be stable, which is not guaranteed by anything in the current
+> contract.
+
+### Audit: does any existing signal distinguish "explicit" from "merely certain"?
+
+Searched `principal_agent.py`, `delegate_agent.py`, `clarification.py`,
+`agent_experience.py`, `experience_evidence.py`, `rule_engine.py`, and
+`semantic.py` for any structural (non-textual) signal that a delegation's
+text *explicitly specified* a facet, as distinct from the model simply
+being confident about it. **Found: no such signal exists in the real-agent
+(oracle-free) Phase B path.** The one place a related concept exists is
+`semantic.Principal.refuses` (legacy Phase A controlled-benchmark oracle —
+`Principal` is constructed with a known `truth: Interpretation` and a set
+of dimensions it "refuses" to specify, simulating underspecification) —
+but this is oracle-aware by construction (`self.truth`) and is exactly the
+kind of ground-truth dependency this whole research arc has structurally
+avoided in the real pipeline; reusing it here would reintroduce a
+`task.truth`-equivalent into a supposedly oracle-free path. `Agent
+DelegationRuntime`'s existing fusion check
+(`principal_intent.intended_action != authority_verdict.interpretation →
+REJECT`) is a *post-hoc*, runtime-level safety net that could, if v3 were
+ever wired into the runtime, catch a divergence after the fact — but it is
+not reachable from this offline harness (not integrated, per instruction),
+and it rejects the whole delegation rather than gating whether evidence
+should be consulted in the first place. **Conclusion: entropy is
+currently the only signal available, and it answers "is the current
+action uncertain?", not "did the current request leave this facet
+unspecified?"** No new explicitness heuristic (keyword/regex, LLM
+classifier, new threshold) was created to fill this gap — per instruction,
+this is reported as an open structural question for design review, not
+silently patched.

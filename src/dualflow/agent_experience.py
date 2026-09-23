@@ -54,7 +54,33 @@ class AgentExperience:
     """Principal이 실제로 확인해준 clarification 결과 하나.
 
     `pre_entropy`/`post_entropy`는 `pre_distribution`/`post_distribution`
-    이 이미 갖고 있는 값의 별칭일 뿐이다 — 새로 저장하지 않는다(중복 금지)."""
+    이 이미 갖고 있는 값의 별칭일 뿐이다 — 새로 저장하지 않는다(중복 금지).
+
+    `confirmed_facets` — v3 provenance 보완(2026-09-23,
+    docs/experiments/agent_connected_eval.md §23 follow-up). `confirmed_
+    interpretation`의 action/resource/scope/condition 네 필드는 전부 항상
+    값이 채워져 있지만(빈 값이면 `""`/`frozenset()`), "값이 존재한다"는
+    것과 "Principal이 그 facet을 실제로 clarify/confirm했다"는 것은
+    다르다 — 예를 들어 이 pilot 시나리오는 resource/scope를 항상 환경으로
+    고정해두므로(B6.1 grounded pilot), clarification은 사실상 항상
+    action facet만 겨냥한다. `confirmed_interpretation.scope`에 값이
+    있다고 해서 그 scope가 "이 Principal이 과거에 확인해준 재사용 가능한
+    사실"이 되는 건 아니다 — 그냥 그 episode에서 우연히 그 값이었을
+    뿐이다.
+
+    `build_verified_experience()`가 이 필드를 채운다 — `result.question.
+    target_facets`를 그대로 물려받는다(`clarification.ClarifyingDelegate.
+    resolve()`가 질문을 만들기 *전에* 이미 계산해서 그 질문 자체를 그
+    facet만 묻도록 제약한 값). "pre_distribution에서 값이 갈렸던 facet"과
+    "실제로 Principal에게 물어본 facet"을 구분하지 못했던 이전 버전(v3
+    §23 follow-up 2)의 문제를 이렇게 고쳤다 — 자세한 경위는
+    `clarification.py`의 `_facets_that_varied()` docstring 참고. 기본값은
+    `frozenset()`(아무 facet도 confirmed 아님) — 이 클래스를 직접 생성하는
+    기존 코드(`agent_smoke.py`의 `EXAMPLE_PRIOR_EXPERIENCE`,
+    `experience_transfer.py`의 `make_experience()`)는 이 필드를 넘기지
+    않으므로 그대로 `frozenset()`이 되고, 이건 의도적으로 안전한 쪽
+    (fail-closed)이다 — "무엇이 confirmed됐는지 모르면 아무것도 evidence로
+    쓰지 않는다"."""
 
     principal_id: str
     task_category: str
@@ -68,6 +94,7 @@ class AgentExperience:
     pre_distribution: CandidateDistribution
     post_distribution: CandidateDistribution
 
+    confirmed_facets: frozenset[str] = frozenset()
     episode_id: str | None = None
 
     @property
@@ -79,6 +106,16 @@ class AgentExperience:
         return self.post_distribution.entropy
 
 
+def _facet_resolved(distribution: CandidateDistribution, facet: str) -> bool:
+    """`distribution`의 candidate들이 이 facet 하나에 대해 정확히 하나의
+    값으로 수렴했는지. `clarification._facets_that_varied()`와 정확히
+    같은 저수준 연산("이 facet의 값이 몇 종류인가")을 반대 방향(pre가
+    아니라 post, 여러 facet이 아니라 특정 facet 하나)으로 재사용한 것뿐
+    — 새 heuristic이 아니다."""
+    values = {getattr(interp, facet) for interp in distribution.belief}
+    return len(values) == 1
+
+
 def build_verified_experience(result: ClarificationResult, *, principal_id: str,
                               task_category: str, delegation: str,
                               max_verified_entropy: float = 0.0,
@@ -86,20 +123,40 @@ def build_verified_experience(result: ClarificationResult, *, principal_id: str,
     """`ClarifyingDelegate.resolve()`의 결과를 검증된 경험으로 바꾼다 —
     자격이 안 되면 `None`을 돌려준다. 이 함수 자체는 아무것도 저장하지
     않는다 — 호출자가 반환값이 `None`이 아닐 때만 명시적으로
-    `store.add(...)`해야 한다(B7c는 의도적으로 자동 저장을 하지 않는다,
-    `ClarifyingDelegate` 자체는 전혀 건드리지 않았다).
+    `store.add(...)`해야 한다(B7c는 의도적으로 자동 저장을 하지 않는다).
+
+    `confirmed_facets` 최종 계약(v3 §23 follow-up 5) — `result.question.
+    target_facets`(항상 0개 또는 1개, follow-up 4)를 그대로 승격하지
+    않는다. singleton이 보장하는 건 "이번 round에서 confirmed 후보가 될 수
+    있는 facet은 최대 하나"까지이지, "Principal이 실제로 그 facet에 명확히
+    답했다"까지는 아니다(모호하거나 회피하는 답변일 가능성은 singleton
+    구조로도 없어지지 않는다). answer 텍스트를 재해석하지 않고 이걸
+    구조적으로 확인할 방법은 이미 있다 — `result.post_distribution`이다:
+    target facet에 대해 post-clarification candidate들이 실제로 하나의
+    값으로 수렴했는지(`_facet_resolved()`)를 본다. 수렴하지 않았다면(예:
+    `max_verified_entropy`를 느슨하게 설정해서, joint entropy 조건은
+    통과했지만 target facet 자체는 여전히 갈리는 경우) 그 facet은
+    confirmed로 승격하지 않는다 — `confirmed_facets = frozenset()`.
+    기본값 `max_verified_entropy=0.0`에서는 joint entropy가 이미 0으로
+    수렴해야 하므로(위 조건) 이 추가 검사가 사실상 항상 참이지만,
+    `max_verified_entropy`를 느슨하게 준 호출에서는 이 검사가 실제로
+    막아주는 경우가 생긴다 — 그게 이 검사를 추가한 이유다.
 
     `delegation`을 별도 인자로 받는 이유: `ClarificationResult`는
     `resolve()`에 넘겼던 원본 delegation 텍스트를 자체적으로 갖고 있지
     않다 — 호출자(= `resolve(delegation=...)`를 부른 쪽)가 이미 알고
-    있으므로 그대로 넘겨주면 된다. `clarification.py`는 이 함수 때문에
-    수정되지 않았다."""
+    있으므로 그대로 넘겨주면 된다."""
     if not result.clarified:
         return None
     if result.question is None or result.answer is None or result.post_distribution is None:
         return None
     if result.post_distribution.entropy > max_verified_entropy:
         return None
+
+    confirmed_facets = frozenset(
+        facet for facet in result.question.target_facets
+        if _facet_resolved(result.post_distribution, facet)
+    )
 
     return AgentExperience(
         principal_id=principal_id,
@@ -110,6 +167,7 @@ def build_verified_experience(result: ClarificationResult, *, principal_id: str,
         confirmed_interpretation=result.final_interpretation,
         pre_distribution=result.pre_distribution,
         post_distribution=result.post_distribution,
+        confirmed_facets=confirmed_facets,
         episode_id=episode_id,
     )
 
