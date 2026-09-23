@@ -521,7 +521,9 @@ meaningful.**
 | H2 structural counterexample (stale-history override reachable when sampling is unstable) | **confirmed via deterministic regression test, no API — resolved by Option B, see below (§24 follow-up)** |
 | Sender-side provenance audit (does anything upstream of `delegation` text distinguish "explicitly asserted" from "merely confident"?) | **complete — no such signal exists in the current codebase; no API calls (§24 follow-up)** |
 | `v3` Option B redesign (conservative abstention — historical evidence downgraded to advisory/clarification-triggering, automatic override withdrawn) | **implemented, regression-tested, no API calls (§24 follow-up)** |
-| Sequential experience evaluation (B7e) | not started |
+| Option B replay of frozen §24 real-API data (0 API calls, not a new experiment) | **complete — 0/5 automatic override on both tasks, 2/5 ambiguous clarification-triggered (§24 follow-up)** |
+| `v3` final contract | **frozen at commit `0f1cf7c` (§24) — Option A left as future work, not pursued** |
+| Sequential experience evaluation (B7e) | **next up — see §25 audit** |
 
 The sequential multi-episode experiment (B7e) stays intentionally
 postponed. The canonical-context B7d.3 re-run (§16) removed the
@@ -2425,3 +2427,103 @@ Not done in this pass, per instruction: no API calls, no A′ (repeated
 `restate_intent()`) experiment, no Option A protocol/schema
 implementation, no runtime integration, no B7e, no new classifier, no
 explicitness heuristic, no threshold change, no prompt tuning.
+
+### Follow-up: Option B replay of the frozen §24 main-experiment data (0 API calls)
+
+**This is not a new experiment.** It makes zero LLM calls and samples zero
+new candidates. It is a deterministic re-evaluation of the exact same
+frozen candidate distributions the 200-call real-API main experiment above
+already produced (`belief_by_action`/`entropy`/`baseline_decision` per
+row, taken verbatim from that run's machine-readable output), now passed
+through the current (Option B) `FrozenCandidateEvidenceHarness` instead of
+the REVISION-1 (automatic-resolution) one that originally processed them.
+Script: `experiments/diagnostics/experience_decision_option_b_replay.py`.
+
+```
+task             run  entropy   baseline   ORIGINAL stage                 ORIGINAL final   OPTION-B stage                     OPTION-B final
+ambiguous        1    0.7219    export     stable_baseline                export       stable_baseline                    export
+ambiguous        2    0.8113    export     ambiguous_resolved_by_evidence summarize    historical_evidence_requires_clarification export
+ambiguous        3    0.4690    export     stable_baseline                export       stable_baseline                    export
+ambiguous        4    0.9341    export     ambiguous_resolved_by_evidence summarize    historical_evidence_requires_clarification export
+ambiguous        5    0.4690    export     stable_baseline                export       stable_baseline                    export
+explicit_change  1    0.0000    export     stable_baseline                export       stable_baseline                    export
+explicit_change  2    0.0000    export     stable_baseline                export       stable_baseline                    export
+explicit_change  3    0.0000    export     stable_baseline                export       stable_baseline                    export
+explicit_change  4    0.0000    export     stable_baseline                export       stable_baseline                    export
+explicit_change  5    0.0000    export     stable_baseline                export       stable_baseline                    export
+```
+
+**Original v3 automatic-transfer result** (REVISION-1, already recorded
+above, unchanged): `runs_resolved_by_evidence=2/5`,
+`historical_override_count_F4=0/5` — the 2 unstable ambiguous runs were
+automatically resolved to the historically-confirmed `"summarize"`.
+
+**Final conservative-v3 replay result** (Option B, this follow-up, same
+frozen data):
+
+```
+Ambiguous task:
+  history-triggered clarification rate = 2/5
+  automatic historical override rate   = 0/5
+  stable baseline preservation          = 3/3 (of the 3 runs the stability gate short-circuited)
+Explicit-change task:
+  current decision preservation         = 5/5
+  automatic historical override         = 0/5
+```
+
+The two ambiguous runs that REVISION-1 auto-resolved to `"summarize"`
+(runs 2 and 4, entropy 0.811 and 0.934) now land on
+`historical_evidence_requires_clarification` instead: the SUPPORT/CONFLICT
+relation is still computed and recorded (`{"export": CONFLICT,
+"summarize": SUPPORT}`, identical to REVISION-1's), but `final_value`
+stays at the baseline `"export"` rather than being overridden. The
+explicit-change task's result is byte-identical between REVISION-1 and
+Option B on this particular frozen batch, because all 5 of its runs
+sampled to a stable (entropy=0.000) distribution — the two contracts only
+diverge in how they treat an *unstable* distribution with eligible
+supporting history, which the ambiguous task's runs 2 and 4 are the only
+examples of in this dataset. (This is also why the deterministic
+`export=.55/summarize=.45` counterexample earlier in this section remains
+essential: it is what actually demonstrates the divergence on the
+explicit-change side, which this real-API batch happened not to sample.)
+
+### Final v3 contract (frozen at commit `0f1cf7c`)
+
+> Historical verified experience is non-authoritative semantic evidence.
+> It may: identify that a previously Principal-confirmed interpretation
+> exists; expose SUPPORT/CONFLICT relations for the same confirmed facet;
+> trigger clarification when the current semantic state is ambiguous. It
+> may not: automatically replace the current semantic decision; override a
+> current candidate value; transfer unconfirmed facets; introduce a value
+> absent from the current candidates; propagate evidence across facets.
+
+**v3 design is frozen as of commit `0f1cf7c`.** Option A
+(delegation-protocol-level `asserted_facets` provenance) is explicitly
+*not* pursued in this research arc — it is a genuine change to the
+delegation protocol itself (every upstream caller would need to start
+producing structured per-facet provenance that nothing in the current
+codebase produces today), not a v3-harness-level fix, and is recorded here
+as future work rather than implemented. Not pursued further in this arc,
+for the same reason (protocol/scope expansion, not a v3 fix): Option A /
+`asserted_facets` protocol implementation, repeated-`restate_intent()`
+Option A′, an explicitness classifier, further v3 API repetitions, new
+history conditions, threshold tuning, v3 prompt tuning. Any of these may
+be revisited as limitations/future-work items in write-up, not as further
+implementation in this research arc.
+
+**Revision progression, updated** (extends the six-step progression
+above with this follow-up's replay, still nothing erased): natural-language
+history → structured transfer → provenance-limited confirmed_facets →
+real-API transfer confirmed (H1 2/5 activation, 2/2 conditional success)
+→ F4 counterexample found (deterministic) → sender-side assertion
+provenance confirmed absent (audit) → historical evidence downgraded to
+advisory (Option B) → **the same real-API frozen data replayed against
+Option B, confirming 0/5 automatic override on both tasks while the
+ambiguous task's 2/5 evidence-triggered-clarification signal is
+preserved as a clarification trigger, not lost**. This progression — establishing empirically why
+automatic historical reuse is unsafe before adopting the conservative
+contract, rather than assuming it from the start — is the intended
+narrative contribution of this arc, not a limitation to explain away.
+Option A remains open as a natural "future work" direction (automatic
+reuse becomes safe once the delegation protocol itself carries
+provenance-aware assertions), not abandoned, just out of scope here.
