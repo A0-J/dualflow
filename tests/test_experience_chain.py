@@ -37,7 +37,7 @@ import pytest
 _DIAGNOSTICS_DIR = Path(__file__).resolve().parents[1] / "experiments" / "diagnostics"
 sys.path.insert(0, str(_DIAGNOSTICS_DIR))
 
-from experience_chain_experiment import run_chain  # noqa: E402
+from experience_chain_experiment import chain_is_seeded, run_chain, summarize_logs  # noqa: E402
 
 from dualflow.llm import LLMResponse  # noqa: E402
 
@@ -107,6 +107,21 @@ def _build_path_a() -> tuple[_FakeLLMClient, _FakeLLMClient]:
         LLMResponse(text="summarize"),  # E4
     ]
     return _FakeLLMClient(delegate_responses), _FakeLLMClient(principal_responses)
+
+
+def _build_path_c_unseeded() -> tuple[_FakeLLMClient, _FakeLLMClient]:
+    """Every episode samples stable -- E1 never seeds the store, and it
+    stays empty through E4. A valid real execution path (not forced/
+    retried), used to confirm chain_is_seeded()==False and that
+    summarize_logs() does not count this chain's episodes as "0%%
+    exposure" in the history-advisory-exposure-rate denominator."""
+    delegate_responses = (
+        _stable("export", _SCOPES["E1_august_seed"])
+        + _stable("export", _SCOPES["E2_september_ambiguous"])
+        + _stable("export", _SCOPES["E3_october_explicit_export"])
+        + _stable("export", _SCOPES["E4_november_observation"])
+    )
+    return _FakeLLMClient(delegate_responses), _FakeLLMClient([])
 
 
 def _build_path_b() -> tuple[_FakeLLMClient, _FakeLLMClient]:
@@ -268,3 +283,91 @@ class TestFakeClientExhaustion:
                  episodes=EPISODES, llm_client=combined, n=4)
         assert delegate_client._responses == []
         assert principal_client._responses == []
+
+
+class TestSameDistributionGuarantee:
+    """B7e SS25 follow-up의 1번 요구사항: harness가 판단에 쓴 distribution
+    과 clarification이 실제로 쓰는 pre_distribution이 정확히 같은
+    object여야 한다 -- run_chain()이 `delegate.sample_candidates()`를
+    episode당 정확히 한 번만 부르고, 그 결과를 `harness.decide()`와
+    `clarifier.resolve(pre_distribution=...)` 둘 다에 넘긴다는 것을
+    call-count로 검증한다(같은 큐를 두 번 소비했다면 카운트가 어긋난다)."""
+
+    def test_delegate_call_count_matches_exactly_once_pre_sampling_per_episode(self):
+        """Path A: E1/E2/E4는 ambiguous(4 pre + 1 question + 4 post = 9),
+        E3는 stable(4 pre만). 만약 pre-sampling이 어딘가에서 중복
+        호출됐다면 이 합계(9+9+4+9=31)를 넘어서다가 fake client가
+        "큐 소진" AssertionError를 던진다 -- 즉 이 테스트가 그냥
+        통과한다는 사실 자체가 이중 sampling이 없다는 증거다."""
+        delegate_client, principal_client = _build_path_a()
+        combined = _CombinedClient(delegate_client, principal_client)
+        run_chain(principal_id=PRINCIPAL_ID, task_category=TASK_CATEGORY,
+                 episodes=EPISODES, llm_client=combined, n=4)
+        assert len(delegate_client.calls) == 31  # 9+9+4+9, not 9+9+4+9 + any extra pre-sampling
+
+
+class TestUnseededChain:
+    def test_e1_stable_never_forces_a_seed(self):
+        _, logs = _run(_build_path_c_unseeded)
+        e1 = logs[0]
+        assert e1.clarified is False
+        assert e1.stored is False
+        assert chain_is_seeded(logs) is False
+
+    def test_unseeded_chain_has_no_history_available_at_any_later_episode(self):
+        _, logs = _run(_build_path_c_unseeded)
+        for log in logs[1:]:
+            assert log.selected_history_episode_id is None
+            assert log.decision_stage is None  # nothing to consult -- not "no support", just absent
+
+
+class TestSummarizeLogsMetricSeparation:
+    """clarification_rate과 history_advisory_exposure_rate는 서로 다른
+    causal 질문에 답한다 -- 하나로 합쳐지면 안 된다."""
+
+    def test_clarification_rate_is_independent_of_history_availability(self):
+        """Path A/Path B 둘 다 E1/E2/E4가 ambiguous이므로 clarified=True
+        (E1은 history가 아예 없었는데도 clarified됐다) -- clarification은
+        history 유무와 무관하게 현재 entropy만으로 결정된다."""
+        _, logs = _run(_build_path_a)
+        summary = summarize_logs([logs])
+        # E1, E2, E4 clarified (ambiguous); E3 stable, not clarified.
+        assert summary["clarification_rate"]["numerator_clarified"] == 3
+        assert summary["clarification_rate"]["denominator_all_episodes"] == 4
+
+    def test_history_advisory_exposure_excludes_unseeded_chain_from_denominator(self):
+        """history가 한 번도 생긴 적 없는 chain은 exposure-rate 분모에
+        아예 안 들어가야 한다 -- "0%% 노출"로 잘못 세면 안 된다."""
+        _, logs_unseeded = _run(_build_path_c_unseeded)
+        summary = summarize_logs([logs_unseeded])
+        assert summary["history_advisory_exposure_rate"]["denominator_ambiguous_with_history_available"] == 0
+        assert summary["n_unseeded_chains"] == 1
+        assert summary["n_seeded_chains"] == 0
+
+    def test_history_advisory_exposure_counts_only_ambiguous_episodes_with_available_history(self):
+        """Path A: E2와 E4가 ambiguous + history 존재 + eligible ->
+        exposure 분자/분모 모두 2. E1은 ambiguous였지만 history가 없었으므로
+        분모에서 제외된다. E3는 history는 있었지만 stable이라 애초에
+        ambiguous 집합에 안 들어간다."""
+        _, logs = _run(_build_path_a)
+        summary = summarize_logs([logs])
+        assert summary["history_advisory_exposure_rate"] == {
+            "numerator_eligible_and_consulted": 2,
+            "denominator_ambiguous_with_history_available": 2,
+            "note": summary["history_advisory_exposure_rate"]["note"],
+        }
+
+    def test_safety_integrity_counts_are_all_zero_on_well_formed_chains(self):
+        for path_builder in (_build_path_a, _build_path_b, _build_path_c_unseeded):
+            _, logs = _run(path_builder)
+            summary = summarize_logs([logs])
+            assert summary["automatic_historical_override_count"] == 0
+            assert summary["unverified_store_contamination_count_F6"] == 0
+            assert summary["sequence_order_violation_count_F7"] == 0
+            assert summary["cross_facet_transfer_count"] == 0
+
+    def test_store_update_count_matches_number_of_stored_episodes(self):
+        _, logs_a = _run(_build_path_a)
+        _, logs_b = _run(_build_path_b)
+        assert summarize_logs([logs_a])["store_update_count"] == 3  # E1, E2, E4
+        assert summarize_logs([logs_b])["store_update_count"] == 4  # E1, E2, E3, E4

@@ -523,7 +523,7 @@ meaningful.**
 | `v3` Option B redesign (conservative abstention — historical evidence downgraded to advisory/clarification-triggering, automatic override withdrawn) | **implemented, regression-tested, no API calls (§24 follow-up)** |
 | Option B replay of frozen §24 real-API data (0 API calls, not a new experiment) | **complete — 0/5 automatic override on both tasks, 2/5 ambiguous clarification-triggered (§24 follow-up)** |
 | `v3` final contract | **frozen at commit `0f1cf7c` (§24) — Option A left as future work, not pursued** |
-| B7e Phase 1 — sequential experience chain (design, scenario, driver, 0-API deterministic validation) | **complete — 12/12 tests pass, min/max call budget computed (240/504) — not yet run with real API (§25)** |
+| B7e Phase 1 — sequential experience chain (design, scenario, driver, 0-API deterministic validation) | **complete — 40 tests pass (20+20), RQ/metrics revised, pre_distribution same-object guarantee added, budget revised to 80/168 (1 chain) — not yet run with real API (§25)** |
 
 The sequential multi-episode experiment (B7e) stays intentionally
 postponed. The canonical-context B7d.3 re-run (§16) removed the
@@ -2530,6 +2530,13 @@ provenance-aware assertions), not abandoned, just out of scope here.
 
 ## 25. B7e Phase 1 — Sequential Experience Chain (Design + Deterministic Validation, Not Yet Run)
 
+> **Status update**: the RQ, metrics, and call-budget below were revised
+> before any real API call was made — see "Follow-up: pre_distribution
+> fix, RQ/metric revision, and Phase 1 scale-down" at the end of this
+> section. The original text below is left unedited as the design record;
+> the follow-up supersedes its RQ/metrics/success-criteria/scale, not its
+> audit or scenario/driver construction (those still stand).
+
 v3 is closed as of §24 (frozen at commit `0f1cf7c`). This section starts
 B7e, the sequential multi-episode evaluation §12 deferred until the
 representation problem was fixed — which the whole v2→v3 arc has now
@@ -2707,3 +2714,134 @@ protocol, no `ExperienceAwareDelegate` natural-language injection
 anywhere in this chain, no threshold tuning, no prompt tuning, no B7f or
 any step beyond B7e Phase 1. Awaiting review of this design before any
 real-API execution.
+
+### Follow-up: pre_distribution fix, RQ/metric revision, and Phase 1 scale-down
+
+Reviewed before any real API call, per instruction. Two issues, both
+addressed with zero API calls.
+
+**1. Same-distribution guarantee.** Audited whether the driver could feed
+the harness and `ClarifyingDelegate.resolve()` two independently-sampled
+distributions for the same episode. Finding: the version above already
+called `resolve()` exactly once per episode and reused its own
+internally-produced `result.pre_distribution` for the harness — there was
+no actual double-sampling bug. The concrete fix requested was still
+implemented regardless, because it turns an invariant that held only
+because of how the driver happened to be written into one that is
+structurally guaranteed and independently testable:
+
+- `ClarifyingDelegate.resolve()` (`src/dualflow/clarification.py`) gained
+  an optional `pre_distribution: CandidateDistribution | None = None`
+  parameter. `None` (the default) preserves byte-identical behavior for
+  every existing reproducer/test — confirmed by re-running
+  `tests/test_clarification.py` unchanged (still green) plus three new
+  tests (`TestPrecomputedPreDistribution`) locking in both the
+  backward-compatible default and the skip-internal-sampling path
+  (asserted via `is`, and via the fake client's exact call count).
+- `experience_chain_experiment.run_chain()` now calls
+  `delegate.sample_candidates()` exactly once per episode and passes that
+  same object into both `harness.decide(distribution=pre, ...)` and
+  `clarifier.resolve(..., pre_distribution=pre)`, with an explicit
+  `assert result.pre_distribution is pre` immediately after the call.
+  `tests/test_experience_chain.py::TestSameDistributionGuarantee` locks
+  this down at the driver level via exact delegate-call-count (31 for
+  Path A) — if pre-sampling ever happened twice, the fake client's
+  response queue would run out and raise before that count could match.
+
+**Revised call budget** (recomputed from the actual code, not assumed —
+post-sampling uses `ClarifyingDelegate.n`, which `run_chain()` sets equal
+to `n_samples`, i.e. 20, not the library's own default of 10): the fixed
+pre-sampling cost per episode is unchanged (exactly `n_samples` calls,
+now made once by the driver instead of once inside `resolve()` — same
+count either way), so the numeric budget is **unchanged**: fixed = 80 (4
+episodes × 1 chain × 20) / 240 (4 × 3 × 20); per-ambiguous-episode extra =
+1 (question) + 1 (answer) + 20 (post) = **22**, not 12 — 12 would only be
+correct if post-sampling used `n=10`, which this driver does not.
+
+```
+$ python experiments/diagnostics/experience_chain_experiment.py --budget-only --samples 20 --chains 1
+minimum total calls (0/4 episodes ambiguous): 80
+maximum total calls (4/4 episodes ambiguous): 168
+
+$ python experiments/diagnostics/experience_chain_experiment.py --budget-only --samples 20 --chains 3
+minimum total calls (0/12 episodes ambiguous): 240
+maximum total calls (12/12 episodes ambiguous): 504
+```
+
+**2. RQ-B7e and metrics revised.** Under the frozen Option B contract,
+clarification-triggering is determined entirely by the current
+distribution's own entropy exceeding `ClarifyingDelegate`'s threshold —
+identical with or without eligible history (Option B never makes history
+participate in that gate; it only computes an advisory relation
+*alongside* a clarification decision current ambiguity already made on
+its own). Framing `historical_evidence_requires_clarification` as
+"history caused clarification" would attribute the existing baseline
+ambiguity gate's own behavior to history. RQ-B7e is corrected to:
+
+> Across sequential episodes, does verified historical evidence remain
+> provenance-bounded, temporally ordered, and non-authoritative as the
+> experience store evolves?
+
+`clarification_rate` (driven purely by current-episode entropy) and
+`history_advisory_exposure_rate` (of ambiguous episodes where eligible
+history was actually available, how many had that history actually
+looked at — computed only over episodes where history was available at
+all, so an unseeded chain contributes zero to the denominator rather than
+reading as "0% exposure") are now reported separately and never merged
+into one number — `experience_chain_experiment.summarize_logs()`, tested
+by `TestSummarizeLogsMetricSeparation`. The safety/integrity metrics kept
+from the original design (automatic override count, F6/F7 counts,
+cross-facet transfer count, store update count, latest-history-selected
+log) are unchanged in meaning.
+
+**Success criteria, revised to integrity-only** (S1–S7, replacing the
+original S1–S6 — clarification-count/entropy reduction were never valid
+success criteria under Option B and are explicitly excluded now):
+
+- S1 automatic historical override = 0
+- S2 unverified output never enters the store
+- S3 only a verified clarification result can update the store
+- S4 episode N references only the latest verified experience that
+  existed at its own execution time
+- S5 future-episode/history leakage = 0
+- S6 evidence transfer beyond the confirmed facet = 0
+- S7 a historical relation never directly changes the current semantic
+  decision (it may only accompany a clarification current ambiguity
+  already triggered)
+
+**E1 seeding is never forced.** `run_chain()`/`main()` contain no retry
+logic; if E1 samples stable, no experience is stored and the chain
+proceeds with `selected=None` through the rest of the episodes — a valid
+real execution path ("unseeded chain"), not a failure. `chain_is_seeded()`
+records this per chain; `summarize_logs()` reports `n_seeded_chains`/
+`n_unseeded_chains` separately and excludes unseeded chains' episodes
+from the exposure-rate denominator (`TestUnseededChain`,
+`test_history_advisory_exposure_excludes_unseeded_chain_from_
+denominator`).
+
+**Scale-down.** `--chains` default changed from 3 to 1. Phase 1's purpose
+is end-to-end sequential *contract* validation against real API data, not
+a statistically powered efficacy result — deterministic path-diversity
+coverage (E3 stored vs. not-stored) already exists via the fake-LLM Path
+A/Path B tests. The plan is to run exactly one real chain first (4
+episodes, ~80–168 real API calls depending on how many episodes turn out
+ambiguous), confirm the real-API timeline matches what the deterministic
+tests predict (store timeline, selected latest history per episode,
+clarification occurrences, verified-experience insertions, advisory
+relations, automatic-override count — must be 0 — and token usage), and
+only then decide whether 3 chains add anything worth the extra cost.
+
+**Verification**: `pytest -q` full suite green (`test_clarification.py`
+17→20 tests, `test_experience_chain.py` 12→20 tests, every pre-existing
+test in both files unchanged); `git diff --stat` confirms only
+`src/dualflow/clarification.py` (additive, backward-compatible parameter),
+`experiments/diagnostics/experience_chain_experiment.py`,
+`tests/test_clarification.py`, and `tests/test_experience_chain.py`
+changed — no fixed reproducer, no other v3/B7d source module, no
+`agent_smoke.py`. Still no API calls made in this follow-up.
+
+Not done in this follow-up, per instruction: no real API execution (the
+single real chain proposed above awaits explicit go-ahead), no retry-
+until-ambiguous logic anywhere, no claim that history improves outcomes,
+no multi-history aggregation, no Option A, no threshold/prompt tuning, no
+B7f, no runtime integration.

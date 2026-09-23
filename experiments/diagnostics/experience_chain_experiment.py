@@ -1,20 +1,30 @@
 """B7e Phase 1 -- minimal sequential experience-chain experiment.
 
     python experiments/diagnostics/experience_chain_experiment.py \\
-        --model gpt-4o-mini-2024-07-18 --samples 20 --chains 3
+        --model gpt-4o-mini-2024-07-18 --samples 20 --chains 1
 
 NOT YET RUN WITH REAL API CALLS as of this commit -- this module only
 builds the chain (scenario + driver) and validates it deterministically
 with a fake LLM client (see tests/test_experience_chain.py). Per
-instruction, no API calls are made until the design below is reviewed.
+instruction, the first real-API execution is a single chain (--chains 1,
+now the default), not the originally planned 3 -- Phase 1's purpose is
+end-to-end sequential *contract validation*, not a statistically powered
+result, so there is no reason to spend a 3x budget before confirming the
+real API path behaves as the deterministic tests already predict.
 
-RQ-B7e (docs/experiments/agent_connected_eval.md SS25, replacing the
-pre-v3 "does history reduce uncertainty" framing): across sequential
-episodes, can verified historical semantic evidence remain
-provenance-bounded and non-authoritative while still identifying when
-clarification is warranted, and while only Principal-verified outcomes
-(never merely-stable model output) enter the store that the next episode
-reads?
+RQ-B7e (docs/experiments/agent_connected_eval.md SS25 follow-up --
+REVISED from this module's first version, which framed history as
+something that "identifies when clarification is warranted." That framing
+conflated two independent things: under the frozen Option B contract,
+clarification is triggered purely by the CURRENT distribution's own
+entropy exceeding the same threshold `ClarifyingDelegate` already used
+before any of this existed -- with or without eligible history. History
+being eligible only adds an advisory SUPPORT/CONFLICT relation alongside
+a clarification that current ambiguity was already going to trigger. Only
+one thing is actually new to verify here -- not "does history help", but):
+does verified historical evidence remain provenance-bounded, temporally
+ordered, and non-authoritative as the experience store evolves across a
+sequence of episodes?
 
 Design (per instruction, Phase 1 minimum, do not expand without review):
   - chain length = 4 episodes (E1 August seed / E2 September ambiguous /
@@ -22,7 +32,10 @@ Design (per instruction, Phase 1 minimum, do not expand without review):
     observation point -- see experiments/scenarios/
     external_audit_finance_chain.json for the full rationale each
     episode's role encodes)
-  - runs = 3 independent chains (--chains, default 3)
+  - runs = 1 real chain first (--chains, default 1) -- expand to more
+    chains only after this one chain's real-API path is confirmed sound;
+    deterministic (fake-LLM) coverage of chain-to-chain path diversity
+    already exists (tests/test_experience_chain.py's Path A/Path B)
   - experience selection = latest-only, reusing the exact recency
     convention ExperienceAwareDelegate already established
     (`all_experiences[-self.max_experiences:]` with max=1 here):
@@ -37,12 +50,31 @@ Design (per instruction, Phase 1 minimum, do not expand without review):
     generation prompt (ExperienceAwareDelegate's v1/v2 natural-language
     injection is deliberately NOT used anywhere in this chain, per the
     v3 architectural boundary B7d.6 established).
+  - SAME-DISTRIBUTION GUARANTEE (this module's own follow-up fix): each
+    episode samples its pre-clarification candidate distribution EXACTLY
+    ONCE, via one `DelegateAgent.sample_candidates()` call in `run_chain()`
+    below -- that single object is passed BOTH into
+    `FrozenCandidateEvidenceHarness.decide()` (for the advisory relation)
+    AND into `ClarifyingDelegate.resolve(pre_distribution=...)` (a new,
+    backward-compatible optional parameter on `resolve()` -- default
+    `None` preserves every existing reproducer/test's exact prior
+    behavior; see `clarification.py`). This makes "the distribution the
+    harness judged" and "the distribution clarification actually acted
+    on" the same object by construction, not merely equal by coincidence
+    -- `tests/test_experience_chain.py` asserts this with `is`, not `==`.
+    (Audited before this fix: the module's first version already called
+    `resolve()` exactly once per episode and reused its own internally-
+    produced `pre_distribution` for the harness -- there was no actual
+    double-sampling bug. This refactor makes that invariant structural
+    and explicit rather than an artifact of how the driver happened to
+    be written, and is what the instruction asked for regardless.)
   - clarification-triggering = the existing entropy threshold inside
     `ClarifyingDelegate.resolve()`, unchanged, same threshold value
     (0.8) as the harness -- these two gates are structurally the SAME
-    condition (same distribution, same threshold), so "did the harness
-    see a stable distribution" and "did resolve() decide not to
-    clarify" always agree.
+    condition (same distribution now guaranteed, same threshold), so
+    "did the harness see a stable distribution" and "did resolve()
+    decide not to clarify" always agree. Clarification-triggering is
+    NEVER attributed to history -- see RQ-B7e above.
   - storage = `build_verified_experience()`'s existing gate, unchanged.
     A stable model output that never went through clarification
     (`result.clarified is False`) is NEVER added to the store -- this is
@@ -54,6 +86,38 @@ Design (per instruction, Phase 1 minimum, do not expand without review):
     the target facet still didn't converge -- see build_verified_
     experience()'s own docstring; unreachable under the default
     max_verified_entropy=0.0 this chain uses, kept explicit anyway).
+  - E1 seeding is NEVER forced. If E1's real sampling happens to be
+    stable, no clarification is triggered, nothing is stored, and the
+    chain proceeds with no history through the remaining episodes -- this
+    is a valid real execution path (an "unseeded chain"), not a failure
+    to be retried. `run_chain()`/`main()` never resample or retry an
+    episode for any reason.
+
+Metrics (B7e SS25 follow-up -- two metrics with DIFFERENT causal meaning
+that must never be merged into one number):
+  - clarification rate: fraction of episodes where `result.clarified` is
+    True. Driven ENTIRELY by the current distribution's own entropy --
+    identical with or without any history.
+  - history advisory exposure rate: of episodes where eligible history
+    was actually available (`selected is not None` AND the facet is in
+    `selected.confirmed_facets`), the fraction where the harness actually
+    computed a relation (i.e. the current distribution was also
+    ambiguous, so `decide()` reached the support gate). This says nothing
+    about whether history caused anything -- only whether it was looked
+    at. Computed only over "seeded" chains/episodes (see below) -- an
+    unseeded chain contributes 0 eligible-history episodes and must not
+    silently count as 0% exposure.
+  Kept from the original design (safety/integrity, unchanged in meaning):
+  automatic historical override count (must be 0, asserted not just
+  recorded), unverified-store contamination count (F6, must be 0,
+  asserted), sequence-order violation count (F7, must be 0, asserted),
+  cross-facet transfer count (must be 0 -- structurally guaranteed by
+  `FrozenCandidateEvidenceHarness.decide(facet="action")` never touching
+  resource/scope/condition, already locked in at the unit level by
+  `experience_decision.py`'s own regression tests), latest verified
+  experience selection (recorded per episode), store update count.
+  Explicitly NOT success criteria: clarification-count reduction, entropy
+  reduction, or any claim that history improved an outcome.
 
 Failure taxonomy extension (F1-F5 unchanged, two new sequence-specific
 codes only, per instruction -- "새 taxonomy를 많이 만들 필요 없다"):
@@ -201,11 +265,19 @@ def run_chain(*, principal_id: str, task_category: str, episodes: list[dict], ll
                 f"sequence-order violation (F7): episode {ep['episode_id']!r} selected "
                 f"history from {selected.episode_id!r}, which has not been processed yet.")
 
-        result = clarifier.resolve(goal=ep["goal"], context=ep["context"], delegation=ep["delegation"])
+        # SAME-DISTRIBUTION GUARANTEE: sample exactly once. This exact object
+        # is what the harness judges AND what clarification acts on -- never
+        # two independent samplings of "the same" episode.
+        pre = delegate.sample_candidates(delegation=ep["delegation"], context=ep["context"], n=n)
+
+        result = clarifier.resolve(goal=ep["goal"], context=ep["context"], delegation=ep["delegation"],
+                                   pre_distribution=pre)
+        assert result.pre_distribution is pre, (
+            "resolve() did not use the precomputed pre_distribution -- the harness's input "
+            "and clarification's input have diverged.")
 
         if selected is not None:
-            decision = harness.decide(distribution=result.pre_distribution, experience=selected,
-                                      facet="action")
+            decision = harness.decide(distribution=pre, experience=selected, facet="action")
             decision_stage = decision.stage
             decision_relations = {k: v.value for k, v in decision.relations.items()}
             decision_baseline_value = decision.baseline_value
@@ -274,12 +346,83 @@ def run_chain(*, principal_id: str, task_category: str, episodes: list[dict], ll
     return store, logs
 
 
+def chain_is_seeded(logs: list[EpisodeLog]) -> bool:
+    """이 chain의 E1(첫 episode)이 실제로 verified experience를
+    만들었는가. E1이 stable하게 나와 clarification이 없었다면(강제
+    재실행 없음, 유효한 real execution path) 이 chain은 "unseeded"다 --
+    E2 이후가 독자적으로 history를 만들어낼 수는 있지만, 그건 "seed"의
+    정의(첫 episode가 만든 최초 history)와는 별개다."""
+    return bool(logs) and logs[0].stored
+
+
+def summarize_logs(all_chain_logs: list[list[EpisodeLog]], *,
+                   entropy_threshold: float = DEFAULT_ENTROPY_THRESHOLD) -> dict:
+    """B7e SS25 follow-up 지시대로 두 개의 서로 다른 causal 의미를 분리해서
+    기록한다 -- 절대 하나의 숫자로 합치지 않는다:
+
+      clarification_rate: 현재 distribution의 entropy가 threshold를 넘어서
+        실제로 clarification이 일어난 비율. History 유무와 무관하다 --
+        history가 없어도 ambiguous하면 그대로 clarification으로 간다.
+      history_advisory_exposure_rate: "ambiguous하면서 history도 실제로
+        존재했던" episode 중, 그 history가 eligible해서(confirmed_facets에
+        해당 facet이 있어서) 실제로 relation까지 계산된 비율. Unseeded
+        chain의 episode(history가 아예 없던 episode)는 이 분모에 넣지
+        않는다 -- 존재하지도 않은 history를 "조회 실패"로 세면 안 된다.
+
+    나머지는 전부 safety/integrity 카운트다(0이어야 정상)."""
+    flat = [log for logs in all_chain_logs for log in logs]
+    seeded_chains = [logs for logs in all_chain_logs if chain_is_seeded(logs)]
+    unseeded_chains = [logs for logs in all_chain_logs if not chain_is_seeded(logs)]
+
+    ambiguous = [log for log in flat if log.pre_entropy > entropy_threshold]
+    ambiguous_with_history = [log for log in ambiguous if log.selected_history_episode_id is not None]
+    ambiguous_with_eligible_history = [
+        log for log in ambiguous_with_history
+        if log.decision_stage in ("ambiguous_no_support", "historical_evidence_requires_clarification")]
+
+    return {
+        "n_chains": len(all_chain_logs),
+        "n_seeded_chains": len(seeded_chains),
+        "n_unseeded_chains": len(unseeded_chains),
+        "n_episodes_total": len(flat),
+
+        "clarification_rate": {
+            "numerator_clarified": sum(1 for log in flat if log.clarified),
+            "denominator_all_episodes": len(flat),
+        },
+        "history_advisory_exposure_rate": {
+            "numerator_eligible_and_consulted": len(ambiguous_with_eligible_history),
+            "denominator_ambiguous_with_history_available": len(ambiguous_with_history),
+            "note": ("denominator excludes episodes where no history was available at all "
+                    "(unseeded-so-far chains/episodes are not counted as 0%% exposure)"),
+        },
+
+        # safety/integrity -- all MUST be 0 (also asserted inline in run_chain(), not just counted here)
+        "automatic_historical_override_count": sum(1 for log in flat if log.automatic_override),
+        "unverified_store_contamination_count_F6": sum(
+            1 for log in flat if log.stored and not log.clarified),
+        "sequence_order_violation_count_F7": 0,  # would have raised in run_chain() otherwise
+        "cross_facet_transfer_count": 0,  # structurally impossible -- decide(facet="action") only
+
+        "store_update_count": sum(1 for log in flat if log.stored),
+        "latest_history_selected_per_episode": [
+            {"episode_id": log.episode_id, "selected_history_episode_id": log.selected_history_episode_id,
+             "selected_history_action": log.selected_history_action}
+            for log in flat
+        ],
+    }
+
+
 def compute_call_budget(*, n_episodes: int, n_chains: int, n_samples: int) -> dict:
     """API 실행 전 min/max budget -- clarification 발생 여부에 따라 달라
     지므로 고정 숫자로 위장하지 않는다. Fixed: 모든 episode가 반드시 최소
-    한 번 pre-sampling을 한다(resolve()가 항상 먼저 하는 일). Variable:
-    ambigu한 episode마다 question(1) + answer(1) + post-sampling(n_samples)
-    이 추가된다."""
+    한 번 pre-sampling을 한다(이제 `run_chain()`이 명시적으로 정확히 한
+    번만 하는 일 -- SAME-DISTRIBUTION GUARANTEE 참고). Variable: ambiguous
+    한 episode마다 question(1) + answer(1) + post-sampling이 추가되고,
+    post-sampling은 `ClarifyingDelegate.n`과 동일한 값(`n_samples`)을
+    쓴다 -- 이 값은 실제 코드(`run_chain()`이 `ClarifyingDelegate(n=n,
+    ...)`으로 pre/post에 같은 n을 준다)에서 확인한 값이지, B7b 시절 흔한
+    n=10 기본값을 가정한 것이 아니다."""
     total_episodes = n_episodes * n_chains
     fixed = total_episodes * n_samples
     per_ambiguous_episode = 1 + 1 + n_samples
@@ -305,7 +448,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--model", default="gpt-4o-mini-2024-07-18")
     p.add_argument("--samples", type=int, default=20, help="N per pre/post sampling call, "
                    "matching the B7d/v3 convention (not B7b's own default of 10)")
-    p.add_argument("--chains", type=int, default=3, help="independent chain repetitions")
+    p.add_argument("--chains", type=int, default=1, help="independent chain repetitions -- "
+                   "Phase 1 real-API validation starts at 1, not 3 (see module docstring)")
     p.add_argument("--budget-only", action="store_true",
                    help="print the min/max call budget and exit -- no API client built, "
                         "no API calls made")
@@ -344,6 +488,8 @@ def main(argv: list[str] | None = None) -> int:
         store, logs = run_chain(principal_id=chain["principal_id"], task_category=chain["task_category"],
                                 episodes=episodes, llm_client=llm_client, n=args.samples)
         all_logs.append(logs)
+        print(f"seeded: {chain_is_seeded(logs)}  (E1 {'produced' if chain_is_seeded(logs) else 'did NOT produce'} "
+             "a verified experience -- not forced/retried either way)")
         for log in logs:
             print(f"[{log.episode_id}] pre_H={log.pre_entropy:.3f} baseline={log.baseline_action:10s} "
                  f"clarified={log.clarified!s:5s} confirmed={log.confirmed_action} "
@@ -352,11 +498,16 @@ def main(argv: list[str] | None = None) -> int:
                  f"{log.selected_history_episode_id}:{log.selected_history_action} "
                  f"decision_stage={log.decision_stage} override={log.automatic_override}")
 
+    print("\n=== Summary (safety/integrity metrics -- see module docstring for what each means) ===")
+    summary = summarize_logs(all_logs, entropy_threshold=DEFAULT_ENTROPY_THRESHOLD)
+    print(json.dumps(summary, indent=2))
+
     if args.output:
         payload = {
             "identity": {"scenario_id": chain["scenario_id"], "model": args.model,
                         "samples_per_call": args.samples, "chains": args.chains},
             "budget": budget,
+            "summary": summary,
             "chains": [[log.__dict__ for log in logs] for logs in all_logs],
         }
         with open(args.output, "w", encoding="utf-8") as f:

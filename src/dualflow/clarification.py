@@ -126,7 +126,8 @@ class ClarifyingDelegate:
         self.n = n
         self.entropy_threshold = entropy_threshold
 
-    def resolve(self, *, goal: str, context: str, delegation: str) -> ClarificationResult:
+    def resolve(self, *, goal: str, context: str, delegation: str,
+               pre_distribution: CandidateDistribution | None = None) -> ClarificationResult:
         """delegation을 n번 sampling하고, entropy가 threshold를 넘을 때만
         Principal에게 한 번 되물어 다시 sampling한다. `goal`은
         `answer_clarification()`에만 쓰인다(Principal이 자기 지식으로
@@ -138,9 +139,23 @@ class ClarifyingDelegate:
         여러 facet을 한 번에 물어서 "일부만 답변에서 다뤄졌는지 모르는"
         상태를 만들지 않는다). 여러 facet을 실제로 confirm해야 한다면
         별도의 clarification round가 필요하다는 뜻이고, 이 클래스는
-        여전히 의도적으로 단일 라운드만 한다(B7b 설계 그대로)."""
-        pre = self.delegate.sample_candidates(
-            delegation=delegation, context=context, n=self.n)
+        여전히 의도적으로 단일 라운드만 한다(B7b 설계 그대로).
+
+        `pre_distribution`(기본값 `None`, B7e — docs/experiments/
+        agent_connected_eval.md §25 follow-up) — 호출자가 이미 만들어둔
+        candidate distribution이 있으면 그걸 그대로 쓰고, 내부에서 다시
+        sampling하지 않는다. `None`이면(기본값) 기존과 완전히 동일하게
+        직접 `sample_candidates()`를 호출한다 — 기존 reproducer/실험은
+        전부 이 파라미터를 넘기지 않으므로 동작이 전혀 바뀌지 않는다.
+        존재 이유: B7e의 `FrozenCandidateEvidenceHarness`가 "이 분포가
+        ambiguous한가/history와 어떤 관계인가"를 판단할 때 보는 분포와,
+        실제로 이 메서드가 clarification 여부를 결정하는 데 쓰는 분포가
+        서로 다른 sampling에서 나온 것이면(같은 episode인데도), 두
+        판단이 서로 다른 semantic state를 근거로 삼게 된다 — 이 파라미터는
+        호출자가 두 판단에 정확히 같은 object를 쓰도록 강제할 수 있게
+        해준다."""
+        pre = (pre_distribution if pre_distribution is not None
+              else self.delegate.sample_candidates(delegation=delegation, context=context, n=self.n))
 
         if pre.entropy <= self.entropy_threshold:
             return ClarificationResult(False, pre, None, None, None, pre.top)
