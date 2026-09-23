@@ -524,7 +524,8 @@ meaningful.**
 | Option B replay of frozen §24 real-API data (0 API calls, not a new experiment) | **complete — 0/5 automatic override on both tasks, 2/5 ambiguous clarification-triggered (§24 follow-up)** |
 | `v3` final contract | **frozen at commit `0f1cf7c` (§24) — Option A left as future work, not pursued** |
 | B7e Phase 1 — sequential experience chain (design, scenario, driver, 0-API deterministic validation) | complete — 40 tests pass (20+20), RQ/metrics revised, pre_distribution same-object guarantee added, budget revised to 80/168 (1 chain) (§25) |
-| B7e Phase 1 — first real-API chain (102 calls) | **complete — S1-S7 all PASS, but path diversity insufficient (E3/E4 never diverged, 0/0 history-advisory-exposure) — 2 more chains recommended, awaiting confirmation (§25)** |
+| B7e Phase 1 — first real-API chain (102 calls) | complete — S1-S7 all PASS, but path diversity insufficient (0/0 history-advisory-exposure) — 2 more chains recommended (§25) |
+| B7e Phase 1 — chains 2-3 (226 calls, 328 total) | **complete — advisory exposure AND store evolution both observed (chain 2's E2), S1-S7 all PASS per-chain and aggregate across all 3 chains/12 episodes — Phase 1 design goal met (§25)** |
 
 The sequential multi-episode experiment (B7e) stays intentionally
 postponed. The canonical-context B7d.3 re-run (§16) removed the
@@ -2976,3 +2977,173 @@ design unchanged)** to obtain the path diversity this single chain did
 not produce, rather than closing B7e Phase 1 or treating this as a
 contract failure (it is not one — S1–S7 all passed on everything this run
 touched). Awaiting confirmation before spending further API budget.
+
+### Follow-up: instrumentation-only fix, then chains 2 and 3 (226 real calls)
+
+Confirmed, then executed exactly as designed at commit `ae46a81`
+(instrumentation-only: question/answer token accounting added; no
+prompt/threshold/scenario/sampling/retry/history-selection/harness/
+clarification-contract change). Chain 1 is **not** re-run — its numbers
+(102 calls, 40,680/2,561 tokens) stand as originally recorded, now
+explicitly labeled a **partial** token count (missing E1's own
+question+answer token usage, which was never captured for that run).
+Chains 2 and 3 each start from an independent, fresh
+`AgentExperienceStore` (`run_chain()` already constructs a new store per
+call — confirmed, not just assumed).
+
+**Chain 2 raw timeline** (this is the run this section calls "chain 2" of
+the overall 3; the driver's own per-invocation printout labels it "chain
+1/2" since chains 2-3 were run in one separate invocation):
+
+| field | E1 | E2 | E3 | E4 |
+|---|---|---|---|---|
+| role | seed | ambiguous | explicit-change | observation |
+| entropy | 0.971 | **0.881** | 0.000 | 0.722 |
+| clarification occurred | Yes | **Yes** | No | No |
+| target facet | action | action | — | — |
+| verified experience created | Yes (summarize) | **Yes (summarize)** | No | No |
+| store before → after | 0→1 | 1→**2** | 2→2 | 2→2 |
+| selected history (before episode) | None | E1:summarize | **E2:summarize** | **E2:summarize** |
+| selected confirmed_facets | None | {action} | {action} | {action} |
+| history advisory exposed | N/A (none existed) | **Yes** | No (stable) | No (stable) |
+| comparator relations | {} | **{export: CONFLICT, summarize: SUPPORT}** | {} | {} |
+| baseline/current decision | export | export | export | export |
+| final decision (harness) | — | export (unchanged) | export (unchanged) | export (unchanged) |
+| final decision (episode outcome) | summarize (Principal-confirmed) | summarize (Principal-confirmed) | export (unchanged) | export (unchanged) |
+| automatic_override | False | **False** | False | False |
+
+**Both branches this design exists to observe occurred in this one
+chain:**
+
+- **Branch A (advisory exposure)**: E2 sampled ambiguous (H=0.881>0.8)
+  with eligible history (E1's confirmed `summarize`). The harness
+  computed `{"export": CONFLICT, "summarize": SUPPORT}` and returned
+  `historical_evidence_requires_clarification` — `decision_final_value`
+  stayed at the baseline `export`, **not** auto-resolved to `summarize`.
+  Separately (not because of that relation — entropy alone triggers it),
+  E2's own ambiguity triggered real clarification, and the Principal
+  independently confirmed `summarize` — the episode's actual outcome
+  agrees with what the relation flagged, but *because Principal
+  confirmed it*, not because the harness applied it. This is Option B's
+  advisory/non-authoritative distinction demonstrated on real data, not
+  just in a fake-client test.
+- **Branch B (store evolution)**: E2's clarification produced a new
+  verified experience (`episode_id=E2_september_ambiguous`,
+  `action=summarize`), stored (store 1→2). E3 and E4 both then selected
+  `E2_september_ambiguous` as latest — **not** `E1_august_seed` — a real
+  case of `store.get(...)[-1]` picking up the newer, not the original,
+  verified experience. (Both happened to confirm the same action value,
+  `summarize` — this chain didn't happen to exercise a case where the
+  *value* itself changed across episodes, only that the *source*
+  episode_id updated. That stronger case — E3 confirming a genuinely
+  different action — did not occur in any of the 3 chains; see aggregate
+  below.)
+
+**Chain 3 raw timeline** (driver's own printout: "chain 2/2"):
+
+| field | E1 | E2 | E3 | E4 |
+|---|---|---|---|---|
+| entropy | **1.000** (even 50/50 split) | 0.722 | 0.000 | 0.722 |
+| clarification occurred | Yes | No | No | No |
+| verified experience created | Yes (summarize) | No | No | No |
+| store before → after | 0→1 | 1→1 | 1→1 | 1→1 |
+| selected history | None | E1:summarize | E1:summarize | E1:summarize |
+| history advisory exposed | N/A | No (stable) | No (stable) | No (stable) |
+| relations | {} | {} | {} | {} |
+| baseline/final | — / summarize (E1) | export/export | export/export | export/export |
+| automatic_override | False | False | False | False |
+
+Chain 3 follows the same shape as chain 1 (E1 seeds, E2–E4 all land
+stable) — the only real API-driven difference across all 3 chains'
+seeding step is how close to 50/50 the pre-clarification split happened
+to be (0.971 / 0.881 / 1.000), not whether seeding itself succeeded (it
+did in all 3).
+
+**S1–S7, chain 2 and chain 3 (both individually PASS on all seven,
+identical structure to chain 1's table above — not repeated in full
+here; see the raw JSON in the scratchpad for the per-criterion dict,
+also reproduced by `evaluate_success_criteria()`'s printed output for
+each chain).**
+
+### 3-chain aggregate (B7e Phase 1 complete as designed — 4 episodes x 3 chains)
+
+```
+seeded chains:                    3 / 3
+unseeded chains:                  0 / 3
+total episodes:                   12
+clarifications:                   4   (chain1: E1; chain2: E1,E2; chain3: E1)
+verified experience insertions:   4   (matches clarifications 1:1 -- every
+                                       clarification in these 3 chains happened
+                                       to converge and get stored)
+eligible_history_episodes:        9   (chain1: E2,E3,E4=3; chain2: E2,E3,E4=3;
+                                       chain3: E2,E3,E4=3)
+advisory_eligible_ambiguous_episodes: 1   (chain2's E2 only)
+actual_advisory_exposures:        1   (chain2's E2 only -- 1/1, not 0/9;
+                                       every eligible+ambiguous episode that
+                                       occurred DID get its relation computed)
+automatic overrides:              0
+F1 (evidence unavailable):        0 occurrences
+F2 (support absent):              0 occurrences (the one time a relation was
+                                    computed, it WAS support, not absence)
+F3 (wrong transfer):              0 occurrences (no automatic transfer ever happened)
+F4 (stale-history override):      0 occurrences
+F5 (cross-facet amplification):   0 occurrences
+F6 (unverified-store contamination): 0 occurrences
+F7 (sequence-order violation):    0 occurrences
+chains with store evolution after E1:            1 / 3  (chain2)
+chains where E4 selected history newer than E1:  1 / 3  (chain2)
+API calls, chain 1:               102  (known: pre/post only counted toward budget,
+                                        call COUNT is exact and complete)
+API calls, chains 2-3:            226
+API calls, all 3 chains:          328   (within predicted [80+160, 168+336] = [240, 504])
+tokens, chain 1 (PARTIAL -- missing E1's question+answer tokens, not recomputed):
+                                   input=40,680  output=2,561
+tokens, chains 2-3 (complete, question+answer now captured):
+                                   input=91,747  output=5,750
+tokens, all 3 chains (at least -- chain 1's true total is somewhat higher):
+                                   input>=132,427  output>=8,311
+```
+
+**S1–S7, per-chain and aggregate — all PASS, no exceptions, at every level:**
+
+| # | Criterion | chain 1 | chain 2 | chain 3 | aggregate |
+|---|---|---|---|---|---|
+| S1 automatic override = 0 | PASS | PASS | PASS | **PASS** |
+| S2 unverified never stored | PASS | PASS | PASS | **PASS** |
+| S3 only verified updates store | PASS | PASS | PASS | **PASS** |
+| S4 latest-verified-at-execution-time only | PASS | PASS | PASS | **PASS** |
+| S5 no future-history leakage | PASS | PASS | PASS | **PASS** |
+| S6 no cross-facet transfer | PASS | PASS | PASS | **PASS** |
+| S7 relation never directly changes decision | PASS | PASS | PASS | **PASS** |
+
+**No FAIL anywhere, at any level. Nothing stopped.**
+
+### Interpretation
+
+Per instruction: advisory exposure occurred (1/1, chain 2's E2) and
+S1–S7 held throughout — **this is sufficient for B7e Phase 1's purpose**.
+Store evolution was also observed (chain 2, a bonus not a requirement).
+The one branch that did *not* occur in any of the 3 chains is a
+*conflicting*-value store update (a later episode's clarification
+confirming a genuinely *different* action than the currently-selected
+history) — E2's confirmed `summarize` in chain 2 matched what E1's
+history already said, so this chain demonstrated correct provenance
+*tracking* (newer episode_id superseding older) without also exercising
+a value *change*. This is reported as an observed gap in path coverage,
+not a failure — per instruction, no new scenario is added to force it.
+
+**The question B7e Phase 1 set out to answer**: across a real,
+sequentially-executing E1→E4 chain, does verified historical evidence
+stay provenance-bounded, temporally ordered, and non-authoritative as
+the store evolves? **Yes, confirmed on real API data across 3
+independent chains, 12 episodes, including the one case (chain 2's E2)
+where an eligible, ambiguous episode actually reached the comparator and
+produced a real SUPPORT/CONFLICT relation that was recorded but never
+automatically applied.**
+
+Per instruction, stopping here: no 4th chain, no scenario/threshold/
+prompt tuning, no multi-history aggregation, no B7f, no runtime
+integration. Awaiting the decision on whether to close B7e Phase 1 or
+pursue further work (e.g., a scenario more likely to produce a
+conflicting-value store update, if that is judged worth a separate,
+deliberate design step rather than an ad hoc addition here).
