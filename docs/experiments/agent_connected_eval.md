@@ -514,6 +514,7 @@ meaningful.**
 | `v3` comparator redesign — structured-facet, deterministic (option B) | **implemented, regression-tested (§23 follow-up)** |
 | `v3` provenance gate (`confirmed_facets`, structured value ≠ confirmed evidence) | **implemented, regression-tested (§23 follow-up 2)** |
 | `v3` provenance correction (ambiguity ≠ confirmation; generation-time target_facets) | **implemented, regression-tested (§23 follow-up 3)** |
+| `v3` single-facet clarification (target ≠ confirmed for multi-facet rounds, closed via IG-based single-facet targeting) | **implemented, regression-tested (§23 follow-up 4)** |
 | Sequential experience evaluation (B7e) | not started |
 
 The sequential multi-episode experiment (B7e) stays intentionally
@@ -1684,10 +1685,98 @@ target_facets` is only `{"action"}`) and confirming `confirmed_facets`
 follows the question's target, not the raw pre-distribution variance.
 All pass; full suite 344 → 353 (+9).
 
-Progression, complete: **natural-language comparator → contamination
-found (§23) → deterministic structured-facet comparator → structured
-value alone found insufficient → ambiguity-based provenance added →
-ambiguity provenance found insufficient (confirmed ≠ ambiguous) →
-explicit generation-time confirmation provenance added.** No API calls,
-no candidate freeze, no N/L/P/S re-run, no runtime integration, no B7e,
-and no answer-text heuristic were used to produce this follow-up.
+Progression as of Follow-up 3: **natural-language comparator →
+contamination found (§23) → deterministic structured-facet comparator →
+structured value alone found insufficient → ambiguity-based provenance
+added → ambiguity provenance found insufficient (confirmed ≠ ambiguous) →
+explicit generation-time confirmation provenance added.** (This was called
+"complete" at the time — Follow-up 4 below found one more gap in it,
+before any API validation, so the label was premature; left unedited here
+per this document's policy.)
+
+### Follow-up 4: target facets ≠ confirmed facets (single-facet clarification)
+
+Follow-up 3's `target_facets` closed the "ambiguity vs. confirmation" gap
+for the single-facet case, but a subtler gap remained, found on review
+before any API validation: `target_facets` could legitimately hold
+**more than one facet** (whenever more than one facet varies together in
+`pre_distribution`), while a clarification round is still exactly **one**
+free-text question and **one** free-text answer. `build_verified_
+experience()` copied the whole `target_facets` set into `confirmed_facets`
+regardless — so if `action` and `scope` both varied and both became
+`target_facets`, but the Principal's one-sentence answer only clearly
+addressed `action`, `scope` would still be silently promoted to
+"confirmed" evidence with no verification that it was actually addressed.
+The precise distinction needed, restated: `target_facets` = "the question
+was structurally constrained to ask about these facets"; `confirmed_
+facets` = "these facets are safe to use as transferable historical
+evidence" — the two are only trustworthy as identical when there is
+exactly one facet in play, because then there is no "did the one answer
+cover *all* of several targeted facets" ambiguity left to resolve.
+
+**Fix: make every clarification round target exactly one facet, chosen by
+information gain — reusing existing legacy logic, not inventing a new
+one.** `src/dualflow/semantic.py` already has exactly this machinery from
+the Phase A controlled framework: `Question`/`candidate_questions()`/
+`conditional_entropy()`/`information_gain()`/`select_question()` — pick
+the single dimension whose conditional entropy reduction (mutual
+information with the answer) is largest, with an optional repeat penalty
+(`asked: Counter`, unused here since B7b is single-round). `clarification.py`
+gains `_select_target_facet(belief)`, calling `select_question(belief,
+Counter())` and returning `question.dimension` (or `None` in the
+mathematically-unreachable case where no facet has positive information
+gain while `pre.entropy` already exceeds a positive `entropy_threshold` —
+handled defensively as "confirm nothing," not asserted-and-crashed).
+`ClarifyingDelegate.resolve()` now passes `target_facets = frozenset({facet})`
+(or `frozenset()`) to `ask_clarification()` instead of the old
+multi-facet `_facets_that_varied()` result — that function is kept, but
+repurposed as **diagnostic-only**: `ClarificationResult` gains a new
+`varied_facets: frozenset[str] = frozenset()` field carrying it, explicitly
+documented as *not* usable for evidence eligibility (`varied_facets ⊇
+target_facets` always holds; only `target_facets`, via `confirmed_facets`,
+is ever evidence-eligible). `agent_experience.py`/`experience_evidence.py`
+are unchanged — `confirmed_facets` still just copies `question.
+target_facets`, which is now always a singleton-or-empty set, closing the
+gap without any new gating logic needed downstream.
+
+**`PrincipalAgent.answer_clarification()` audited, not modified.** It
+takes `question: str` (the free-text question only, not the
+`ClarificationQuestion` object) — there is no structural channel by which
+`target_facets` could reach the Principal's answer-generation prompt today.
+Threading it through (as an additional labeling/prompt-hint parameter, not
+answer-text analysis) was considered and is a legitimate future
+strengthening, but is **not implemented here**: once clarification targets
+exactly one facet, the "did the answer cover every targeted facet"
+ambiguity that motivated this whole follow-up no longer applies (there is
+only one facet, and the one free-text answer is definitionally in response
+to a question already constrained to it) — so this additional step is not
+required to close the gap, only a possible future reinforcement. No
+answer-text heuristic (keyword matching, LLM re-classification, wording
+analysis) was added anywhere, per instruction.
+
+**Tests**: `tests/test_clarification.py`'s `TestTargetFacets` — the
+previous multi-facet test (which had asserted `target_facets ==
+{"action", "scope"}`, now the *wrong* expectation) is replaced by
+`test_multi_facet_variance_selects_exactly_one_target_facet` (same
+perfectly-co-varying `action`+`scope` fixture; `varied_facets ==
+{"action", "scope"}` while `target_facets` is a strict, length-1 subset of
+it) and a new end-to-end `test_unselected_varied_facet_is_not_confirmed_
+end_to_end` — the exact failure case requested: `varied_facets={action,
+scope}`, only `action` selected as `target_facets`, carried through
+`build_verified_experience()` into `AgentExperience.confirmed_facets ==
+{"action"}` (`"scope" not in confirmed_facets`, asserted directly), and
+then through `HistoricalEvidenceComparator.judge()`: querying `scope`
+returns `IRRELEVANT`, querying `action` returns `SUPPORT` — the full chain
+from candidate variance to comparator behavior, in one test. All 17 tests
+in the file pass (16 → 17, one replaced + one added). Full suite
+353 → 354.
+
+Progression, now actually complete for this arc: **natural-language
+comparator → contamination found → deterministic structured-facet
+comparator → structured value alone insufficient → ambiguity-based
+provenance → ambiguity ≠ confirmation → generation-time target provenance
+→ target ≠ confirmed when multi-facet → single-facet-per-round
+clarification (reusing existing legacy IG machinery), closing the gap
+without new heuristics.** No API calls, no candidate freeze, no N/L/P/S
+re-run, no runtime integration, no B7e, and no answer-text heuristic were
+used to produce this follow-up.

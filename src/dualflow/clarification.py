@@ -39,34 +39,48 @@ CLARIFICATION LOOP — B7b. Principal-Delegate 단일 라운드 clarification.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 
 from .delegate_agent import CandidateDistribution, ClarificationQuestion, DelegateAgent
 from .principal_agent import PrincipalAgent, PrincipalClarification
-from .semantic import Belief, Interpretation
+from .semantic import Belief, Interpretation, select_question
 
 _ALL_FACETS = ("action", "resource", "scope", "condition")
 
 
 def _facets_that_varied(belief: Belief) -> frozenset[str]:
-    """v3 provenance 보완(agent_connected_eval.md §23 follow-up 3). clarify
-    이전(pre) candidate 분포에서 실제로 하나 이상의 값으로 갈렸던 facet만
-    돌려준다 — B가 그 facet에 대해 진짜 불확실했다는, 질문을 만들기 *전에*
-    이미 정해지는 유일한 구조적 근거다. `resolve()`가 이 값을
-    `ask_clarification()`에 `target_facets`로 넘겨서 질문 자체를 그 facet만
-    묻도록 제약한다 — "질문이 끝난 뒤 무엇이 갈렸었는지 추론"하는 게 아니라
-    "질문을 만들기 전에 무엇을 물을지 결정"하는 순서다. 이전 revision(v3
-    §23 follow-up 2)은 이 계산을 `build_verified_experience()` 안에서
-    사후적으로 했었다 — 그 방식은 "pre-clarification ambiguity"와 "실제
-    Principal이 확인한 facet"을 구분하지 못한다는 게 지적됐다(같은 로직을
-    앞으로 옮겨서 질문 생성을 제약하는 용도로 바꾸면 그 구분이 생긴다:
-    질문이 실제로 이 facet만 묻도록 prompt에 명시되기 때문이다)."""
+    """이 pre-clarification candidate 분포에서 값이 하나 이상으로 갈렸던
+    facet 전부. **진단/기록용일 뿐, evidence eligibility의 근거가 아니다**
+    — `ClarificationResult.varied_facets`에만 쓰인다. "이 facet이
+    ambiguous했다"와 "이 facet이 실제로 질문의 대상이었다/Principal이
+    확인했다"는 서로 다른 사실이라는 게 v3 §23 follow-up 4의 핵심
+    구분이다: 이 함수는 전자만 답한다. 후자(무엇을 물을지)는
+    `_select_target_facet()`이 information gain으로 딱 하나만 고른다."""
     varied: set[str] = set()
     for facet in _ALL_FACETS:
         values = {getattr(interp, facet) for interp in belief}
         if len(values) > 1:
             varied.add(facet)
     return frozenset(varied)
+
+
+def _select_target_facet(belief: Belief) -> str | None:
+    """이번 clarification round가 물을 facet을 정확히 하나만 고른다 —
+    새 heuristic이 아니라 기존 legacy Phase A 로직
+    (`semantic.select_question()`/`information_gain()`)을 그대로
+    재사용한다: information gain(=그 facet을 알면 줄어드는 기대 잔여
+    entropy)이 가장 큰 facet 하나. `asked`는 빈 `Counter()`로 준다 — B7b는
+    아직 단일 라운드라 반복 페널티(`lam`)가 적용될 이력이 없다.
+
+    반환값이 `None`이면(수학적으로, `pre.entropy > entropy_threshold >
+    0`인 한 이 분기에서는 일어나지 않는다 — entropy(p) > 0이면 최소 한
+    facet은 반드시 양의 information gain을 갖는다) 어떤 facet도 이번
+    round의 target으로 삼지 않는다 — 호출자는 이 경우 `target_facets`를
+    빈 `frozenset()`으로 둬야 한다(아무것도 confirmed되지 않음, 여전히
+    안전한 쪽)."""
+    question, _scored = select_question(belief, Counter())
+    return question.dimension if question is not None else None
 
 
 @dataclass(frozen=True)
@@ -76,7 +90,14 @@ class ClarificationResult:
     `pre_distribution`/`post_distribution`이 이미 `.entropy`를 담고 있으므로
     entropy를 여기서 따로 다시 계산/저장하지 않는다 — 필요하면
     `result.pre_distribution.entropy`/`result.post_distribution.entropy`를
-    본다."""
+    본다.
+
+    `varied_facets` — 진단/기록용(agent_connected_eval.md §23 follow-up 4).
+    pre-clarification 분포에서 값이 갈렸던 facet 전부(`_facets_that_
+    varied()`) — evidence eligibility와는 무관하다. 실제로 confirmed
+    evidence 자격을 얻는 건 `question.target_facets`뿐이다(항상 정확히
+    0개 또는 1개 — `_select_target_facet()`이 IG 최댓값 facet 하나만
+    고른다). `varied_facets ⊇ question.target_facets`가 항상 성립한다."""
 
     clarified: bool
 
@@ -87,6 +108,8 @@ class ClarificationResult:
     answer: PrincipalClarification | None              # clarified=True일 때만
 
     final_interpretation: Interpretation
+
+    varied_facets: frozenset[str] = frozenset()
 
 
 class ClarifyingDelegate:
@@ -108,14 +131,24 @@ class ClarifyingDelegate:
         Principal에게 한 번 되물어 다시 sampling한다. `goal`은
         `answer_clarification()`에만 쓰인다(Principal이 자기 지식으로
         답하려면 필요) — Delegate 쪽 호출(sampling/질문 생성)은 여전히
-        `delegation`/`context`만 본다, `goal`을 직접 보지 않는다."""
+        `delegation`/`context`만 본다, `goal`을 직접 보지 않는다.
+
+        v3 §23 follow-up 4: 이번 round는 정확히 하나의 facet만 target으로
+        삼는다(`_select_target_facet()`, information gain 최댓값 —
+        여러 facet을 한 번에 물어서 "일부만 답변에서 다뤄졌는지 모르는"
+        상태를 만들지 않는다). 여러 facet을 실제로 confirm해야 한다면
+        별도의 clarification round가 필요하다는 뜻이고, 이 클래스는
+        여전히 의도적으로 단일 라운드만 한다(B7b 설계 그대로)."""
         pre = self.delegate.sample_candidates(
             delegation=delegation, context=context, n=self.n)
 
         if pre.entropy <= self.entropy_threshold:
             return ClarificationResult(False, pre, None, None, None, pre.top)
 
-        target_facets = _facets_that_varied(pre.belief)
+        varied_facets = _facets_that_varied(pre.belief)
+        target_facet = _select_target_facet(pre.belief)
+        target_facets = frozenset({target_facet}) if target_facet is not None else frozenset()
+
         question = self.delegate.ask_clarification(
             delegation=delegation, distribution=pre, context=context,
             target_facets=target_facets)
@@ -127,4 +160,5 @@ class ClarifyingDelegate:
         post = self.delegate.sample_candidates(
             delegation=delegation, context=enriched_context, n=self.n)
 
-        return ClarificationResult(True, pre, post, question, answer, post.top)
+        return ClarificationResult(True, pre, post, question, answer, post.top,
+                                   varied_facets=varied_facets)
