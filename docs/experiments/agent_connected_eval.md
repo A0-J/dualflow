@@ -509,6 +509,8 @@ meaningful.**
 | Exact replication (B7d.5R) | **complete — counter-prior effect replicated, 10/10 both batches (§21)** |
 | Lexical vs. semantic control (B7d.6) | **complete — effect depends on slot+token conjunction, not paraphrase-invariant (§22)** |
 | `v2` representation investigation | **closed — moving to `v3` architectural redesign (§22)** |
+| `v3` prototype — `HistoricalEvidenceComparator` (opt-in, not wired into runtime) | implemented (§22 review, code) |
+| `v3` first pilot (180 calls) | **inconclusive — comparator calibration/semantic-target validity not established, not a verdict on the v3 hypothesis (§23)** |
 | Sequential experience evaluation (B7e) | not started |
 
 The sequential multi-episode experiment (B7e) stays intentionally
@@ -1334,3 +1336,130 @@ is structurally prone to slot/token priming effects that are difficult to
 distinguish from genuine semantic transfer no matter how the injected text
 is reworded, because the model's own generation process is what's being
 primed. B7e remains not started.
+
+## 23. v3 Pilot — Comparator Contract Audit (Inconclusive)
+
+### Experiment identity
+
+```
+experiment_id:   v3_pilot_evidence_comparator
+git_sha:          52de6824e6376867a998e0e36f0573a21f4b5b08
+scenario_id:      external_audit_finance
+scenario_version: 1.1
+model:            gpt-4o-mini-2024-07-18 (explicit snapshot, not the alias)
+freeze_samples:   20
+samples_per_cell: 20
+total calls:      180 (freeze 20 + 2 frozen candidates x 4 conditions x 20)
+script:           experiments/diagnostics/experience_evidence_comparator.py
+```
+
+### Result
+
+| Condition | Candidate | SUPPORT | CONFLICT | IRRELEVANT | UNCERTAIN |
+| --- | --- | --- | --- | --- | --- |
+| N neutral | summarize | 0.10 | 0.70 | 0.20 | 0.00 |
+| N neutral | export | 0.50 | 0.00 | 0.40 | 0.10 |
+| L lexical-only | summarize | 0.00 | 0.70 | 0.30 | 0.00 |
+| L lexical-only | export | 0.35 | 0.30 | 0.35 | 0.00 |
+| P semantic-paraphrase | summarize | 0.00 | 1.00 | 0.00 | 0.00 |
+| P semantic-paraphrase | export | 0.65 | 0.30 | 0.05 | 0.00 |
+| S structured-summarize | summarize | 0.30 | 0.70 | 0.00 | 0.00 |
+| S structured-summarize | export | 0.35 | 0.55 | 0.10 | 0.00 |
+
+Parse/OOV failures: 0/160. Usage: comparator 160 calls / 62,520 input
+tokens / 538 output tokens; freeze 20 calls / usage not aggregated by this
+diagnostic (a real gap in the script, not backfilled with an estimate).
+
+### Status: **inconclusive for the v3 hypothesis, not a failure of the v3 architecture**
+
+This result does not confirm or refute "moving historical experience from
+generation to evidence comparison removes slot-token dependence." It shows
+`HistoricalEvidenceComparator`, as currently specified, is not reliably
+measuring the intended semantic relation at all — evaluating the v3
+hypothesis against this data would not be a valid test of it.
+
+The two strongest signals:
+- **`S` (structured evidence, `summarize` confirmed) + the `summarize`
+  candidate — the maximally-aligned case — still produced `CONFLICT=0.70`
+  vs. `SUPPORT=0.30`.** If the comparator worked as intended, this exact
+  case should be the easiest possible `SUPPORT`.
+- **`P` (semantic-paraphrase evidence, expressing "summarize" without the
+  token) produced `SUPPORT=0.65` for the *`export`* candidate** — the
+  paraphrase intended to point toward `summarize` instead favored the
+  opposite action.
+
+### Audit findings (no API calls, no prompt changes made)
+
+1. **Exact model-visible prompts** for `S`+`summarize`, `S`+`export`, and
+   `P`+`summarize` were rendered directly from the committed code (no
+   network call) and inspected. All three share the same
+   `_COMPARE_INSTRUCTIONS` and differ only in the candidate block and the
+   evidence text, as designed.
+2. **Candidate serialization**: `ACTION`/`RESOURCE`/`SCOPE`/`CONDITION`
+   are all shown for every candidate. In this scenario `RESOURCE`/`SCOPE`
+   are always `file`/`/reports/2026-09/` for both candidates (only
+   `ACTION` varies) — but **the historical evidence text explicitly
+   contains `"Please prepare the August 2026 financial report..."`**,
+   putting `August 2026` and `/reports/2026-09/`/`September 2026` directly
+   next to each other in the same prompt. A plausible reading: the model
+   may be treating the differing month/report as a whole-episode mismatch
+   ("this precedent was about a different report") rather than isolating
+   the one facet (`action=summarize`) that was actually meant to transfer.
+   This matches the concern raised before running: comparing full
+   historical episodes (including non-transferable facets like the old
+   month/scope) instead of the single confirmed facet risks exactly this
+   kind of false conflict signal.
+3. **v2 instructional header contamination confirmed present.** The exact
+   header reused from `render_experience_block_v2`/`_neutral`/
+   `_lexical_only`/`_semantic_paraphrase` — *"If the current delegation
+   explicitly specifies an action, follow the current delegation even if
+   it differs from prior behavior."* — appears verbatim inside the
+   `Historical evidence:` section of every comparator prompt (all four
+   conditions). This sentence was written as an instruction for whoever
+   consumes the block to decide an action (originally the Delegate); it
+   was never audited for what it means when handed to a *different* task
+   (classifying a relation) that treats the whole block as evidence data,
+   not as an instruction to itself. Its exact position (first sentence of
+   the evidence text, before the `Example 1` block) was confirmed, not
+   removed.
+4. **`AgentExperience` already stores the confirmed action as structured
+   data** — `confirmed_interpretation: Interpretation`
+   (`src/dualflow/agent_experience.py`), with `.action`/`.resource`/
+   `.scope`/`.condition` accessible directly, no re-parsing needed.
+   `confirmed_interpretation.action` already gives the canonical
+   transferable facet (`"summarize"`) deterministically. Re-asking an LLM
+   to judge whether natural-language evidence "means" `summarize` again
+   is not required by the current schema — it was an added step, not
+   something the schema forced.
+
+### Design recommendation (not implemented — proposal only)
+
+Two paths were reviewed:
+
+- **A. Keep and fix the natural-language comparator** — remove the v2
+  header from evidence rendered for the comparator, and restrict the
+  evidence text to the transferable facet only, then re-test.
+- **B. Store and compare Principal-confirmed experience as a structured
+  semantic facet, deterministically** — since `confirmed_interpretation`
+  is already a structured `Interpretation`, `facet=action` comparison
+  against a candidate's own `action` field can be a plain equality check,
+  with no LLM call and no natural-language rendering of historical
+  evidence at all.
+
+**B is the recommended direction.** Re-asking an LLM to interpret a
+natural-language rendering of an already-structured, already-verified
+fact reintroduces exactly the representation/wording sensitivity this
+whole B7d arc (§7-§22) spent effort eliminating. A only makes the
+natural-language step more careful; B removes the step's failure surface
+entirely for the one facet (`action`) this scenario's ambiguity is about.
+Paraphrase invariance under this recommendation moves to a different,
+earlier stage of the pipeline — whether a *new* clarification answer like
+"produce a concise account of the report's contents" can be structured
+into a canonical `confirmed_interpretation` at experience-creation time —
+not to the comparison step. Neither path is implemented as of this
+section; this is a proposal awaiting review.
+
+Not recorded in `docs/unexpected_findings/`: per instruction, a design/
+calibration gap discovered before the intended hypothesis could be tested
+is not the kind of "materially changed our interpretation of a result"
+finding that directory is for.
