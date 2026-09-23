@@ -1,24 +1,31 @@
-"""FrozenCandidateEvidenceHarness — v3 evidence-consumption contract.
+"""FrozenCandidateEvidenceHarness -- v3 evidence-consumption contract.
 Fully deterministic: no LLM client, no network, no OPENAI_API_KEY needed.
 
 Locks in the consumption contract fixed before any main-experiment API run
-(docs/experiments/agent_connected_eval.md, v3 main-experiment protocol):
+(docs/experiments/agent_connected_eval.md, v3 main-experiment protocol),
+AS REVISED by Option B (conservative abstention -- see §24 Follow-up,
+"Option B: conservative abstention", and REVISION 2 in
+src/dualflow/experience_decision.py's module docstring):
   - stability gate first (existing entropy threshold, no new classifier)
   - eligibility gate (existing confirmed_facets provenance)
   - support gate (existing deterministic comparator, current candidates only)
-  - facet-level resolution only -- never a synthesized historical
-    Interpretation, never cross-facet amplification
-  - PRECISE (corrected) scope of the stability guarantee: a distribution
-    that is already stable per the existing entropy threshold is never
-    overridden by conflicting historical evidence. This is NOT the same as
-    "an explicit current instruction is never overridden" -- entropy
-    measures sampling disagreement, not whether the delegation text
-    explicitly specified the facet. `TestH2StructuralCounterexample` below
-    fixes a deterministic counterexample where a distribution modeling an
-    explicit-export delegation, but with unstable sampling (entropy > 0.8),
-    DOES get overridden to "summarize" by the historical evidence -- this
-    is a real, currently-reachable F4 (stale-history override), recorded
-    as a known contract limitation, not asserted away.
+  - NO automatic resolution -- even when support exists, the harness never
+    applies it; it only surfaces a `historical_evidence_requires_
+    clarification` signal (relations recorded for audit, resolved_value
+    kept for reference) and leaves final_value at baseline. Facet-level-
+    only scoping (never a synthesized historical Interpretation, never
+    cross-facet amplification) still holds, trivially, because nothing is
+    ever applied automatically at all.
+  - PRECISE scope of the stability guarantee, now stronger than before: a
+    distribution that is already stable is never overridden (unchanged),
+    AND an unstable/ambiguous distribution is *also* never automatically
+    overridden any more -- see `TestH2StructuralCounterexample` below,
+    which re-runs the same deterministic counterexample that originally
+    exposed F4 (stale-history override) under the REVISION 1 contract, and
+    confirms it no longer overrides anything under this (REVISION 2)
+    contract. REVISION 1's automatic-resolution behavior is preserved only
+    as historical record (git history / §24's already-run 200-call main
+    experiment results) -- `decide()` no longer produces it.
 """
 
 from __future__ import annotations
@@ -28,7 +35,7 @@ from dualflow.delegate_agent import CandidateDistribution
 from dualflow.experience_decision import (
     AMBIGUOUS_NO_ELIGIBLE_EVIDENCE,
     AMBIGUOUS_NO_SUPPORT,
-    AMBIGUOUS_RESOLVED_BY_EVIDENCE,
+    AMBIGUOUS_REQUIRES_CLARIFICATION,
     STABLE_BASELINE,
     FrozenCandidateEvidenceHarness,
 )
@@ -147,30 +154,32 @@ class TestSupportGate:
         assert decision.final_value == decision.baseline_value
 
 
-class TestResolutionByEvidence:
-    """ambiguous + eligible + support 있음 -> facet만 resolve, 전체
-    Interpretation을 historical 값으로 확정하지 않는다(H1이 측정하는
-    성공 경로)."""
+class TestAmbiguousSupportRequiresClarification:
+    """ambiguous + eligible + support 있음 -> Option B(conservative
+    abstention): relation은 감사용으로 기록되고 resolved_value는 참고로
+    남지만, harness는 절대 자동으로 final_value를 historical 값으로 바꾸지
+    않는다. 전체 Interpretation을 historical 값으로 확정하는 일도 당연히
+    없다 -- 애초에 아무것도 자동 적용되지 않으므로."""
 
-    def test_resolves_to_historically_confirmed_action(self):
+    def test_support_is_recorded_but_not_applied(self):
         ambiguous = _distribution({_interp("summarize"): 0.3, _interp("export"): 0.7}, 0.881)
         experience = _experience("summarize")
         harness = FrozenCandidateEvidenceHarness(entropy_threshold=0.8)
 
         decision = harness.decide(distribution=ambiguous, experience=experience, facet="action")
 
-        assert decision.stage == AMBIGUOUS_RESOLVED_BY_EVIDENCE
-        assert decision.used_historical_evidence is True
-        assert decision.resolved_value == "summarize"
-        assert decision.final_value == "summarize"
-        # baseline (majority) was export -- evidence flipped the decision
+        assert decision.stage == AMBIGUOUS_REQUIRES_CLARIFICATION
+        assert decision.used_historical_evidence is True  # evidence WAS consulted
+        assert decision.resolved_value == "summarize"     # recorded for reference/audit
+        assert decision.final_value == "export"            # NOT applied -- baseline preserved
         assert decision.baseline_value == "export"
 
-    def test_decision_interpretation_scope_comes_from_current_candidate_not_history(self):
+    def test_decision_interpretation_is_never_synthesized_from_history(self):
         """F5 (cross-facet amplification) 방지 확인: historical scope는
-        August인데, decision_interpretation의 scope는 반드시 현재
-        (September) candidate 자신의 scope여야 한다 -- historical scope로
-        절대 바뀌지 않는다."""
+        August인데, harness는 애초에 어떤 decision_interpretation도 자동
+        생성하지 않는다 -- scope가 historical 값으로 바뀔 여지 자체가
+        없다. final_value(및 실제로 쓰이는 현재 candidate)는 항상 현재
+        (September) candidate 자신의 scope를 유지한다."""
         current_summarize = _interp("summarize", scope=_SEPT)
         ambiguous = _distribution({current_summarize: 0.3, _interp("export", scope=_SEPT): 0.7}, 0.881)
         experience = _experience("summarize", scope=_AUG)  # historical scope is August
@@ -178,15 +187,13 @@ class TestResolutionByEvidence:
 
         decision = harness.decide(distribution=ambiguous, experience=experience, facet="action")
 
-        assert decision.decision_interpretation is not None
-        assert decision.decision_interpretation.scope == _SEPT  # current, NOT _AUG
-        assert decision.decision_interpretation is current_summarize
+        assert decision.decision_interpretation is None  # no automatic Interpretation at all
+        assert decision.final_value == "export"            # baseline (current) preserved
 
-    def test_multiple_current_interpretations_sharing_resolved_value_yield_no_single_decision(self):
-        """같은 resolved action을 가진 서로 다른(다른 facet에서 갈리는)
-        현재 Interpretation이 여러 개면, 임의로 하나를 골라 전체
-        Interpretation을 확정하지 않는다 -- resolved_value는 나오되
-        decision_interpretation은 None."""
+    def test_multiple_current_interpretations_sharing_supported_value_still_no_auto_decision(self):
+        """같은 supported action을 가진 서로 다른(다른 facet에서 갈리는)
+        현재 Interpretation이 여러 개여도 결론은 동일하다 -- 이 harness는
+        어느 경우든 자동으로 하나를 고르지 않는다."""
         variant_a = Interpretation("summarize", "file", "/reports/2026-09/", frozenset())
         variant_b = Interpretation("summarize", "file", "/reports/2026-09/", frozenset({"urgent"}))
         ambiguous = _distribution({variant_a: 0.5, variant_b: 0.5}, 1.0)
@@ -195,9 +202,10 @@ class TestResolutionByEvidence:
 
         decision = harness.decide(distribution=ambiguous, experience=experience, facet="action")
 
-        assert decision.stage == AMBIGUOUS_RESOLVED_BY_EVIDENCE
+        assert decision.stage == AMBIGUOUS_REQUIRES_CLARIFICATION
         assert decision.resolved_value == "summarize"
-        assert decision.decision_interpretation is None  # no arbitrary full-Interpretation pick
+        assert decision.decision_interpretation is None
+        assert decision.final_value == decision.baseline_value
 
 
 class TestRelationsAuditTrail:
@@ -275,20 +283,26 @@ class TestH2StructuralCounterexample:
     고정한다. 5/5 explicit-export preservation은 그 배치에서 entropy가
     매번 0.000이었기 때문이었다 -- 진짜 질문은 "entropy가 threshold를
     넘는 explicit-export sampling이 real API에서 실제로 나오면 어떻게
-    되는가"였고, 답은 이미 이 harness의 기존 코드(무수정)로 결정론적으로
-    확인할 수 있다.
+    되는가"였다.
 
-    이 클래스의 테스트는 "버그를 고쳤다"가 아니라 "현재 contract가 실제로
-    이렇게 동작한다는 걸 API 없이 재현해서 기록한다"는 목적이다 -- 코드는
-    이 테스트 때문에 바뀌지 않았다."""
+    REVISION 1(원래 automatic-resolution contract)에서는 이 counterexample
+    (export=.55/summarize=.45, entropy≈.993 > threshold 0.8)이 실제로
+    harness에 의해 "summarize"로 override됐다 -- F4(stale-history
+    override)가 현재 contract상 도달 가능함을 증명한 재현이었다. 이게
+    바로 Option B(conservative abstention, REVISION 2) 재설계의 직접적인
+    동기다.
 
-    def test_unstable_explicit_export_sampling_is_overridden_by_conflicting_history(self):
-        """정확히 이번 지시가 예상한 counterexample: export=0.55/
-        summarize=0.45(entropy≈0.993, threshold 0.8보다 큼)인 candidate
-        distribution에 historical action=summarize evidence를 적용하면,
-        harness는 실제로 summarize로 override한다 -- 이게 F4
-        (stale-history override)가 현재 contract상 도달 가능함을
-        보여주는 재현이다."""
+    이 클래스는 이제 같은 counterexample을 REVISION 2 contract에 대해
+    다시 고정한다: automatic resolution이 제거됐으므로, 같은 입력에서도
+    더 이상 override가 일어나지 않는다는 것, 즉 F4가 이 harness를 통해서는
+    더 이상 도달 가능하지 않다는 것을 확인한다. relations는 여전히
+    계산/기록되므로(감사 가능성은 유지) "evidence를 못 봤다"가 아니라
+    "봤지만 적용하지 않았다"임을 함께 확인한다."""
+
+    def test_unstable_explicit_export_sampling_is_no_longer_overridden(self):
+        """REVISION 1에서 F4를 재현했던 것과 정확히 같은 입력. REVISION 2
+        에서는 relations가 여전히 CONFLICT/SUPPORT로 계산되지만
+        final_value는 baseline("export")에서 바뀌지 않는다."""
         export = _interp("export")
         summarize = _interp("summarize")
         belief = {export: 0.55, summarize: 0.45}
@@ -303,19 +317,22 @@ class TestH2StructuralCounterexample:
         decision = harness.decide(distribution=unstable_explicit_export,
                                   experience=experience, facet="action")
 
-        assert decision.stage == AMBIGUOUS_RESOLVED_BY_EVIDENCE
-        assert decision.baseline_value == "export"  # majority/plurality current decision
-        assert decision.final_value == "summarize"  # OVERRIDDEN -- this is the F4 case
+        assert decision.stage == AMBIGUOUS_REQUIRES_CLARIFICATION
+        assert decision.baseline_value == "export"   # majority/plurality current decision
+        assert decision.final_value == "export"       # NOT overridden -- F4 blocked
+        assert decision.used_historical_evidence is True  # evidence WAS consulted
+        assert decision.resolved_value == "summarize"  # recorded for reference only
         assert decision.relations == {
             "export": EvidenceRelation.CONFLICT,
             "summarize": EvidenceRelation.SUPPORT,
         }
 
-    def test_the_guarantee_is_about_stability_not_explicitness(self):
-        """같은 historical evidence, 같은 "explicit export" 의도인데
-        distribution의 entropy만 다르면(안정 vs 불안정) 결과가 갈린다는
-        걸 나란히 보여준다 -- 이게 "harness는 explicitness가 아니라
-        stability만 본다"는 정확한 진술의 근거다."""
+    def test_the_guarantee_now_covers_ambiguous_cases_too_not_just_stable_ones(self):
+        """REVISION 1에서는 "harness는 explicitness가 아니라 stability만
+        본다"가 정확한 진술이었다 -- stable/unstable 여부에 따라 결과가
+        갈렸다. REVISION 2에서는 stable이든 unstable이든 이 harness가
+        자동으로 override하는 경우가 아예 없으므로, 두 경우 모두
+        final_value가 보존된다."""
         experience = _experience("summarize")
         harness = FrozenCandidateEvidenceHarness(entropy_threshold=0.8)
 
@@ -325,7 +342,10 @@ class TestH2StructuralCounterexample:
         stable_decision = harness.decide(distribution=stable, experience=experience, facet="action")
         unstable_decision = harness.decide(distribution=unstable, experience=experience, facet="action")
 
-        assert stable_decision.final_value == "export"      # preserved
-        assert unstable_decision.final_value == "summarize"  # overridden
-        # 두 경우 모두 "explicit export 의도"라는 점은 동일하다 -- 유일한
-        # 차이는 sampling entropy뿐이다.
+        assert stable_decision.final_value == "export"    # preserved (evidence not consulted)
+        assert unstable_decision.final_value == "export"  # ALSO preserved (evidence consulted,
+                                                            # relation recorded, not applied)
+        assert stable_decision.stage == STABLE_BASELINE
+        assert unstable_decision.stage == AMBIGUOUS_REQUIRES_CLARIFICATION
+        # 두 stage는 다르지만(evidence를 봤는지 여부), 둘 다 automatic
+        # override는 발생하지 않는다는 결론은 동일하다.

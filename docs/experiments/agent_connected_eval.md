@@ -518,7 +518,9 @@ meaningful.**
 | `v3` post-clarification resolution gate (singleton target ≠ actual confirmation) | **implemented, regression-tested (§23 follow-up 5) — provenance chain design complete** |
 | `v3` contract smoke test (42 real API calls) | **PASS — full chain held end to end (§24)** |
 | B7d-v3 main experiment (200 real API calls) | **complete — H1 partial positive signal (2/2 conditional success); H2's 5/5 preservation found to reflect stability, not explicitness (§24)** |
-| H2 structural counterexample (stale-history override reachable when sampling is unstable) | **confirmed via deterministic regression test, no API — open design question, not yet fixed (§24)** |
+| H2 structural counterexample (stale-history override reachable when sampling is unstable) | **confirmed via deterministic regression test, no API — resolved by Option B, see below (§24 follow-up)** |
+| Sender-side provenance audit (does anything upstream of `delegation` text distinguish "explicitly asserted" from "merely confident"?) | **complete — no such signal exists in the current codebase; no API calls (§24 follow-up)** |
+| `v3` Option B redesign (conservative abstention — historical evidence downgraded to advisory/clarification-triggering, automatic override withdrawn) | **implemented, regression-tested, no API calls (§24 follow-up)** |
 | Sequential experience evaluation (B7e) | not started |
 
 The sequential multi-episode experiment (B7e) stays intentionally
@@ -2114,6 +2116,14 @@ full v3 architecture, and it does not conflate provenance-generation
 (separately verified by the smoke test above) with decision-consumption
 (what this experiment measures).
 
+**Status update**: the F4 exposure below led to a full sender-side
+provenance audit and an Option B (conservative abstention) redesign that
+withdraws automatic resolution entirely — F4 is now structurally
+unreachable through `FrozenCandidateEvidenceHarness`. See "Follow-up:
+Option B — conservative abstention" at the end of this section for the
+full audit and redesign; the counterexample and its original REVISION-1
+framing below are kept as the historical record that motivated it.
+
 ### H2 structural counterexample (deterministic, no additional API calls)
 
 The 5/5 explicit-export preservation above happened because every one of
@@ -2181,3 +2191,237 @@ unspecified?"** No new explicitness heuristic (keyword/regex, LLM
 classifier, new threshold) was created to fill this gap — per instruction,
 this is reported as an open structural question for design review, not
 silently patched.
+
+### Follow-up: sender-side provenance audit (extending the audit above)
+
+The audit above already searched the real-agent path for a structural
+signal of "explicit" vs. "merely confident." This follow-up extends it one
+level further upstream — not just whether any *module* carries such a
+signal, but whether the *delegation-creation call chain itself* (from
+`AgentDelegationRuntime.run(goal, context, budget)` down to the first
+place a facet value is chosen) has anything structured available before
+any inference is run at all.
+
+Traced the exact call order in `AgentDelegationRuntime.run()`
+([agent_runtime.py](../../src/dualflow/agent_runtime.py)):
+
+```python
+def run(self, *, goal: str, context: str, budget: Budget) -> AgentRuntimeResult:
+    delegation = self.principal.delegate(goal=goal, context=context)          # 1
+    principal_intent = self.principal.restate_intent(goal=goal, context=context)  # 2
+    proposal = self.delegate.propose(delegation=delegation.delegation, context=context)  # 3
+    semantic_verdict = self.semantic_verifier.verify_agent_proposal(...)      # 4
+    authority_verdict = self.authority_verifier.verify_agent_proposal(...)    # 5
+    return self._fuse(...)                                                    # 6
+```
+
+Findings:
+
+- **`goal`/`context` are the runtime's only inputs, and they are always raw
+  unstructured strings.** No structured intent object, tool/action-selection
+  result, SOP-step output, or per-facet source metadata exists anywhere
+  before them — checked `principal_agent.py`, `delegate_agent.py`,
+  `clarification.py`, `agent_experience.py`, every experiment/smoke script
+  (`agent_smoke.py`'s scenarios, `external_audit_finance.json`) that
+  constructs a `goal`: all hardcoded prose, from the very first line they
+  appear on.
+- **`PrincipalAgent.delegate(goal, context)`** makes one real LLM call and
+  produces `delegation: str` — natural language, not structured.
+- **`PrincipalIntent` (`restate_intent()`) is the only structured object in
+  the whole chain**, but it is *inferred*, not pre-existing sender state:
+  it is a second, independent real LLM call
+  (`_RESTATE_INTENT_INSTRUCTIONS`), invoked at step 2 above — strictly
+  *after* `delegate()` and *before* `propose()` — fresh on every single
+  `run()` invocation. It is not persisted, cached, or carried forward from
+  wherever `goal` itself originated.
+- **A single `restate_intent()` call cannot distinguish "the goal
+  explicitly specified this facet" from "the Principal's restatement just
+  had to fill it in anyway."** `_RESTATE_INTENT_INSTRUCTIONS` forces all
+  four fields (ACTION/RESOURCE/SCOPE/CONDITION) to be filled regardless of
+  what the original goal actually said ("choose exactly one value from
+  each list… never answer 'read, review, summarize'; pick the single best
+  one"). The prompt format itself erases the distinction this project
+  needs.
+- **`principal_intent` is not reachable from the offline v3 harness at
+  all** — it only exists inside `AgentDelegationRuntime.run()`, which
+  `FrozenCandidateEvidenceHarness` deliberately does not call (per the
+  "no runtime integration yet" boundary set at v3's kickoff).
+
+**Conclusion: no pre-existing, non-inferred, structural current-request
+provenance exists anywhere in the current codebase.** Every facet value on
+the current side is either raw text or the output of an LLM call that
+cannot itself certify explicitness. Per instruction, no heuristic
+(keyword/regex, lexical matching, LLM explicitness classifier,
+entropy-based inference, majority-vote inference, an added "is this
+explicit?" prompt question) was built to paper over this gap.
+
+One further possibility was considered and explicitly **not** pursued this
+round: repeatedly sampling `restate_intent()` N times (symmetric to how
+Delegate-side entropy already works) to measure *sender-side restatement
+stability* as a proxy for explicitness. This was rejected on inspection,
+before any implementation: sender-restatement stability measures whether
+the Principal's own paraphrase is self-consistent, not whether the
+original `goal` text asserted the facet. An explicit `goal` could still
+produce unstable restatements (surface wording varies), and an
+underspecified `goal` could still produce perfectly stable restatements
+(the model reliably guesses the same default). Reusing entropy on the
+sender side would not close the gap the receiver-side entropy audit
+already found — it would relocate the same uncertainty/underspecification
+conflation one hop upstream, at the cost of new real API calls per current
+episode. Not implemented, not benchmarked.
+
+### Follow-up: Option B — conservative abstention (redesign)
+
+Given no trustworthy current-side provenance exists (previous
+subsection), the two remaining designs were: **Option A** — a genuine
+delegation-protocol change where the sender passes structured
+`asserted_facets` metadata alongside the natural-language `delegation`
+text — and **Option B** — conservative abstention, where the harness never
+automatically overrides a decision using historical evidence, regardless
+of provenance, and instead treats historical support as a signal that
+routes to the existing (already-validated) clarification path.
+
+**Option B was chosen.** It fits the architecture already in place better
+than Option A: DualFlow's Authority side already treats an LLM's proposal
+as advisory (the deterministic `check_authority()`/`Budget.meet()` path
+has final say, never the model), and Option B applies the exact same shape
+of constraint to the Semantic side's use of historical evidence — the
+model's inference (here, comparator-detected support) informs but never
+unilaterally decides. Option A remains available as later work if a real
+delegation protocol ever grows structured per-facet provenance, but
+building it now would mean inventing schema that nothing upstream
+produces or consumes yet — out of scope for this narrowing pass.
+
+**What changed** (`src/dualflow/experience_decision.py`, REVISION 2; full
+rationale in the module's REVISION HISTORY docstring):
+
+- Consumption contract step 4 ("facet-level resolution") is replaced by
+  "no automatic resolution." When the support gate finds exactly one
+  historically-`SUPPORT`ed current candidate value, the harness now
+  returns stage `AMBIGUOUS_REQUIRES_CLARIFICATION`
+  (`historical_evidence_requires_clarification`) instead of the old
+  `AMBIGUOUS_RESOLVED_BY_EVIDENCE`. `final_value` stays equal to
+  `baseline_value` unconditionally. `relations` (the full audit trail,
+  e.g. `{"export": CONFLICT, "summarize": SUPPORT}`) and `resolved_value`
+  (the historically-supported value) are still computed and returned — the
+  relation is not hidden, only not auto-applied — so a future integration
+  with `ClarifyingDelegate` has everything it needs to ask the Principal a
+  targeted question, without this harness pre-empting that confirmation.
+- The stability gate (step 1, threshold 0.8, unchanged) and eligibility
+  gate (step 2, `confirmed_facets`, unchanged) are untouched. Historical
+  evidence still can never even be consulted for a stable distribution or
+  an unconfirmed facet.
+- The support-absent path (step 3 → F2, `AMBIGUOUS_NO_SUPPORT`) is
+  unchanged — still falls back to baseline, still never synthesizes a
+  historical value that wasn't among the current candidates.
+- `AMBIGUOUS_RESOLVED_BY_EVIDENCE` remains defined as a module constant
+  (for referencing the REVISION 1 main-experiment JSON and old
+  discussion), but `decide()` no longer produces it.
+- No new API calls, no runtime integration, no new threshold, no
+  explicitness heuristic. Fully deterministic, same as before.
+
+**F4 counterexample re-fixed under the new contract**
+(`tests/test_experience_decision.py::TestH2StructuralCounterexample`):
+the same `export=0.55/summarize=0.45` (entropy≈0.993 > 0.8) distribution
+with conflicting `summarize` historical evidence now yields
+`stage=AMBIGUOUS_REQUIRES_CLARIFICATION`, `final_value="export"`
+(unchanged from baseline), with `relations={"export": CONFLICT,
+"summarize": SUPPORT}` still recorded. **F4 (stale-history override) is
+now structurally unreachable through this harness** — not because
+overriding was made harder, but because automatic overriding was removed
+entirely.
+
+**H1's scope changes accordingly.** The §24 main-experiment result
+(`activation=2/5, conditional_transfer_success=2/2, overall=2/5`) is
+**not** overwritten or retracted — it remains the correct record of what
+the REVISION-1 (automatic-resolution) contract did against real API data,
+and it is what first supplied the empirical evidence (paired with the
+deterministic F4 counterexample) that motivated this redesign. But H1 can
+no longer be read as "history automatically resolves ambiguous cases
+correctly," because automatic resolution no longer exists. H1's scope is
+narrowed to:
+
+> **Does historical confirmed evidence, when the current facet is
+> ambiguous, correctly and safely identify a point where clarification
+> should be requested** — i.e. does the comparator's SUPPORT/CONFLICT
+> relation, applied only to already-generated current candidates, point at
+> the historically-plausible value without ever being asserted as the
+> decision itself?
+
+This separates **optimization benefit** (does history reduce clarification
+volume — an open question, deferred until this harness is wired into
+`ClarifyingDelegate`, not yet done) from **safety guarantee** (does history
+ever silently override a current decision — now answered: no, by
+construction). The REVISION-1 2/5 activation, 2/2 conditional-success
+numbers still describe the *relation quality* accurately (in the 2
+activated ambiguous runs, the historically-supported value did match the
+scenario's actual carryover); what has changed is only that this harness
+no longer trusts that relation quality enough to apply it automatically.
+
+**Failure taxonomy** (F1–F5, unchanged, no new codes added): F1
+(`AMBIGUOUS_NO_ELIGIBLE_EVIDENCE`) and F2 (`AMBIGUOUS_NO_SUPPORT`) are
+unchanged. F4 (stale-history override) is now structurally blocked by this
+harness's own contract, as shown above — the taxonomy code is kept (it
+remains meaningful for any future harness/integration that reintroduces an
+automatic path, e.g. under Option A) but is not currently reachable. F5
+(cross-facet amplification) was already structurally prevented and remains
+so, now even more directly, since nothing is ever applied automatically at
+all.
+
+**Two contract tests specified for a future provenance-aware (Option A)
+extension** — described here, **not implemented**, pending a decision to
+actually build Option A's protocol change:
+
+1. *Explicit-current-change case*: given a (hypothetical, not-yet-existing)
+   `asserted_facets={"action"}` on the current side, with
+   `asserted action="export"`, distribution `{export: .55, summarize:
+   .45}`, and conflicting historical `action="summarize"` evidence — the
+   contract should be that history consultation is *prohibited* for this
+   facet outright (checked before the stability/eligibility/support gates,
+   not after), so F4 is impossible by construction even at entropy 0.99,
+   without relying on stability at all.
+2. *Underspecified-current-request case*: given the same
+   `asserted_facets` mechanism but `action` **not** in `asserted_facets`,
+   an ambiguous distribution, and historical `action="summarize"` evidence
+   — history consultation remains allowed (this harness's existing
+   support-detection behavior applies), because there is no current
+   assertion to protect.
+
+Building these requires Option A's `asserted_facets` provenance to exist
+first; under the current, provenance-less Option B contract, case 1's
+protection is instead provided unconditionally (never by relying on
+`asserted_facets`, which doesn't exist) by withdrawing automatic
+resolution entirely, and case 2's behavior is exactly what
+`AMBIGUOUS_REQUIRES_CLARIFICATION` already does today.
+
+**Revision progression, in full** (nothing below erased or treated as a
+failed experiment — each step is what motivated the next):
+
+1. Automatic structured transfer implemented, regression-tested
+   (§23 follow-ups 1–5).
+2. Real API H1: 2/5 activation, 2/2 conditional transfer success.
+3. Real API H2: 5/5 explicit-change preservation — but every run happened
+   to sample to a stable (entropy=0.000) distribution.
+4. Deterministic unstable-explicit counterexample exposed F4 as reachable
+   (§24, "H2 structural counterexample").
+5. Sender-side audit found no trustworthy current-request assertion
+   provenance anywhere in the codebase (this section).
+6. Automatic historical override withdrawn; historical evidence downgraded
+   to an advisory, clarification-triggering role (Option B, this section).
+
+**Principle now matching DualFlow's existing non-amplification
+philosophy**: historical experience is non-authoritative — it may
+complete missing semantic information, but it cannot supersede a current
+sender assertion, exactly as a delegator's grant can never expand down a
+delegation chain (`ARCHITECTURE.md` §8). Today, without provenance-aware
+protocol support, this is enforced conservatively for *all* ambiguous
+cases (history never overrides anything automatically, asserted or not).
+A future provenance-aware protocol (Option A) could narrow this back to
+apply only to genuinely unasserted facets, once the sender side actually
+carries that information structurally — that remains explicitly future
+work, not started.
+
+Not done in this pass, per instruction: no API calls, no A′ (repeated
+`restate_intent()`) experiment, no Option A protocol/schema
+implementation, no runtime integration, no B7e, no new classifier, no
+explicitness heuristic, no threshold change, no prompt tuning.
