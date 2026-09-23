@@ -8,8 +8,17 @@ Locks in the consumption contract fixed before any main-experiment API run
   - support gate (existing deterministic comparator, current candidates only)
   - facet-level resolution only -- never a synthesized historical
     Interpretation, never cross-facet amplification
-  - explicit/stable current instructions are never overridden by
-    conflicting historical evidence (F4 structurally prevented)
+  - PRECISE (corrected) scope of the stability guarantee: a distribution
+    that is already stable per the existing entropy threshold is never
+    overridden by conflicting historical evidence. This is NOT the same as
+    "an explicit current instruction is never overridden" -- entropy
+    measures sampling disagreement, not whether the delegation text
+    explicitly specified the facet. `TestH2StructuralCounterexample` below
+    fixes a deterministic counterexample where a distribution modeling an
+    explicit-export delegation, but with unstable sampling (entropy > 0.8),
+    DOES get overridden to "summarize" by the historical evidence -- this
+    is a real, currently-reachable F4 (stale-history override), recorded
+    as a known contract limitation, not asserted away.
 """
 
 from __future__ import annotations
@@ -87,10 +96,12 @@ class TestStabilityGate:
         assert decision.resolved_value is None
         assert comparator.calls == 0  # evidence literally never touched
 
-    def test_conflicting_history_never_overrides_explicit_current_instruction(self):
-        """F4 (stale-history override)의 정확한 실패 재현 + 수정 확인:
-        historical action이 summarize인데 현재는 명시적으로/안정적으로
-        export를 가리키는 경우, 최종 결정은 반드시 export여야 한다."""
+    def test_conflicting_history_never_overrides_a_stable_current_distribution(self):
+        """정확한 범위: 이 테스트가 보장하는 건 "current distribution이
+        이미 stable하면(entropy<=threshold) conflicting history가 override
+        못 한다"이지, "explicit current instruction은 항상 override 못
+        한다"가 아니다 -- 후자는 entropy가 threshold를 넘으면 성립하지
+        않는다(`TestH2StructuralCounterexample` 참고, 실제로 재현됨)."""
         stable_export = _distribution({_interp("export"): 0.95, _interp("summarize"): 0.05}, 0.286)
         experience = _experience("summarize")
         harness = FrozenCandidateEvidenceHarness(entropy_threshold=0.8)
@@ -256,3 +267,65 @@ class TestStructuralIndependence:
         import dualflow.experience_decision as mod
 
         assert not hasattr(mod, "AgentDelegationRuntime")
+
+
+class TestH2StructuralCounterexample:
+    """B7d-v3 main experiment (docs/experiments/agent_connected_eval.md
+    SS24) 결과 이후 발견된 구조적 문제를 API 호출 없이 deterministic하게
+    고정한다. 5/5 explicit-export preservation은 그 배치에서 entropy가
+    매번 0.000이었기 때문이었다 -- 진짜 질문은 "entropy가 threshold를
+    넘는 explicit-export sampling이 real API에서 실제로 나오면 어떻게
+    되는가"였고, 답은 이미 이 harness의 기존 코드(무수정)로 결정론적으로
+    확인할 수 있다.
+
+    이 클래스의 테스트는 "버그를 고쳤다"가 아니라 "현재 contract가 실제로
+    이렇게 동작한다는 걸 API 없이 재현해서 기록한다"는 목적이다 -- 코드는
+    이 테스트 때문에 바뀌지 않았다."""
+
+    def test_unstable_explicit_export_sampling_is_overridden_by_conflicting_history(self):
+        """정확히 이번 지시가 예상한 counterexample: export=0.55/
+        summarize=0.45(entropy≈0.993, threshold 0.8보다 큼)인 candidate
+        distribution에 historical action=summarize evidence를 적용하면,
+        harness는 실제로 summarize로 override한다 -- 이게 F4
+        (stale-history override)가 현재 contract상 도달 가능함을
+        보여주는 재현이다."""
+        export = _interp("export")
+        summarize = _interp("summarize")
+        belief = {export: 0.55, summarize: 0.45}
+        from dualflow.semantic import entropy as compute_entropy
+        h = compute_entropy(belief)
+        assert h > 0.8  # 이게 바로 "unstable sampling"의 정의다
+
+        unstable_explicit_export = _distribution(belief, entropy_value=h)
+        experience = _experience("summarize")  # conflicting historical value
+        harness = FrozenCandidateEvidenceHarness(entropy_threshold=0.8)
+
+        decision = harness.decide(distribution=unstable_explicit_export,
+                                  experience=experience, facet="action")
+
+        assert decision.stage == AMBIGUOUS_RESOLVED_BY_EVIDENCE
+        assert decision.baseline_value == "export"  # majority/plurality current decision
+        assert decision.final_value == "summarize"  # OVERRIDDEN -- this is the F4 case
+        assert decision.relations == {
+            "export": EvidenceRelation.CONFLICT,
+            "summarize": EvidenceRelation.SUPPORT,
+        }
+
+    def test_the_guarantee_is_about_stability_not_explicitness(self):
+        """같은 historical evidence, 같은 "explicit export" 의도인데
+        distribution의 entropy만 다르면(안정 vs 불안정) 결과가 갈린다는
+        걸 나란히 보여준다 -- 이게 "harness는 explicitness가 아니라
+        stability만 본다"는 정확한 진술의 근거다."""
+        experience = _experience("summarize")
+        harness = FrozenCandidateEvidenceHarness(entropy_threshold=0.8)
+
+        stable = _distribution({_interp("export"): 0.95, _interp("summarize"): 0.05}, 0.286)
+        unstable = _distribution({_interp("export"): 0.55, _interp("summarize"): 0.45}, 0.993)
+
+        stable_decision = harness.decide(distribution=stable, experience=experience, facet="action")
+        unstable_decision = harness.decide(distribution=unstable, experience=experience, facet="action")
+
+        assert stable_decision.final_value == "export"      # preserved
+        assert unstable_decision.final_value == "summarize"  # overridden
+        # 두 경우 모두 "explicit export 의도"라는 점은 동일하다 -- 유일한
+        # 차이는 sampling entropy뿐이다.

@@ -517,7 +517,8 @@ meaningful.**
 | `v3` single-facet clarification (target ≠ confirmed for multi-facet rounds, closed via IG-based single-facet targeting) | **implemented, regression-tested (§23 follow-up 4)** |
 | `v3` post-clarification resolution gate (singleton target ≠ actual confirmation) | **implemented, regression-tested (§23 follow-up 5) — provenance chain design complete** |
 | `v3` contract smoke test (42 real API calls) | **PASS — full chain held end to end (§24)** |
-| B7d-v3 main experiment (H1 ambiguous transfer / H2 explicit preservation, paired frozen-candidate design) | **protocol + harness implemented, regression-tested — not yet run (§24)** |
+| B7d-v3 main experiment (200 real API calls) | **complete — H1 partial positive signal (2/2 conditional success); H2's 5/5 preservation found to reflect stability, not explicitness (§24)** |
+| H2 structural counterexample (stale-history override reachable when sampling is unstable) | **confirmed via deterministic regression test, no API — open design question, not yet fixed (§24)** |
 | Sequential experience evaluation (B7e) | not started |
 
 The sequential multi-episode experiment (B7e) stays intentionally
@@ -2053,8 +2054,130 @@ Implemented and structurally verified: `--help` runs cleanly, a
 fake-client dry run confirmed correct end-to-end wiring (paired rows,
 correct summary aggregation), `src/dualflow/experience_decision.py` has
 its own 15 regression tests (stability/eligibility/support gates,
-facet-only resolution, cross-facet non-amplification, explicit-instruction
-preservation), full suite 356 → 371 passed. **Not yet run against the real
-API.** No N/L/P/S re-run, no runtime integration, no B7e, no new
-heuristic, no prompt tuning were performed to produce this protocol or
-harness.
+facet-only resolution, cross-facet non-amplification), full suite
+356 → 371 passed. No N/L/P/S re-run, no runtime integration, no B7e, no
+new heuristic, no prompt tuning were performed to produce this protocol
+or harness.
+
+### Main experiment results (200 real API calls)
+
+```
+git_sha: 79ce2cc7c26cac97e8894b5cb8c53259964ff8dc
+model: gpt-4o-mini-2024-07-18
+N=20, runs=5, 200 candidate-generation calls, 0 comparator calls
+```
+
+| run | ambiguous entropy | ambiguous belief | ambiguous baseline | ambiguous v3 | stage | explicit entropy | explicit v3 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 0.722 | export .80/summarize .20 | export | export | stable_baseline | 0.000 | export |
+| 2 | 0.811 | export .75/summarize .25 | export | **summarize** | ambiguous_resolved_by_evidence | 0.000 | export |
+| 3 | 0.469 | export .90/summarize .10 | export | export | stable_baseline | 0.000 | export |
+| 4 | 0.934 | export .65/summarize .35 | export | **summarize** | ambiguous_resolved_by_evidence | 0.000 | export |
+| 5 | 0.469 | export .90/summarize .10 | export | export | stable_baseline | 0.000 | export |
+
+**H1, reported as three separated metrics (per instruction — never
+collapsed into one "v3 accuracy" number):**
+
+```
+gate_activation_rate       = 2/5   (runs where entropy > 0.8, evidence path entered)
+conditional_transfer_success = 2/2 (of the runs that activated, resolved to "summarize")
+overall_semantic_outcome    = 2/5  (P(summarize) across all 5 runs)
+
+P(summarize | baseline) = 0.0
+P(summarize | v3)       = 0.4
+F2 (support absent) occurrences: 0
+F3 (wrong transfer) occurrences: 0
+```
+
+Every run where the evidence path activated resolved correctly toward the
+historically confirmed action — a small but clean signal (2/2), not a
+strong statistical claim.
+
+**H2, raw (see counterexample below for the interpretation correction):**
+
+```
+P(export | baseline) = 1.0
+P(export | v3)        = 1.0
+stability-gate-passed runs = 5/5
+history-consultation-occurred runs = 0/5
+F4 (stale-history override) occurrences in this batch: 0
+```
+
+Tokens: 200 calls total, 80,800 input / 5,113 output (candidate generation
+only; comparator/v3 decision made zero additional calls, confirmed by
+`input_tokens=0`/`output_tokens=0` on every v3 row).
+
+**Interpretation limits, as instructed**: the 20 candidate samples within
+each run are not treated as 20 independent trials; no statistical
+significance is claimed from 5 runs; this result does not validate the
+full v3 architecture, and it does not conflate provenance-generation
+(separately verified by the smoke test above) with decision-consumption
+(what this experiment measures).
+
+### H2 structural counterexample (deterministic, no additional API calls)
+
+The 5/5 explicit-export preservation above happened because every one of
+those 5 real runs sampled to `entropy = 0.000` — the stability gate never
+let the decision path reach history consultation at all. That leaves open
+exactly the case the corrected contract note (above, "Precise scope of
+this guarantee") warned about: what happens when real sampling on an
+explicit-change delegation is *unstable*? This does not require another
+API call to check — it is a deterministic consequence of already-committed
+code, confirmed directly:
+
+```python
+belief = {Interpretation("export", ...): 0.55, Interpretation("summarize", ...): 0.45}
+# entropy(belief) == 0.9928  (> 0.8 threshold)
+harness.decide(distribution=..., experience=<confirmed_facets={"action"}, action="summarize">, facet="action")
+# -> stage=AMBIGUOUS_RESOLVED_BY_EVIDENCE, baseline_value="export", final_value="summarize"
+```
+
+**`FrozenCandidateEvidenceHarness`, completely unmodified, overrides an
+explicit-export decision to "summarize" whenever sampling on that
+delegation happens to land above the entropy threshold.** This is now
+fixed as a regression test
+(`tests/test_experience_decision.py::TestH2StructuralCounterexample`) —
+not a bug fix, a recorded, currently-reachable behavior.
+
+**Corrected H2 interpretation, replacing the earlier framing**: the
+5/5 preservation in the main-experiment batch was not evidence that "v3
+protects explicit current instructions" — it was evidence that "v3
+protects distributions the existing stability criterion already judges
+stable," and in this particular batch, the explicit-export delegation
+always sampled to a stable distribution. The precise, now-confirmed
+statement is:
+
+> **The current v3 harness guarantees stable-current preservation. It
+> does not, in general, guarantee explicit-current preservation** — those
+> two properties coincide only when sampling on an explicit instruction
+> happens to be stable, which is not guaranteed by anything in the current
+> contract.
+
+### Audit: does any existing signal distinguish "explicit" from "merely certain"?
+
+Searched `principal_agent.py`, `delegate_agent.py`, `clarification.py`,
+`agent_experience.py`, `experience_evidence.py`, `rule_engine.py`, and
+`semantic.py` for any structural (non-textual) signal that a delegation's
+text *explicitly specified* a facet, as distinct from the model simply
+being confident about it. **Found: no such signal exists in the real-agent
+(oracle-free) Phase B path.** The one place a related concept exists is
+`semantic.Principal.refuses` (legacy Phase A controlled-benchmark oracle —
+`Principal` is constructed with a known `truth: Interpretation` and a set
+of dimensions it "refuses" to specify, simulating underspecification) —
+but this is oracle-aware by construction (`self.truth`) and is exactly the
+kind of ground-truth dependency this whole research arc has structurally
+avoided in the real pipeline; reusing it here would reintroduce a
+`task.truth`-equivalent into a supposedly oracle-free path. `Agent
+DelegationRuntime`'s existing fusion check
+(`principal_intent.intended_action != authority_verdict.interpretation →
+REJECT`) is a *post-hoc*, runtime-level safety net that could, if v3 were
+ever wired into the runtime, catch a divergence after the fact — but it is
+not reachable from this offline harness (not integrated, per instruction),
+and it rejects the whole delegation rather than gating whether evidence
+should be consulted in the first place. **Conclusion: entropy is
+currently the only signal available, and it answers "is the current
+action uncertain?", not "did the current request leave this facet
+unspecified?"** No new explicitness heuristic (keyword/regex, LLM
+classifier, new threshold) was created to fill this gap — per instruction,
+this is reported as an open structural question for design review, not
+silently patched.
