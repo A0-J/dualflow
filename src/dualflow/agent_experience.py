@@ -68,16 +68,19 @@ class AgentExperience:
     사실"이 되는 건 아니다 — 그냥 그 episode에서 우연히 그 값이었을
     뿐이다.
 
-    `build_verified_experience()`가 이 필드를 채운다 — 방법은 `pre_
-    distribution.belief`의 후보들 사이에서 실제로 값이 갈렸던 facet만
-    "confirmed"로 표시한다(아래 `_facets_with_pre_clarification_
-    ambiguity()` 참고). 값이 한 번도 갈린 적 없는 facet은 Principal이
-    그걸 clarify한 적이 없다는 뜻이다. 기본값은 `frozenset()`(아무 facet도
-    confirmed 아님) — 이 클래스를 직접 생성하는 기존 코드(`agent_smoke.py`
-    의 `EXAMPLE_PRIOR_EXPERIENCE`, `experience_transfer.py`의
-    `make_experience()`)는 이 필드를 넘기지 않으므로 그대로
-    `frozenset()`이 되고, 이건 의도적으로 안전한 쪽(fail-closed)이다 —
-    "무엇이 confirmed됐는지 모르면 아무것도 evidence로 쓰지 않는다."""
+    `build_verified_experience()`가 이 필드를 채운다 — `result.question.
+    target_facets`를 그대로 물려받는다(`clarification.ClarifyingDelegate.
+    resolve()`가 질문을 만들기 *전에* 이미 계산해서 그 질문 자체를 그
+    facet만 묻도록 제약한 값). "pre_distribution에서 값이 갈렸던 facet"과
+    "실제로 Principal에게 물어본 facet"을 구분하지 못했던 이전 버전(v3
+    §23 follow-up 2)의 문제를 이렇게 고쳤다 — 자세한 경위는
+    `clarification.py`의 `_facets_that_varied()` docstring 참고. 기본값은
+    `frozenset()`(아무 facet도 confirmed 아님) — 이 클래스를 직접 생성하는
+    기존 코드(`agent_smoke.py`의 `EXAMPLE_PRIOR_EXPERIENCE`,
+    `experience_transfer.py`의 `make_experience()`)는 이 필드를 넘기지
+    않으므로 그대로 `frozenset()`이 되고, 이건 의도적으로 안전한 쪽
+    (fail-closed)이다 — "무엇이 confirmed됐는지 모르면 아무것도 evidence로
+    쓰지 않는다"."""
 
     principal_id: str
     task_category: str
@@ -103,26 +106,6 @@ class AgentExperience:
         return self.post_distribution.entropy
 
 
-_ALL_FACETS = ("action", "resource", "scope", "condition")
-
-
-def _facets_with_pre_clarification_ambiguity(distribution: CandidateDistribution) -> frozenset[str]:
-    """clarification 이전(pre) candidate 분포에서 실제로 하나 이상의 값으로
-    갈렸던 facet만 돌려준다 — 그 facet에 대해 Delegate가 진짜 불확실했고,
-    그래서 Principal에게 물어 답을 받은 것이라고 볼 수 있는 유일한 근거다.
-    한 번도 갈린 적 없는 facet(이 pilot에서는 거의 항상 resource/scope)은
-    애초에 clarify할 게 없었다는 뜻이다 — `post_distribution`이 이미
-    entropy 0으로 수렴한 상태(`build_verified_experience()`의 기존
-    조건)이므로, "clarification 후 이 facet이 확정됐는가"는 이미
-    보장돼 있고 여기서는 "confirm될 이유가 있었는가"만 본다."""
-    varied: set[str] = set()
-    for facet in _ALL_FACETS:
-        values = {getattr(interp, facet) for interp in distribution.belief}
-        if len(values) > 1:
-            varied.add(facet)
-    return frozenset(varied)
-
-
 def build_verified_experience(result: ClarificationResult, *, principal_id: str,
                               task_category: str, delegation: str,
                               max_verified_entropy: float = 0.0,
@@ -130,14 +113,20 @@ def build_verified_experience(result: ClarificationResult, *, principal_id: str,
     """`ClarifyingDelegate.resolve()`의 결과를 검증된 경험으로 바꾼다 —
     자격이 안 되면 `None`을 돌려준다. 이 함수 자체는 아무것도 저장하지
     않는다 — 호출자가 반환값이 `None`이 아닐 때만 명시적으로
-    `store.add(...)`해야 한다(B7c는 의도적으로 자동 저장을 하지 않는다,
-    `ClarifyingDelegate` 자체는 전혀 건드리지 않았다).
+    `store.add(...)`해야 한다(B7c는 의도적으로 자동 저장을 하지 않는다).
+
+    `confirmed_facets`는 `result.question.target_facets`를 그대로
+    물려받는다 — 이 함수 자체는 어떤 facet이 confirmed인지 다시 계산하지
+    않는다(v3 §23 follow-up 2의 실수를 반복하지 않기 위해서다: "pre_
+    distribution에서 값이 갈렸다"는 사후 추론과 "질문이 실제로 그 facet을
+    겨냥해서 만들어졌다"는 사전 제약은 다르다 — 후자만 `clarification.py`
+    의 `_facets_that_varied()`가 `resolve()` 안에서 질문을 만들기 *전에*
+    계산해서 넘긴다).
 
     `delegation`을 별도 인자로 받는 이유: `ClarificationResult`는
     `resolve()`에 넘겼던 원본 delegation 텍스트를 자체적으로 갖고 있지
     않다 — 호출자(= `resolve(delegation=...)`를 부른 쪽)가 이미 알고
-    있으므로 그대로 넘겨주면 된다. `clarification.py`는 이 함수 때문에
-    수정되지 않았다."""
+    있으므로 그대로 넘겨주면 된다."""
     if not result.clarified:
         return None
     if result.question is None or result.answer is None or result.post_distribution is None:
@@ -154,7 +143,7 @@ def build_verified_experience(result: ClarificationResult, *, principal_id: str,
         confirmed_interpretation=result.final_interpretation,
         pre_distribution=result.pre_distribution,
         post_distribution=result.post_distribution,
-        confirmed_facets=_facets_with_pre_clarification_ambiguity(result.pre_distribution),
+        confirmed_facets=result.question.target_facets,
         episode_id=episode_id,
     )
 

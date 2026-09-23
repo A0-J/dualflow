@@ -43,7 +43,30 @@ from dataclasses import dataclass
 
 from .delegate_agent import CandidateDistribution, ClarificationQuestion, DelegateAgent
 from .principal_agent import PrincipalAgent, PrincipalClarification
-from .semantic import Interpretation
+from .semantic import Belief, Interpretation
+
+_ALL_FACETS = ("action", "resource", "scope", "condition")
+
+
+def _facets_that_varied(belief: Belief) -> frozenset[str]:
+    """v3 provenance 보완(agent_connected_eval.md §23 follow-up 3). clarify
+    이전(pre) candidate 분포에서 실제로 하나 이상의 값으로 갈렸던 facet만
+    돌려준다 — B가 그 facet에 대해 진짜 불확실했다는, 질문을 만들기 *전에*
+    이미 정해지는 유일한 구조적 근거다. `resolve()`가 이 값을
+    `ask_clarification()`에 `target_facets`로 넘겨서 질문 자체를 그 facet만
+    묻도록 제약한다 — "질문이 끝난 뒤 무엇이 갈렸었는지 추론"하는 게 아니라
+    "질문을 만들기 전에 무엇을 물을지 결정"하는 순서다. 이전 revision(v3
+    §23 follow-up 2)은 이 계산을 `build_verified_experience()` 안에서
+    사후적으로 했었다 — 그 방식은 "pre-clarification ambiguity"와 "실제
+    Principal이 확인한 facet"을 구분하지 못한다는 게 지적됐다(같은 로직을
+    앞으로 옮겨서 질문 생성을 제약하는 용도로 바꾸면 그 구분이 생긴다:
+    질문이 실제로 이 facet만 묻도록 prompt에 명시되기 때문이다)."""
+    varied: set[str] = set()
+    for facet in _ALL_FACETS:
+        values = {getattr(interp, facet) for interp in belief}
+        if len(values) > 1:
+            varied.add(facet)
+    return frozenset(varied)
 
 
 @dataclass(frozen=True)
@@ -92,8 +115,10 @@ class ClarifyingDelegate:
         if pre.entropy <= self.entropy_threshold:
             return ClarificationResult(False, pre, None, None, None, pre.top)
 
+        target_facets = _facets_that_varied(pre.belief)
         question = self.delegate.ask_clarification(
-            delegation=delegation, distribution=pre, context=context)
+            delegation=delegation, distribution=pre, context=context,
+            target_facets=target_facets)
         answer = self.principal.answer_clarification(
             goal=goal, context=context, question=question.question)
 

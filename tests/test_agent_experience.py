@@ -27,16 +27,19 @@ def _distribution(belief: dict, entropy_value: float) -> CandidateDistribution:
         n_unique=len(belief), n_samples=10, responses=[])
 
 
-def _clarified_result(post_entropy: float, post_belief: dict | None = None
-                      ) -> ClarificationResult:
+def _clarified_result(post_entropy: float, post_belief: dict | None = None,
+                      target_facets: frozenset[str] = frozenset()) -> ClarificationResult:
     """실제 clarification이 일어난 ClarificationResult를 만든다 —
-    post_entropy만 바꿔가며 저장 자격 기준을 테스트하기 위한 fixture."""
+    post_entropy만 바꿔가며 저장 자격 기준을 테스트하기 위한 fixture.
+    `target_facets`는 `question.target_facets`에 그대로 들어간다(기본값은
+    빈 frozenset — 기존 동작)."""
     pre = _distribution({SUMMARIZE: 0.6, EXPORT: 0.4}, 0.971)
     post_belief = post_belief or {SUMMARIZE: 1.0}
     post = _distribution(post_belief, post_entropy)
     question = ClarificationQuestion(
         question="Export or summarize?", raw_text="Export or summarize?",
-        response=LLMResponse(text="Export or summarize?"), belief=pre.belief, entropy=pre.entropy)
+        response=LLMResponse(text="Export or summarize?"), belief=pre.belief, entropy=pre.entropy,
+        target_facets=target_facets)
     answer = PrincipalClarification(
         answer="Summarize only.", response=LLMResponse(text="Summarize only."))
     return ClarificationResult(
@@ -112,15 +115,16 @@ class TestBuildVerifiedExperience:
 
 
 class TestConfirmedFacetsProvenance:
-    """v3 provenance 보완(§23 follow-up) — build_verified_experience()가
-    confirmed_facets를 pre_distribution의 실제 변동(variance)으로부터
-    계산하는지 확인한다. 새 LLM 호출도, 네트워크도 필요 없다."""
+    """v3 provenance 보완, revision 2(§23 follow-up 3) — build_verified_
+    experience()는 더 이상 confirmed_facets를 스스로 계산하지 않는다.
+    `result.question.target_facets`(clarification.py의 `_facets_that_
+    varied()`가 질문을 만들기 *전에* 계산해서 넘긴 값)를 그대로
+    물려받을 뿐이다 — 이 클래스는 그 pass-through만 확인한다. "어떤
+    facet이 실제로 질문 대상이었는가"를 계산하는 로직 자체의 테스트는
+    tests/test_clarification.py의 TestTargetFacets에 있다."""
 
-    def test_only_facets_that_varied_pre_clarification_are_confirmed(self):
-        """SUMMARIZE/EXPORT fixture는 action만 다르고 resource/scope/
-        condition은 전부 같다 -- confirmed_facets는 {"action"}이어야
-        하고, 나머지 세 facet은 포함되면 안 된다."""
-        result = _clarified_result(post_entropy=0.0)
+    def test_confirmed_facets_is_exactly_the_question_target_facets(self):
+        result = _clarified_result(post_entropy=0.0, target_facets=frozenset({"action"}))
 
         exp = build_verified_experience(
             result, principal_id="finance_lead_A", task_category="external_audit_report",
@@ -128,21 +132,11 @@ class TestConfirmedFacetsProvenance:
 
         assert exp is not None
         assert exp.confirmed_facets == frozenset({"action"})
+        assert exp.confirmed_facets is result.question.target_facets
 
-    def test_multiple_varying_facets_are_all_confirmed(self):
-        """pre_distribution에서 action과 scope 둘 다 갈렸다면 둘 다
-        confirmed_facets에 들어가야 한다."""
-        summarize_sept = Interpretation("summarize", "file", "/reports/2026-09/", frozenset())
-        export_aug = Interpretation("export", "file", "/reports/2026-08/", frozenset())
-        pre = _distribution({summarize_sept: 0.6, export_aug: 0.4}, 0.971)
-        post = _distribution({summarize_sept: 1.0}, 0.0)
-        question = ClarificationQuestion(
-            question="q", raw_text="q", response=LLMResponse(text="q"),
-            belief=pre.belief, entropy=pre.entropy)
-        answer = PrincipalClarification(answer="a", response=LLMResponse(text="a"))
-        result = ClarificationResult(
-            clarified=True, pre_distribution=pre, post_distribution=post,
-            question=question, answer=answer, final_interpretation=post.top)
+    def test_multiple_target_facets_are_all_passed_through(self):
+        result = _clarified_result(post_entropy=0.0,
+                                   target_facets=frozenset({"action", "scope"}))
 
         exp = build_verified_experience(
             result, principal_id="finance_lead_A", task_category="external_audit_report",
@@ -151,17 +145,37 @@ class TestConfirmedFacetsProvenance:
         assert exp is not None
         assert exp.confirmed_facets == frozenset({"action", "scope"})
 
-    def test_no_varying_facets_means_empty_confirmed_facets(self):
-        """pre_distribution의 유일한 candidate가 이미 하나뿐이면(entropy 0
-        이라 애초에 clarify가 트리거되지 않을 상황이지만, 방어적으로)
-        아무 facet도 confirmed로 표시되지 않는다."""
-        only = Interpretation("summarize", "file", "/reports/2026-08/", frozenset())
-        pre = _distribution({only: 1.0}, 0.0)
-        post = _distribution({only: 1.0}, 0.0)
+    def test_no_target_facets_means_empty_confirmed_facets(self):
+        """question.target_facets가 기본값(빈 frozenset)이면 confirmed_
+        facets도 비어 있다 -- build_verified_experience()가 스스로 뭔가를
+        추론해서 채워 넣지 않는다."""
+        result = _clarified_result(post_entropy=0.0)  # target_facets 생략 -> 기본값
+
+        exp = build_verified_experience(
+            result, principal_id="finance_lead_A", task_category="external_audit_report",
+            delegation="x")
+
+        assert exp is not None
+        assert exp.confirmed_facets == frozenset()
+
+    def test_does_not_recompute_from_pre_distribution_variance(self):
+        """핵심 회귀 방지: pre_distribution 자체는 action과 scope 둘 다
+        갈리게 만들어 두되, question.target_facets는 "action"만으로
+        명시한다 -- 결과는 반드시 target_facets를 따라야 하고,
+        pre_distribution의 실제 variance(action+scope)를 다시 계산해서
+        나오면 안 된다. 이게 §23 follow-up 2에서 발견된 바로 그 문제
+        ("ambiguous_facets_before_clarification"으로 오염되는 것)를
+        재현해서 고쳐졌는지 확인하는 테스트다."""
+        summarize_sept = Interpretation("summarize", "file", "/reports/2026-09/", frozenset())
+        export_aug = Interpretation("export", "file", "/reports/2026-08/", frozenset())
+        pre = _distribution({summarize_sept: 0.6, export_aug: 0.4}, 0.971)  # action AND scope vary
+        post = _distribution({summarize_sept: 1.0}, 0.0)
         question = ClarificationQuestion(
-            question="q", raw_text="q", response=LLMResponse(text="q"),
-            belief=pre.belief, entropy=pre.entropy)
-        answer = PrincipalClarification(answer="a", response=LLMResponse(text="a"))
+            question="Summarize or export?", raw_text="Summarize or export?",
+            response=LLMResponse(text="Summarize or export?"),
+            belief=pre.belief, entropy=pre.entropy,
+            target_facets=frozenset({"action"}))  # question only actually asked about action
+        answer = PrincipalClarification(answer="Summarize.", response=LLMResponse(text="Summarize."))
         result = ClarificationResult(
             clarified=True, pre_distribution=pre, post_distribution=post,
             question=question, answer=answer, final_interpretation=post.top)
@@ -171,7 +185,7 @@ class TestConfirmedFacetsProvenance:
             delegation="x")
 
         assert exp is not None
-        assert exp.confirmed_facets == frozenset()
+        assert exp.confirmed_facets == frozenset({"action"})  # NOT {"action", "scope"}
 
 
 class TestStoreLookupIsolation:

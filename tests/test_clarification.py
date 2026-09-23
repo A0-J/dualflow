@@ -223,6 +223,99 @@ class TestConfigurableThreshold:
         assert len(high_threshold_principal.calls) == 0
 
 
+class TestTargetFacets:
+    """v3 provenance 보완, revision 2(agent_connected_eval.md §23 follow-up
+    3). `resolve()`가 `pre.belief`에서 실제로 갈린 facet만 계산해서 질문을
+    만들기 *전에* `ask_clarification()`에 `target_facets`로 넘기고, 그
+    값이 `result.question.target_facets`로 그대로 보존되는지 확인한다.
+    이 계산은 answer 텍스트를 전혀 보지 않는다 — pre_distribution.belief
+    (구조화된 Interpretation 집합)만 본다."""
+
+    def test_single_facet_variance_is_passed_as_target_facets(self):
+        """SUMMARIZE/EXPORT는 action만 다르다 -- target_facets는
+        {"action"}이어야 한다."""
+        delegate_llm = _FakeLLMClient(
+            [_structured("summarize") for _ in range(5)]
+            + [_structured("export") for _ in range(5)]
+            + [LLMResponse(text="Internal summary or export?")]
+            + [_structured("summarize") for _ in range(10)])
+        principal_llm = _FakeLLMClient([LLMResponse(text="Create an internal summary only.")])
+
+        clarifier = _make(principal_llm, delegate_llm, n=10, entropy_threshold=0.8)
+        result = clarifier.resolve(goal="x", context="", delegation="Please prepare the report.")
+
+        assert result.question.target_facets == frozenset({"action"})
+
+    def test_target_facets_are_passed_into_ask_clarification_prompt(self):
+        """target_facets가 실제로 ask_clarification()의 input_text에
+        제약 문구로 전달되는지 직접 확인한다."""
+        delegate_llm = _FakeLLMClient(
+            [_structured("summarize") for _ in range(5)]
+            + [_structured("export") for _ in range(5)]
+            + [LLMResponse(text="?")]
+            + [_structured("summarize") for _ in range(10)])
+        principal_llm = _FakeLLMClient([LLMResponse(text="Summary only.")])
+
+        clarifier = _make(principal_llm, delegate_llm, n=10, entropy_threshold=0.8)
+        clarifier.resolve(goal="x", context="", delegation="Please prepare the report.")
+
+        ask_call = delegate_llm.calls[10]  # 11th call = ask_clarification()
+        assert "action" in ask_call["input_text"]
+        assert "Fields that are actually uncertain" in ask_call["input_text"]
+
+    def test_multi_facet_variance_produces_multiple_target_facets(self):
+        """action과 scope 둘 다 pre-clarification에서 갈리면 둘 다
+        target_facets에 들어간다."""
+        summarize_sept = Interpretation("summarize", "file", "/reports/2026-09/", frozenset())
+        export_aug = Interpretation("export", "file", "/reports/2026-08/", frozenset())
+        delegate_llm = _FakeLLMClient(
+            [LLMResponse(text="ACTION: summarize\nRESOURCE: file\nSCOPE: /reports/2026-09/\nCONDITION: none")
+             for _ in range(5)]
+            + [LLMResponse(text="ACTION: export\nRESOURCE: file\nSCOPE: /reports/2026-08/\nCONDITION: none")
+               for _ in range(5)]
+            + [LLMResponse(text="?")]
+            + [LLMResponse(text="ACTION: summarize\nRESOURCE: file\nSCOPE: /reports/2026-09/\nCONDITION: none")
+               for _ in range(10)])
+        principal_llm = _FakeLLMClient([LLMResponse(text="Summarize the September report.")])
+
+        clarifier = _make(principal_llm, delegate_llm, n=10, entropy_threshold=0.8)
+        result = clarifier.resolve(goal="x", context="", delegation="Please prepare the report.")
+
+        assert result.question.target_facets == frozenset({"action", "scope"})
+
+    def test_no_clarification_means_no_question_to_carry_target_facets(self):
+        """entropy가 threshold 이하면 question 자체가 None이다 -- target_
+        facets를 걱정할 필요가 없다(이 경우 build_verified_experience()도
+        result.clarified=False 단계에서 이미 None을 돌려준다)."""
+        delegate_llm = _FakeLLMClient([_structured("summarize") for _ in range(10)])
+        principal_llm = _FakeLLMClient([])
+
+        clarifier = _make(principal_llm, delegate_llm, n=10, entropy_threshold=0.8)
+        result = clarifier.resolve(goal="x", context="", delegation="Please prepare the report.")
+
+        assert result.question is None
+
+    def test_target_facets_computed_from_structured_candidates_not_answer_text(self):
+        """target_facets는 Principal의 답변 텍스트가 무엇이든 pre_
+        distribution의 구조화된 candidate로부터만 계산된다 -- 답변
+        wording을 바꿔도 결과가 같아야 한다(text 재해석이 전혀 없다는
+        증거)."""
+        def _run_with_answer(answer_text: str) -> frozenset[str]:
+            delegate_llm = _FakeLLMClient(
+                [_structured("summarize") for _ in range(5)]
+                + [_structured("export") for _ in range(5)]
+                + [LLMResponse(text="?")]
+                + [_structured("summarize") for _ in range(10)])
+            principal_llm = _FakeLLMClient([LLMResponse(text=answer_text)])
+            clarifier = _make(principal_llm, delegate_llm, n=10, entropy_threshold=0.8)
+            result = clarifier.resolve(goal="x", context="", delegation="Please prepare the report.")
+            return result.question.target_facets
+
+        assert (_run_with_answer("Summarize only.")
+               == _run_with_answer("Please produce a concise account of the report's contents.")
+               == frozenset({"action"}))
+
+
 class TestNoGroundTruthAPI:
     def test_resolve_signature_has_no_truth_or_label_parameter(self):
         forbidden = ("truth", "ground_truth", "label", "expected")

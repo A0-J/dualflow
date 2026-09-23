@@ -87,7 +87,8 @@ def _render_delegation_context(delegation: str, context: str) -> str:
     return "\n".join(parts)
 
 
-def _render_clarify_input(delegation: str, context: str, belief: Belief) -> str:
+def _render_clarify_input(delegation: str, context: str, belief: Belief,
+                          target_facets: frozenset[str] = frozenset()) -> str:
     candidates = "\n".join(
         f"  {p:.2f}  {i.action}:{i.resource}@{i.scope}"
         + (f" (condition={','.join(sorted(i.condition))})" if i.condition else "")
@@ -96,6 +97,17 @@ def _render_clarify_input(delegation: str, context: str, belief: Belief) -> str:
     if context:
         parts.append(f"Context: {context}")
     parts.append(f"Your competing interpretations and their frequency:\n{candidates}")
+    # target_facets가 비어 있으면(기본값) 이 줄 자체를 안 붙인다 — 기존
+    # 호출자(target_facets를 안 넘기는 경우)의 prompt는 이전과 byte-identical하게
+    # 유지된다. `ClarifyingDelegate.resolve()`(clarification.py)만 실제로 이
+    # 값을 계산해서 넘긴다 — v3 provenance 보완(agent_connected_eval.md §23
+    # follow-up 3)에서, "어떤 facet이 갈렸는가"를 질문 생성 *이후*에 추론하는
+    # 대신 질문 생성 *전에* 구조적 제약으로 넘기기 위해서다.
+    if target_facets:
+        parts.append(
+            "Fields that are actually uncertain (ask only about these; the "
+            "other fields shown above are not in question): "
+            + ", ".join(sorted(target_facets)))
     return "\n".join(parts)
 
 
@@ -129,13 +141,24 @@ class CandidateDistribution:
 class ClarificationQuestion:
     """`ask_clarification()` 호출 1회의 결과. `belief`/`entropy`는 이
     질문을 만든 근거가 된 `CandidateDistribution`을 그대로 옮겨온 것이다
-    (감사/디버깅용) — 새로 계산하지 않는다."""
+    (감사/디버깅용) — 새로 계산하지 않는다.
+
+    `target_facets` — v3 provenance 보완(agent_connected_eval.md §23
+    follow-up 3). 이 질문이 실제로 어떤 facet(action/resource/scope/
+    condition)을 겨냥해서 생성됐는지 기록한다. 기본값은 빈
+    `frozenset()`(제약 없음, 기존 동작) — `ClarifyingDelegate.resolve()`
+    만 실제 값을 계산해서 넘긴다. 이 필드가 존재하는 이유: 질문이
+    끝난 *뒤에* "그때 뭐가 갈렸었지"라고 추론하는 대신, 질문을 만들기
+    *전에* 이미 정해서 prompt 자체에 제약으로 넣었다는 걸 구조적으로
+    남기기 위해서다 — `AgentExperience.confirmed_facets`가 이 값을
+    그대로 물려받는다(`agent_experience.build_verified_experience()`)."""
 
     question: str
     raw_text: str
     response: LLMResponse
     belief: Belief
     entropy: float
+    target_facets: frozenset[str] = frozenset()
 
 
 class DelegateAgent:
@@ -202,7 +225,8 @@ class DelegateAgent:
             responses=[r for _, r in samples])
 
     def ask_clarification(self, *, delegation: str, distribution: CandidateDistribution,
-                          context: str = "") -> ClarificationQuestion:
+                          context: str = "",
+                          target_facets: frozenset[str] = frozenset()) -> ClarificationQuestion:
         """`distribution`(보통 `sample_candidates()`의 결과)의 경쟁 후보들을
         바탕으로, 그 모호함을 실제로 해소할 clarifying question 하나를
         만든다. 독립적인 `LLMClient.generate()` 호출 1회.
@@ -213,10 +237,15 @@ class DelegateAgent:
         evaluation label, `PrincipalIntent`, `SemanticVerdict`,
         `AuthorityVerdict`, 최종 판정 — 시그니처 자체에 그런 정보가 들어갈
         자리가 없다. 오직 delegation 텍스트, context, 그리고 B 자신이 이미
-        만든 candidate 분포만 본다."""
-        input_text = _render_clarify_input(delegation, context, distribution.belief)
+        만든 candidate 분포만 본다.
+
+        `target_facets`(기본값 빈 `frozenset()`)를 넘기면 그 facet들만
+        질문하라는 제약이 prompt에 추가된다 — 비워두면(기본값) 이전과
+        완전히 동일한 prompt/동작이다(하위 호환)."""
+        input_text = _render_clarify_input(delegation, context, distribution.belief, target_facets)
         response = self.llm.generate(
             instructions=_CLARIFY_QUESTION_INSTRUCTIONS, input_text=input_text)
         return ClarificationQuestion(
             question=response.text.strip(), raw_text=response.text, response=response,
-            belief=distribution.belief, entropy=distribution.entropy)
+            belief=distribution.belief, entropy=distribution.entropy,
+            target_facets=target_facets)
