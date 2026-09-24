@@ -525,7 +525,8 @@ meaningful.**
 | `v3` final contract | **frozen at commit `0f1cf7c` (§24) — Option A left as future work, not pursued** |
 | B7e Phase 1 — sequential experience chain (design, scenario, driver, 0-API deterministic validation) | complete — 40 tests pass (20+20), RQ/metrics revised, pre_distribution same-object guarantee added, budget revised to 80/168 (1 chain) (§25) |
 | B7e Phase 1 — first real-API chain (102 calls) | complete — S1-S7 all PASS, but path diversity insufficient (0/0 history-advisory-exposure) — 2 more chains recommended (§25) |
-| B7e Phase 1 — chains 2-3 (226 calls, 328 total) | **complete — advisory exposure AND store evolution both observed (chain 2's E2), S1-S7 all PASS per-chain and aggregate across all 3 chains/12 episodes — Phase 1 design goal met (§25)** |
+| B7e Phase 1 — chains 2-3 (226 calls, 328 total) | complete — advisory exposure AND store evolution both observed (chain 2's E2), S1-S7 all PASS per-chain and aggregate across all 3 chains/12 episodes (§25) |
+| B7e Phase 1 | **CLOSED at commit `2fdee42` — PASS. Remaining conflicting-value-transition gap closed as a separate deterministic contract test, not more real-API chains (§25)** |
 
 The sequential multi-episode experiment (B7e) stays intentionally
 postponed. The canonical-context B7d.3 re-run (§16) removed the
@@ -3147,3 +3148,52 @@ integration. Awaiting the decision on whether to close B7e Phase 1 or
 pursue further work (e.g., a scenario more likely to produce a
 conflicting-value store update, if that is judged worth a separate,
 deliberate design step rather than an ad hoc addition here).
+
+### B7e Phase 1: COMPLETE / PASS
+
+Closed at commit `2fdee42` (chains 2-3 results) as the acceptance point,
+per instruction — no 4th chain, no scenario/threshold/prompt tuning
+performed or planned.
+
+- 3 independent fresh-store chains completed (102 + 226 = 328 real API
+  calls total)
+- advisory exposure: 1/1 naturally occurring eligible-ambiguous case
+  exercised (chain 2's E2) — history computed a real SUPPORT/CONFLICT
+  relation and did not apply it; the episode's actual outcome came from
+  a separately-triggered, Principal-confirmed real clarification
+- store evolution: 1/3 chains observed (chain 2: E2's verified experience
+  superseded E1's as the latest selected by E3/E4)
+- automatic historical override: 0 (12/12 episodes, all 3 chains)
+- S1–S7: all PASS, per-chain and aggregate, no exceptions
+- remaining coverage gap: no chain naturally produced a
+  *conflicting-value* verified store update (an episode confirming a
+  genuinely different action than the currently-selected history, then
+  that new value becoming the next episode's latest). Chain 2's E2
+  confirmed the *same* value (`summarize`) E1 already had — the
+  *episode_id* changed (provenance correctly tracked the newer source)
+  but the *value* did not.
+
+This gap is **not** treated as a Phase 1 failure and is **not** pursued
+with more real-API chains or scenario/threshold/prompt tuning — doing so
+risked obscuring the naturally-occurring result already obtained. B7e
+Phase 1's core safety property (a later episode with existing conflicting
+history never has its own current decision changed by that history) was
+already demonstrated directly by E3/E4 in every chain, with or without
+this specific value-change sub-case. Per instruction, the gap is instead
+closed as a separate, deterministic (0 API call) targeted contract test,
+not folded back into Phase 1's real-API acceptance:
+`tests/test_experience_chain.py::TestConflictingValueStoreTransition::
+test_old_summarize_verified_then_later_export_confirmed_becomes_new_
+latest` — this test already existed in substance, split across
+`TestClarifiedVerifiedEpisodeIsStored`/`TestSequentialAdaptation`'s
+Path-B assertions; it is now also given its own explicit name and a
+single end-to-end narration ("old verified=summarize → later
+Principal-confirmed=export → latest store=export") so the exact state
+transition this gap concerns is pinned down as one readable, reusable
+fact rather than left implicit across two test classes. No new scenario,
+no new fake-response path, no behavioral change — reuses `_build_path_b`
+verbatim.
+
+**B7e Phase 1 is closed.** Next steps (B7f, runtime integration, Option A,
+multi-history aggregation, or anything else) are separate decisions, not
+made here.

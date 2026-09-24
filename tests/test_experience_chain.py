@@ -460,3 +460,42 @@ class TestSuccessCriteriaEvaluation:
         _, logs_b = _run(_build_path_b)
         aggregate = evaluate_success_criteria(logs_a + logs_b)
         assert all(aggregate.values()), aggregate
+
+
+class TestConflictingValueStoreTransition:
+    """B7e Phase 1(docs/experiments/agent_connected_eval.md SS25, closed
+    at commit 2fdee42) 종료 시점에 남은 유일한 coverage gap: 3개의 real
+    API chain 중 어느 것도 "이미 저장된 verified 값과 다른 값으로 나중에
+    clarify되어 store가 그 새 값으로 갱신되는" 경로를 자연 발생시키지
+    못했다(chain 2의 E2는 기존 summarize와 같은 값으로 확인됐을 뿐이다).
+
+    이 gap을 메우기 위해 real API를 더 쓰거나(4th chain), 그 경로가
+    나오도록 scenario/threshold/prompt를 조정하는 대신 -- 그러면 자연
+    발생 결과를 흐리게 된다는 게 B7e Phase 1 종료 판단의 핵심 근거였다
+    -- 정확히 이 하나의 상태 전이만 확인하는 deterministic(0 API) contract
+    test로 분리한다. 이 전이 자체는 이미 `_build_path_b`가 정확히 구현하고
+    있었다(`TestClarifiedVerifiedEpisodeIsStored`/`TestSequentialAdaptation`
+    이 각각 절반씩 확인) -- 이 클래스는 그 절반들을 하나의 명시적인
+    end-to-end 서술로 묶어, "old verified=summarize -> later
+    Principal-confirmed=export -> latest store=export"라는 정확한 문장을
+    한 테스트 이름과 하나의 assertion 묶음으로 남긴다. 통계적 재현이
+    아니라 이 상태 전이 하나가 코드로 성립한다는 것만 고정하는 것이
+    목적이다."""
+
+    def test_old_summarize_verified_then_later_export_confirmed_becomes_new_latest(self):
+        _, logs = _run(_build_path_b)
+        e1, e2, e3, e4 = logs
+
+        # old verified=summarize (E1, E2)
+        assert e1.confirmed_action == "summarize" and e1.stored is True
+        assert e2.confirmed_action == "summarize" and e2.stored is True
+        assert e2.selected_history_action == "summarize"  # E2 itself still saw E1's summarize as latest
+
+        # later Principal-confirmed=export, despite conflicting summarize history
+        assert e3.selected_history_action == "summarize"  # E3 saw the OLD value going in
+        assert e3.confirmed_action == "export" and e3.stored is True  # but confirmed a DIFFERENT value
+        assert e3.automatic_override is False  # not because history was overridden -- Principal confirmed it
+
+        # latest store = export
+        assert e4.selected_history_episode_id == "E3_october_explicit_export"
+        assert e4.selected_history_action == "export"
