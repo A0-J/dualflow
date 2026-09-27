@@ -529,7 +529,7 @@ meaningful.**
 | B7e Phase 1 | **CLOSED at commit `2fdee42` — PASS. Remaining conflicting-value-transition gap closed as a separate deterministic contract test, not more real-API chains (§25)** |
 | Runtime Integration Phase 1 (`AgentDelegationRuntime`, opt-in) | complete — 5 new deterministic tests (0 API calls), including the core Option-B-advisory-never-overrides regression at the runtime level; all 11 pre-existing tests unmodified; `agent_smoke.py` unaffected (§26) |
 | Runtime Integration Phase 2A (remote Delegate transport) | complete — 7 new deterministic tests (0 API calls), including a full `AgentDelegationRuntime` run producing identical results over local vs. remote Delegate (both stable and clarification paths); `AgentDelegationRuntime`/all B7 modules untouched — 3 new files only (§27) |
-| Runtime Integration Phase 2B — real API E2E smoke (8 real attempts total, incl. Phase 2B.1) | **CLOSED — Process A/B separate-process real-API E2E confirmed; Clear + Authority-violation PASS; real clarification branch NOT OBSERVED (coverage gap, not failure — branch itself already proven by §27's deterministic test); `AgentDelegationRuntime`/B7 modules untouched (§28)** |
+| Runtime Integration Phase 2B — real API E2E smoke (8 real attempts total, incl. Phase 2B.1) | CLOSED — Process A/B separate-process real-API E2E confirmed; Clear + Authority-violation PASS; `AgentDelegationRuntime`/B7 modules untouched — **but see correction below: the "Ambiguous" case was actually the same input as "Clear" (script bug, `goal` never varied), so the clarification branch was untested, not merely unobserved (§28 correction)** |
 
 The sequential multi-episode experiment (B7e) stays intentionally
 postponed. The canonical-context B7d.3 re-run (§16) removed the
@@ -3543,3 +3543,38 @@ attempts, no scenario/threshold/prompt tuning. Next: **Phase 2C**
 (DelegationBench-mini 9-task real-runtime evaluation, repeated runs — not
 a single smoke pass), followed by baseline comparison
 (Semantic-only/Authority-only/DualFlow).
+
+### Correction (found during Phase 2C design, before any further API spend)
+
+`run_case_clear()` and `run_case_ambiguous()` in
+`experiments/runtime_e2e_real.py` (and the identical pattern in
+`experiments/runtime_e2e_real_clarification_smoke.py`) both called
+`runtime.run(goal=EXAMPLE_GOAL, context=EXAMPLE_CONTEXT, budget=
+EXAMPLE_BUDGET)` — **byte-identical arguments**. `EXAMPLE_AMBIGUOUS_
+DELEGATION` was imported and mentioned in docstrings/print output but was
+**never actually passed to `runtime.run()` anywhere** — `Agent
+DelegationRuntime.run()` does not accept a delegation string at all; it
+always derives `delegation` internally via `principal.delegate(goal,
+context)` (§26). Every earlier B7d-era diagnostic script fed a fixed,
+deliberately-ambiguous delegation string directly to `DelegateAgent`,
+bypassing `PrincipalAgent.delegate()` entirely — that pattern does not
+carry over to the full runtime, and this was missed when Phase 2B's
+"Ambiguous" case was written.
+
+**Corrected interpretation**: the 8/8 `entropy=0.000` result recorded
+above is **not evidence about real model determinism** — the "Clear" and
+"Ambiguous" cases were, in fact, the same input run twice under different
+labels. The real-clarification branch remains **untested**, not merely
+"observed to not trigger" — a stronger, more consequential gap than
+originally recorded. The separate-process/real-HTTP/Clear/
+Authority-violation findings are unaffected (those cases did not depend on
+this parameter).
+
+No code was changed to "fix" this after the fact and no results were
+retroactively altered — this correction is appended, the original
+(now-understood-to-be-mistaken) narrative above is left as the historical
+record, per this document's standing policy. The fix — constructing
+genuine ambiguity through an underspecified **`goal`** (the only lever
+`AgentDelegationRuntime.run()` actually exposes for this), not a
+delegation string — is designed into Phase 2C's task authoring from the
+start (§29).
