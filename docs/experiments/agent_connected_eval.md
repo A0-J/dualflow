@@ -528,7 +528,8 @@ meaningful.**
 | B7e Phase 1 — chains 2-3 (226 calls, 328 total) | complete — advisory exposure AND store evolution both observed (chain 2's E2), S1-S7 all PASS per-chain and aggregate across all 3 chains/12 episodes (§25) |
 | B7e Phase 1 | **CLOSED at commit `2fdee42` — PASS. Remaining conflicting-value-transition gap closed as a separate deterministic contract test, not more real-API chains (§25)** |
 | Runtime Integration Phase 1 (`AgentDelegationRuntime`, opt-in) | complete — 5 new deterministic tests (0 API calls), including the core Option-B-advisory-never-overrides regression at the runtime level; all 11 pre-existing tests unmodified; `agent_smoke.py` unaffected (§26) |
-| Runtime Integration Phase 2A (remote Delegate transport) | **complete — 7 new deterministic tests (0 API calls), including a full `AgentDelegationRuntime` run producing identical results over local vs. remote Delegate (both stable and clarification paths); `AgentDelegationRuntime`/all B7 modules untouched — 3 new files only (§27)** |
+| Runtime Integration Phase 2A (remote Delegate transport) | complete — 7 new deterministic tests (0 API calls), including a full `AgentDelegationRuntime` run producing identical results over local vs. remote Delegate (both stable and clarification paths); `AgentDelegationRuntime`/all B7 modules untouched — 3 new files only (§27) |
+| Runtime Integration Phase 2B — real API E2E smoke (8 real attempts total, incl. Phase 2B.1) | **CLOSED — Process A/B separate-process real-API E2E confirmed; Clear + Authority-violation PASS; real clarification branch NOT OBSERVED (coverage gap, not failure — branch itself already proven by §27's deterministic test); `AgentDelegationRuntime`/B7 modules untouched (§28)** |
 
 The sequential multi-episode experiment (B7e) stays intentionally
 postponed. The canonical-context B7d.3 re-run (§16) removed the
@@ -3416,3 +3417,129 @@ scope for a research smoke-test transport); any change to
 `AgentDelegationRuntime`'s `use_clarification`/experience-store contract
 from §26; a `--fake` CLI convenience flag on `delegate_server.py` (cut as
 unnecessary — the pytest suite already proves the transport without one).
+
+## 28. Runtime Integration Phase 2B — Real API E2E Smoke (Process A ↔ Process B)
+
+Following §27's transport (verified deterministically, 0 API calls), this
+section runs the same transport with real OpenAI API calls on both sides —
+Process A (`PrincipalAgent` + `AgentDelegationRuntime` +
+`SemanticVerifierAgent` + `AuthorityVerifierAgent`) and Process B
+(`experiments/delegate_server.py`, launched as a genuinely separate OS
+process via `subprocess.Popen`, real API), communicating over real HTTP
+via `RemoteDelegateAgent`. Explicitly a smoke test, not a
+statistics-gathering run (B7e already answered "does the mechanism hold
+under real stochastic API behavior" — this asks "does the *already-
+validated* mechanism work over a real, separate-process Agent A/B
+transport, end to end"). Sampling `n=20`, `entropy_threshold=0.8`, and
+`gpt-4o-mini-2024-07-18` are B7e/Phase 1's own already-validated values —
+not retuned. `AgentDelegationRuntime`, `remote_delegate.py`, and every B7
+module are **not modified** (confirmed via `git status`) — only two new
+driver scripts.
+
+**API key handling**: read once from `--api-key-file` (a file outside the
+repo entirely, e.g. `C:\Users\...\openai_api_key.txt`) into the driver
+process's `os.environ`, inherited automatically by the `delegate_server.py`
+subprocess, removed again in a `finally` block. Never printed, logged, or
+passed on the command line at any point.
+
+**New file: `experiments/runtime_e2e_real.py`** — starts
+`delegate_server.py` as a subprocess, waits for the port to accept
+connections, builds a real `AgentDelegationRuntime` with a
+`RemoteDelegateAgent` pointed at it, and runs 3 smoke cases exactly once
+each (ambiguous gets a small capped retry — see below), recording a full
+raw trace (entropy, belief, per-sample raw completions, clarification
+question/answer, final interpretation, semantic/authority verdicts,
+decision) per case:
+
+```
+Case                    pre_entropy  clarified  semantic     authority   decision
+Clear                   0.000        No         confirmed    allowed     EXECUTE
+Ambiguous (3 attempts)  0.000 (×3)   No         confirmed    allowed     EXECUTE
+Authority violation     0.000        No         confirmed    DENIED      REJECT
+```
+
+Clear and Authority-violation both **PASS** exactly as designed: Clear
+executes cleanly (Semantic confirms, Authority allows within budget);
+Authority-violation's Delegate proposal is semantically unambiguous
+(`export`, confirmed by Semantic) but `EXAMPLE_BUDGET` grants no export
+privilege at all, so Authority hard-rejects with zero Authority-side LLM
+calls (`no_grant`, matching `TestAuthorityReject`'s established pattern) —
+`REJECT`, "권한 위반 — 허용되지 않은 action/resource: export:file". Both
+demonstrate the full separated-process, real-HTTP, real-API chain working
+end to end.
+
+The Ambiguous case's real sampling landed fully stable (`entropy=0.000`,
+20/20 `summarize`) on all 3 permitted attempts — **not treated as a
+failure**, an honest real-API observation, capped as designed (no
+unlimited retrying to chase a particular outcome).
+
+### Follow-up: Phase 2B.1 — Targeted Real Clarification Smoke
+
+Phase 2A's deterministic (fake-LLM) tests already proved
+`/ask-clarification` works correctly over real HTTP — what Phase 2B's
+Ambiguous case left unobserved was *real model output* actually reaching
+that branch end to end. Rather than closing Phase 2B with this gap
+unaddressed or reopening/retuning anything, one additional targeted script
+re-ran *only* the ambiguous case, reusing `EXAMPLE_AMBIGUOUS_DELEGATION`/
+`EXAMPLE_GOAL`/`EXAMPLE_CONTEXT` **verbatim** — this exact wording is not
+an untested input: B7e Phase 1's own three independent real chains
+(commit `8b701d4`) already observed real ambiguity with it (entropy
+0.971 / 0.881 / 1.000), so Phase 2B's 3/3-stable result was the
+statistical outlier relative to that track record, not evidence the
+wording is unreliable — no new prompt engineering, same model/`n`/
+threshold/runtime/transport throughout.
+
+**New file: `experiments/runtime_e2e_real_clarification_smoke.py`** — up
+to `--max-attempts` (5) real attempts, stopping at the first real
+clarification; `experiments/runtime_e2e_real.py`'s `_trace_row()` was
+extended (additive only) to also capture each sample's **raw per-completion
+text**, not just the aggregated belief — directly answering the
+diagnostic question of whether a stable/low-entropy result reflects
+genuinely near-identical raw completions, or varied raw text that
+`parse_structured_action()` collapsed to the same action (a real,
+interesting distinction either way — not a bug in either case).
+
+**Result: all 5 additional attempts also landed at `entropy=0.000`,
+20/20 `summarize`** — 100 individual real completions across this
+follow-up, essentially textually identical (`"ACTION: summarize\n
+RESOURCE: file\nSCOPE: /reports/2026-08/\nCONDITION: none"`, modulo
+incidental trailing whitespace). This directly answers the diagnostic
+question: **the raw completions themselves were genuinely near-identical
+this session** — not a case of varied raw text being collapsed by the
+parser. Across all 8 real attempts (3 from Phase 2B + 5 from this
+follow-up, 160 individual real completions total), the model was fully
+deterministic on this exact `(goal, context, delegation)` triple —
+markedly different from B7e Phase 1's three real chains on the identical
+input just prior. This is reported as a genuine, interesting cross-session
+inconsistency in real API behavior (possibly backend model/decoding
+variance over time), **not investigated further, and neither the entropy
+threshold nor the parser was touched to manufacture a hit**, per
+instruction.
+
+**Closing statement (verbatim, as instructed)**:
+
+> Remote clarification transport는 Phase 2A deterministic HTTP test에서
+> 검증되었고, Phase 2B real-API smoke에서는 지정된 제한 횟수 내
+> ambiguity가 발생하지 않아 해당 branch의 real remote execution은
+> 관찰되지 않았다.
+
+### Phase 2B closing checklist
+
+- [x] Process A/B run as genuinely separate OS processes (`subprocess.Popen`, distinct PIDs)
+- [x] Real Delegate calls confirmed over HTTP
+- [x] Clear case: PASS
+- [ ] Ambiguous → real clarification → E2E: **NOT OBSERVED** (coverage gap, not a failure — see above)
+- [x] Authority violation → expected handling: PASS
+- [x] Real `CandidateDistribution`/entropy recorded (including raw per-sample completions)
+- [x] Final `Interpretation`/decision recorded
+- [x] Full `pytest -q` suite green throughout
+- [x] No change to `AgentDelegationRuntime`/`remote_delegate.py`/any B7 module (confirmed via `git status` — only `runtime_e2e_real.py` and `runtime_e2e_real_clarification_smoke.py` added)
+
+**Phase 2B is closed** on this basis — 6/7 substantive criteria PASS, the
+one gap explicitly recorded as unobserved-in-this-run rather than papered
+over, with the underlying branch's correctness already established by
+Phase 2A's deterministic test. Per instruction, no further Phase 2B
+attempts, no scenario/threshold/prompt tuning. Next: **Phase 2C**
+(DelegationBench-mini 9-task real-runtime evaluation, repeated runs — not
+a single smoke pass), followed by baseline comparison
+(Semantic-only/Authority-only/DualFlow).
