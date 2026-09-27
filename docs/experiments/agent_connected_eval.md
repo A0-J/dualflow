@@ -527,7 +527,8 @@ meaningful.**
 | B7e Phase 1 — first real-API chain (102 calls) | complete — S1-S7 all PASS, but path diversity insufficient (0/0 history-advisory-exposure) — 2 more chains recommended (§25) |
 | B7e Phase 1 — chains 2-3 (226 calls, 328 total) | complete — advisory exposure AND store evolution both observed (chain 2's E2), S1-S7 all PASS per-chain and aggregate across all 3 chains/12 episodes (§25) |
 | B7e Phase 1 | **CLOSED at commit `2fdee42` — PASS. Remaining conflicting-value-transition gap closed as a separate deterministic contract test, not more real-API chains (§25)** |
-| Runtime Integration Phase 1 (`AgentDelegationRuntime`, opt-in) | **complete — 5 new deterministic tests (0 API calls), including the core Option-B-advisory-never-overrides regression at the runtime level; all 11 pre-existing tests unmodified; `agent_smoke.py` unaffected (§26)** |
+| Runtime Integration Phase 1 (`AgentDelegationRuntime`, opt-in) | complete — 5 new deterministic tests (0 API calls), including the core Option-B-advisory-never-overrides regression at the runtime level; all 11 pre-existing tests unmodified; `agent_smoke.py` unaffected (§26) |
+| Runtime Integration Phase 2A (remote Delegate transport) | **complete — 7 new deterministic tests (0 API calls), including a full `AgentDelegationRuntime` run producing identical results over local vs. remote Delegate (both stable and clarification paths); `AgentDelegationRuntime`/all B7 modules untouched — 3 new files only (§27)** |
 
 The sequential multi-episode experiment (B7e) stays intentionally
 postponed. The canonical-context B7d.3 re-run (§16) removed the
@@ -3332,3 +3333,86 @@ follow-up, not designed here); no propagation of `principal_id`/`task_category` 
 `principal_agent.py`/`delegate_agent.py`/`semantic.py`/`authority_feedback.py`/
 `capability.py` — stays purely an `agent_runtime.py`/`agent_experience.py`-level
 concept this phase. No real API calls were made to produce this section.
+
+## 27. Runtime Integration Phase 2A — Remote Delegate Transport
+
+Following the user-confirmed post-Phase-1 roadmap (Phase 2 — Real Agent A/B
+E2E Prototype: 2A remote transport → 2B real-API smoke on one machine's
+process pair → 2C DelegationBench-mini 9-task run → baseline comparison),
+this section builds the HTTP transport that lets Agent B (the Delegate)
+run in a separate process from Agent A (`AgentDelegationRuntime` + the
+Semantic/Authority verifiers) — same machine first (two processes,
+127.0.0.1), later two physical machines (swap the host). **Verifiers stay
+on the Principal/Runtime side, never inside the Delegate process** — B
+never verifies its own delegation, preserving the independent-verification
+structure this whole project is built around.
+
+**Explicit constraint, honored throughout**: `AgentDelegationRuntime` and
+every B7 module (`delegate_agent.py`, `clarification.py`,
+`agent_experience.py`, `experience_decision.py`, `experience_evidence.py`)
+are **not modified**. `git status --short` after this section shows only
+new files — nothing existing touched.
+
+**HTTP implementation choice, confirmed with the user before writing
+code**: standard library only (`http.server`/`urllib.request`), no new
+dependency — matching `pyproject.toml`'s existing zero-core-dependency
+convention (Flask/FastAPI was considered and explicitly declined).
+
+### New files
+
+- **`src/dualflow/remote_delegate.py`** — `RemoteDelegateAgent`, an HTTP
+  client implementing exactly the same three keyword-only methods as
+  `DelegateAgent` (`propose`/`sample_candidates`/`ask_clarification`).
+  Neither `AgentDelegationRuntime` nor `ClarifyingDelegate` type-checks its
+  `delegate` argument (both call it via plain duck typing), so this class
+  is a drop-in replacement wherever a `DelegateAgent` is expected. Also
+  holds the wire-format (de)serialization functions
+  (`interpretation_to_dict`/`_from_dict`, `llm_response_to_dict`/`_from_dict`,
+  `proposal_to_dict`/`_from_dict`, `distribution_to_dict`/`_from_dict`,
+  `belief_to_list`/`_from_list`) — imported (not duplicated) by the server
+  below, so client and server can never drift on schema. One deliberate
+  design point: `ask_clarification()`'s response only carries
+  `question`/`raw_text`/`response` over the wire — `belief`/`entropy` on
+  the returned `ClarificationQuestion` are filled in from the caller's own
+  already-known `distribution` (exactly mirroring how
+  `delegate_agent.ask_clarification()` itself just copies them from its
+  input, per that method's own docstring), so the server never needs to
+  echo back data the client already has.
+- **`experiments/delegate_server.py`** — the Process-B-side HTTP server
+  (`python experiments/delegate_server.py --model ... --port ...`).
+  `make_handler(delegate)` wraps one real `DelegateAgent` instance (its
+  `llm` can be a real `OpenAILLMClient` via `agent_smoke.build_llm_client()`,
+  reused not reimplemented, or a fake for testing) behind three POST
+  endpoints (`/propose`, `/sample-candidates`, `/ask-clarification`), using
+  the exact same (de)serialization helpers the client uses. `RemoteDelegateError`
+  is raised client-side on any non-2xx/connection/JSON-decode failure with
+  the underlying detail preserved.
+- **`tests/test_remote_delegate.py`** (7 tests, 0 API calls) — every test
+  starts a real `ThreadingHTTPServer` on 127.0.0.1 (a genuine OS socket and
+  HTTP round trip over loopback, not mocked), backed by a `DelegateAgent`
+  wired to a fake in-process `LLMClient`. Confirms: `propose()`/
+  `sample_candidates()`/`ask_clarification()` round-trip losslessly against
+  an identically-scripted local `DelegateAgent`; connection failure and an
+  unknown path both raise `RemoteDelegateError`; and, the strongest proof,
+  **`AgentDelegationRuntime` produces identical results whether its
+  `delegate` is a local `DelegateAgent` or a `RemoteDelegateAgent` pointed
+  at the running server** — both for the stable (`use_clarification=False`)
+  path and the ambiguous `use_clarification=True` path (which exercises
+  `/sample-candidates` and `/ask-clarification` together over real HTTP,
+  proving the full clarification round trip works remotely, not just a
+  single-call sanity check).
+
+**Verification**: `pytest tests/test_remote_delegate.py -v` — 7/7 pass;
+full `pytest -q` suite green; `git status --short` shows only the 3 new
+files above (plus this doc) — zero existing files modified.
+
+### Explicitly out of scope this phase
+
+Real API calls (Phase 2B, not this section); running the server against
+`--host 0.0.0.0` from a second physical machine (same code path, just a
+config change — not exercised here); authentication/TLS/retries/connection
+pooling (noted in both new files' module docstrings as deliberately out of
+scope for a research smoke-test transport); any change to
+`AgentDelegationRuntime`'s `use_clarification`/experience-store contract
+from §26; a `--fake` CLI convenience flag on `delegate_server.py` (cut as
+unnecessary — the pytest suite already proves the transport without one).
