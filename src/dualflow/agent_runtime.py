@@ -48,18 +48,46 @@ Principal 독립 재구성과 최종(협상 반영) action의 비교는 순수 �
 동등성(`Interpretation.__eq__`)으로 한다 — `rule_engine.match_intent()`는
 쓰지 않는다. 이유는 `verify_agent_proposal()`에서 §rule_engine 참고
 아래 주석에.
+
+RUNTIME INTEGRATION PHASE 1 (2026-09-28, docs/experiments/
+agent_connected_eval.md §26) — B7 시리즈(entropy 기반 clarification,
+Principal-verified experience storage, v3 Option B advisory-only evidence
+harness, B7e Phase 1에서 real API로 검증 완료, commit `8b701d4`)를 이
+runtime에 처음으로 연결한다. 전부 opt-in, additive — 새 생성자 파라미터
+(`use_clarification`/`n`/`entropy_threshold`/`experience_store`/
+`max_verified_entropy`)를 하나도 안 넘기면 이 클래스는 오늘까지와
+byte-identical하게 동작한다(`tests/test_agent_runtime.py`의 기존 테스트
+전부가 이 경로만 쓰고, 전혀 수정되지 않았다).
+
+`use_clarification=True`일 때만 3번 단계(`DelegateAgent.propose()` 단일
+호출)가 `DelegateAgent.sample_candidates()` + `ClarifyingDelegate.
+resolve()`로 바뀐다. 이때 `experience_store`/`principal_id`/
+`task_category`가 전부 주어지면 `FrozenCandidateEvidenceHarness.decide()`
+가 advisory relation을 계산하지만(§`experience_decision`), 이 값은
+`AgentRuntimeResult`에 감사용으로만 실릴 뿐 `clarifier.resolve()`에도,
+semantic/authority verification에도, `_fuse()`의 결정 로직에도 전달되지
+않는다 — Option B("historical evidence is advisory, not authoritative")를
+runtime 레벨에서도 구조적으로 지킨다. Verified experience 저장도
+자동이 아니다 — `build_verified_experience()`가 만든 값을
+`AgentRuntimeResult.candidate_experience`로만 돌려주고, `run()` 자신은
+`experience_store.add(...)`를 절대 호출하지 않는다(B7c의 "이 함수는
+저장하지 않는다, 호출자가 명시적으로 add()해야 한다" 원칙을 그대로
+유지).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .agent_experience import AgentExperience, AgentExperienceStore, build_verified_experience
 from .authority_feedback import AuthorityVerdict, AuthorityVerifierAgent
 from .capability import Budget
+from .clarification import ClarificationResult, ClarifyingDelegate
 from .delegate_agent import DelegateAgent, DelegateProposal
+from .experience_decision import FacetDecision, FrozenCandidateEvidenceHarness
 from .framework import EXECUTE, REJECT
 from .principal_agent import PrincipalAgent, PrincipalDelegation, PrincipalIntent
-from .semantic import Interpretation, SemanticVerdict, SemanticVerifierAgent
+from .semantic import Interpretation, SemanticVerdict, SemanticVerifierAgent, parse_structured_action
 
 
 @dataclass(frozen=True)
@@ -83,6 +111,14 @@ class AgentRuntimeResult:
     final_interpretation: Interpretation
     principal_match: bool
 
+    # Runtime Integration Phase 1 -- 전부 `use_clarification=False`(기본값)
+    # 에서는 항상 None. 세 필드 모두 감사/기록용이며 `decision`/
+    # `final_interpretation`에 영향을 준 적이 없다(줄 수 있는 코드 경로
+    # 자체가 없다 -- agent_runtime.py 모듈 docstring 참고).
+    clarification_result: ClarificationResult | None = None
+    experience_decision: FacetDecision | None = None
+    candidate_experience: AgentExperience | None = None
+
 
 class AgentDelegationRuntime:
     """Phase B의 oracle-free end-to-end 실행 진입점. 네 개의 독립 Agent를
@@ -97,17 +133,42 @@ class AgentDelegationRuntime:
 
     def __init__(self, *, principal: PrincipalAgent, delegate: DelegateAgent,
                  semantic_verifier: SemanticVerifierAgent,
-                 authority_verifier: AuthorityVerifierAgent):
+                 authority_verifier: AuthorityVerifierAgent,
+                 use_clarification: bool = False,
+                 n: int = 10,
+                 entropy_threshold: float = 0.8,
+                 experience_store: AgentExperienceStore | None = None,
+                 max_verified_entropy: float = 0.0):
         self.principal = principal
         self.delegate = delegate
         self.semantic_verifier = semantic_verifier
         self.authority_verifier = authority_verifier
 
-    def run(self, *, goal: str, context: str, budget: Budget) -> AgentRuntimeResult:
+        # Runtime Integration Phase 1 -- 전부 opt-in. use_clarification이
+        # False(기본값)면 아래 두 객체는 만들어지기만 하고(LLM 호출/IO 없음)
+        # run()에서 전혀 쓰이지 않는다 -- 기존 동작은 완전히 그대로다.
+        self.use_clarification = use_clarification
+        self.n = n
+        self.entropy_threshold = entropy_threshold
+        self.experience_store = experience_store
+        self.max_verified_entropy = max_verified_entropy
+        self._clarifying_delegate = ClarifyingDelegate(
+            principal=principal, delegate=delegate, n=n, entropy_threshold=entropy_threshold)
+        self._experience_harness = FrozenCandidateEvidenceHarness(entropy_threshold=entropy_threshold)
+
+    def run(self, *, goal: str, context: str, budget: Budget,
+           principal_id: str | None = None, task_category: str | None = None,
+           episode_id: str | None = None) -> AgentRuntimeResult:
         """ground_truth/task.truth를 받지 않는다 — 파라미터가 goal/context/
-        budget 셋뿐이다. 이게 이 runtime이 배포 가능하다고 주장하는 근거의
-        구조적 절반이다(나머지 절반은 아래 _fuse()가 SemanticVerdict.
-        interpretation이 아니라 principal_intent를 기준으로 쓴다는 것)."""
+        budget과(Runtime Integration Phase 1의) principal_id/task_category/
+        episode_id뿐이다. 이게 이 runtime이 배포 가능하다고 주장하는
+        근거의 구조적 절반이다(나머지 절반은 아래 _fuse()가 SemanticVerdict.
+        interpretation이 아니라 principal_intent를 기준으로 쓴다는 것).
+
+        `principal_id`/`task_category`는 `self.use_clarification=True`이고
+        `self.experience_store`가 주어졌을 때만 의미가 있다 — experience
+        조회/저장 후보 계산에만 쓰이고, 그 외에는 아무 영향도 없다(둘 다
+        기본값 None으로 둬도 기존 동작과 완전히 동일)."""
         # 1) Agent A가 delegation을 만든다.
         delegation = self.principal.delegate(goal=goal, context=context)
 
@@ -117,11 +178,53 @@ class AgentDelegationRuntime:
         #    Delegate의 proposal이 여기 섞여 들어갈 방법이 없다.
         principal_intent = self.principal.restate_intent(goal=goal, context=context)
 
-        # 3) Agent B는 delegation 텍스트만 보고 proposal을 만든다 —
-        #    원래 goal/context 원문도, principal_intent도 보지 않는다
-        #    (DelegateAgent.propose()의 시그니처 자체에 그런 파라미터가
-        #    없다).
-        proposal = self.delegate.propose(delegation=delegation.delegation, context=context)
+        # 3) Agent B가 proposal을 만든다. use_clarification=False(기본값)면
+        #    기존 그대로 propose() 단일 호출 — delegation 텍스트만 보고
+        #    원래 goal/context 원문도, principal_intent도 보지 않는다.
+        #    use_clarification=True면 sample_candidates()+entropy+(필요시)
+        #    실제 clarification round로 바뀐다 — 여전히 principal_intent는
+        #    보지 않는다(ClarifyingDelegate.resolve()의 goal 사용은
+        #    Principal이 스스로 답하기 위한 것일 뿐, Delegate 쪽 호출에는
+        #    전달되지 않는다 — clarification.py 자체의 기존 보장).
+        if not self.use_clarification:
+            proposal = self.delegate.propose(delegation=delegation.delegation, context=context)
+            clarification_result: ClarificationResult | None = None
+            experience_decision: FacetDecision | None = None
+            candidate_experience: AgentExperience | None = None
+        else:
+            pre = self.delegate.sample_candidates(
+                delegation=delegation.delegation, context=context, n=self.n)
+
+            # Advisory 전용 -- Option B(v3, commit 0f1cf7c, B7e Phase 1에서
+            # 실측 검증). 이 relation은 아래 clarifier.resolve()에도,
+            # semantic/authority verification에도, _fuse()의 결정 로직에도
+            # 전달되지 않는다 -- AgentRuntimeResult.experience_decision으로
+            # 감사용으로만 실린다.
+            latest_experience: AgentExperience | None = None
+            if (self.experience_store is not None
+                    and principal_id is not None and task_category is not None):
+                history = self.experience_store.get(principal_id, task_category)
+                latest_experience = history[-1] if history else None
+
+            experience_decision = None
+            if latest_experience is not None:
+                experience_decision = self._experience_harness.decide(
+                    distribution=pre, experience=latest_experience, facet="action")
+
+            clarification_result = self._clarifying_delegate.resolve(
+                goal=goal, context=context, delegation=delegation.delegation,
+                pre_distribution=pre)
+            proposal = _proposal_from_clarification(clarification_result)
+
+            # 저장은 여전히 명시적이다(B7c 원칙) -- run()은 여기서
+            # experience_store.add(...)를 절대 호출하지 않는다. 호출자가
+            # candidate_experience를 보고 직접 store.add()해야 한다.
+            candidate_experience = None
+            if principal_id is not None and task_category is not None:
+                candidate_experience = build_verified_experience(
+                    clarification_result, principal_id=principal_id, task_category=task_category,
+                    delegation=delegation.delegation, max_verified_entropy=self.max_verified_entropy,
+                    episode_id=episode_id)
 
         # 4) Semantic — delegation + B의 proposal만 본다. principal_intent
         #    도 AuthorityVerdict도, 이 시점엔 존재하지도 않는 정보다(5번은
@@ -137,11 +240,17 @@ class AgentDelegationRuntime:
 
         # 6) 결정론적 fusion — 여기서 처음으로 세 결과를 합친다.
         return self._fuse(delegation, principal_intent, proposal,
-                          semantic_verdict, authority_verdict)
+                          semantic_verdict, authority_verdict,
+                          clarification_result=clarification_result,
+                          experience_decision=experience_decision,
+                          candidate_experience=candidate_experience)
 
     def _fuse(self, delegation: PrincipalDelegation, principal_intent: PrincipalIntent,
              proposal: DelegateProposal, semantic_verdict: SemanticVerdict,
-             authority_verdict: AuthorityVerdict) -> AgentRuntimeResult:
+             authority_verdict: AuthorityVerdict, *,
+             clarification_result: ClarificationResult | None = None,
+             experience_decision: FacetDecision | None = None,
+             candidate_experience: AgentExperience | None = None) -> AgentRuntimeResult:
         # AuthorityVerifierAgent가 협상으로 proposal을 좁혔을 수 있다 —
         # 실행 후보는 B의 원래 proposal이 아니라 authority_verdict.
         # interpretation이다(B5와 같은 관례: 협상 결과가 최종본).
@@ -186,4 +295,27 @@ class AgentDelegationRuntime:
 
         return AgentRuntimeResult(
             decision, reason, delegation, principal_intent, proposal,
-            semantic_verdict, authority_verdict, final_interpretation, principal_match)
+            semantic_verdict, authority_verdict, final_interpretation, principal_match,
+            clarification_result=clarification_result,
+            experience_decision=experience_decision,
+            candidate_experience=candidate_experience)
+
+
+def _proposal_from_clarification(result: ClarificationResult) -> DelegateProposal:
+    """clarification 경로의 final_interpretation을 propose()가 돌려주는
+    것과 같은 `DelegateProposal` 모양으로 감싼다 — semantic/authority
+    verification과 `_fuse()`가 여전히 `proposal.interpretation`만 보면
+    되도록. raw_text/response는 그 final_interpretation을 실제로 만들어낸
+    `sample_candidates()` 호출 하나를 그대로 재사용한다(새로 합성하지
+    않는다) — `distribution.top`/`final_interpretation`은 항상 같은
+    `distribution.responses`를 다수결로 집계한 값이므로, 그중 실제로
+    `final`을 파싱해낸 응답이 반드시 존재한다. `responses[0]` fallback은
+    `responses=[]`로 손수 만든 distribution(예: 테스트 헬퍼)에 대해서만
+    방어적으로 존재하며, 이 runtime 자신의 호출 경로에서는 도달하지
+    않는다."""
+    distribution = result.post_distribution if result.clarified else result.pre_distribution
+    final = result.final_interpretation
+    matched = next((r for r in distribution.responses
+                    if parse_structured_action(r.text) == final),
+                   distribution.responses[0])
+    return DelegateProposal(interpretation=final, raw_text=matched.text, response=matched)

@@ -527,6 +527,7 @@ meaningful.**
 | B7e Phase 1 — first real-API chain (102 calls) | complete — S1-S7 all PASS, but path diversity insufficient (0/0 history-advisory-exposure) — 2 more chains recommended (§25) |
 | B7e Phase 1 — chains 2-3 (226 calls, 328 total) | complete — advisory exposure AND store evolution both observed (chain 2's E2), S1-S7 all PASS per-chain and aggregate across all 3 chains/12 episodes (§25) |
 | B7e Phase 1 | **CLOSED at commit `2fdee42` — PASS. Remaining conflicting-value-transition gap closed as a separate deterministic contract test, not more real-API chains (§25)** |
+| Runtime Integration Phase 1 (`AgentDelegationRuntime`, opt-in) | **complete — 5 new deterministic tests (0 API calls), including the core Option-B-advisory-never-overrides regression at the runtime level; all 11 pre-existing tests unmodified; `agent_smoke.py` unaffected (§26)** |
 
 The sequential multi-episode experiment (B7e) stays intentionally
 postponed. The canonical-context B7d.3 re-run (§16) removed the
@@ -3197,3 +3198,137 @@ verbatim.
 **B7e Phase 1 is closed.** Next steps (B7f, runtime integration, Option A,
 multi-history aggregation, or anything else) are separate decisions, not
 made here.
+
+## 26. Runtime Integration Phase 1 — wiring B7 series into `AgentDelegationRuntime`
+
+Following the confirmed post-B7e-closure roadmap (runtime integration first,
+before any real Agent A/B end-to-end prototype or baseline comparison; B7f
+skipped — searched the whole document, every mention of "B7f" was only ever
+a deferral/exclusion marker, never a definition, so there was nothing to
+implement; Option A deferred as future work, not pursued), this section
+wires the already-validated B7 machinery into the actual production entry
+point, `agent_runtime.AgentDelegationRuntime`, for the first time.
+
+**Audit before any code change** confirmed `AgentDelegationRuntime.run()`
+had zero awareness of any B7 machinery: it called `DelegateAgent.propose()`
+(single-shot, no sampling), never computed entropy, never triggered
+clarification, and never looked at an experience store.
+`principal_id`/`task_category` existed nowhere in `agent_runtime.py`,
+`principal_agent.py`, `delegate_agent.py`, `semantic.py`,
+`authority_feedback.py`, or `capability.py`. The only caller in the repo is
+`experiments/agent_smoke.py::run_runtime()`; the only regression coverage is
+`tests/test_agent_runtime.py` (11 tests), which locks in strict independence
+invariants (input-text content checks + `inspect.signature` checks) between
+`restate_intent()`/`propose()`/semantic/authority verification, a
+no-ground-truth-API guarantee, and a determinism guarantee.
+
+**Design, confirmed with the user before implementation** (two explicit
+decisions, both matching this project's established additive/opt-in
+discipline): (1) clarification integration is **opt-in** via a constructor
+flag `use_clarification: bool = False` — default preserves today's
+single-shot behavior byte-for-byte; (2) verified-experience storage after a
+successful runtime clarification is **explicit, not automatic** — `run()`
+exposes the built `AgentExperience` on the result for the caller to
+`store.add()` themselves, matching `agent_experience.py`'s own established
+"this function never stores" principle (B7c). A full implementation plan
+was drafted (Plan subagent + manual review against the actual
+`tests/test_agent_runtime.py` source) before writing any code.
+
+### What changed (`src/dualflow/agent_runtime.py`, `tests/test_agent_runtime.py` only)
+
+- `AgentDelegationRuntime.__init__` gained `use_clarification: bool = False`,
+  `n: int = 10`, `entropy_threshold: float = 0.8`,
+  `experience_store: AgentExperienceStore | None = None`,
+  `max_verified_entropy: float = 0.0` — all defaulting to preserve exact
+  current behavior. `__init__` unconditionally constructs a
+  `ClarifyingDelegate` and a `FrozenCandidateEvidenceHarness` (cheap, no
+  I/O) but neither is invoked unless `use_clarification=True`.
+- `run()` gained `principal_id: str | None = None`,
+  `task_category: str | None = None`, `episode_id: str | None = None` —
+  per-call (not constructor-level), matching how `goal`/`context`/`budget`
+  already vary per call, and matching `AgentExperienceStore`'s own
+  multi-key design (one runtime instance should not be bound to one
+  principal).
+- `AgentRuntimeResult` gained `clarification_result`,
+  `experience_decision`, `candidate_experience` (all `None`-defaulted,
+  appended after the original 9 fields — valid dataclass ordering, and
+  backward compatible since nothing in the repo constructs
+  `AgentRuntimeResult(...)` positionally except `_fuse()` itself).
+- Step 3 (previously always `delegate.propose()`) now branches: when
+  `use_clarification=False`, completely unchanged. When `True`: sample once
+  via `delegate.sample_candidates()`; if `experience_store`+`principal_id`+
+  `task_category` are all given, look up `store.get(...)[-1]` (the same
+  single-latest-experience recency convention `ExperienceAwareDelegate`
+  already established and B7e Phase 1 already validated against real API)
+  and compute a `FrozenCandidateEvidenceHarness.decide()` relation *purely
+  for the audit-trail field* — this value is never passed into
+  `ClarifyingDelegate.resolve()`, never into semantic/authority
+  verification, never read by `_fuse()`'s decision logic; call
+  `resolve(..., pre_distribution=pre)` (reusing the exact same distribution
+  the harness just consulted — the B7e "same-distribution guarantee"
+  pattern); wrap the resulting `final_interpretation` back into a
+  `DelegateProposal`-shaped object (new helper `_proposal_from_clarification()`,
+  reusing the real `LLMResponse` that actually produced that interpretation,
+  never synthesizing one) so steps 4/5 and `_fuse()` need no changes to
+  their own logic; if `principal_id`/`task_category` given, additionally
+  build (but never store) a candidate `AgentExperience` via the existing
+  `build_verified_experience()`.
+- `FrozenCandidateEvidenceHarness`, `HistoricalEvidenceComparator`, and
+  `ClarifyingDelegate` were **not modified** — called exactly as they exist
+  today (frozen at `0f1cf7c`, validated at `8b701d4`).
+- `experiments/agent_smoke.py::run_runtime()` needs **no change** — it
+  passes none of the new kwargs, so it is byte-for-byte identical to before.
+
+### Tests (5 new classes, `tests/test_agent_runtime.py`, all deterministic — fake `LLMClient`, 0 API calls)
+
+- `TestClarificationOptOut` — omitting `use_clarification` and passing
+  `False` explicitly produce identical results; all 3 new fields `None` in
+  both; `delegate_llm.calls` length 1 in both (never touches
+  `sample_candidates`).
+- `TestClarificationStableDistribution` — entropy 0 at `use_clarification=True`
+  → `clarification_result.clarified is False`, exactly 3 delegate calls
+  (pre-sampling only, zero `ask_clarification`), decision flows through
+  unchanged.
+- `TestClarificationNoExperience` — ambiguous distribution (H≈0.918>0.8),
+  full clarification round, no `experience_store`/`principal_id`/
+  `task_category` → `clarified is True`, `experience_decision is None`,
+  `candidate_experience is None`.
+- **`TestClarificationAdvisoryHistoryNeverOverrides`** (the core regression —
+  Option B, now proven at the runtime level, not just the offline harness):
+  pre-populated store confirms `summarize`; current pre-sampling baseline is
+  `read` (2/3) vs. minority `summarize` (1/3, H≈0.918); harness computes
+  `resolved_value == "summarize"` but `final_value == baseline_value ==
+  "read"`; the **real** clarification round (independent of history) then
+  has the Principal confirm `read` again; asserts
+  `result.final_interpretation.action == "read"` and `decision == EXECUTE`
+  — history's SUPPORT-flagged value never reaches the actual decision.
+- `TestClarificationExperienceNotAutoStored` — a successful, fully-converged
+  clarification with `principal_id`/`task_category` given produces a
+  non-`None` `candidate_experience`, but `store.count(...) == 0` immediately
+  after `run()` returns; only an explicit `store.add(result.
+  candidate_experience)` changes that.
+
+**Verification**: `pytest tests/test_agent_runtime.py -v` — 11 pre-existing
+tests pass completely unmodified (11→16, only new classes appended); full
+`pytest -q` suite green; `git diff --stat` confirms only
+`src/dualflow/agent_runtime.py` and `tests/test_agent_runtime.py` changed —
+no fixed reproducer, no B7d/e diagnostic script, no already-frozen v3
+module (`experience_decision.py`, `experience_evidence.py`,
+`clarification.py`) touched; `experiments/agent_smoke.py` imports and
+constructs `run_runtime()` exactly as before (confirmed via direct import,
+no real API call made in this step).
+
+### Explicitly out of scope this phase
+
+No modification to `FrozenCandidateEvidenceHarness`/`HistoricalEvidenceComparator`/
+`ClarifyingDelegate`; no multi-round clarification loops (`ClarifyingDelegate.resolve()`
+stays single-round by design); no multi-facet `decide()` calls (`facet="action"` only);
+no multi-experience aggregation/ranking (single latest only); no Option A (no code
+path reads `experience_decision.resolved_value` to change `proposal`/
+`final_interpretation`/`decision`); no `auto_store` convenience flag; no reuse of
+`ExperienceAwareDelegate`'s v1/v2 text-injection; no new real-API experiment protocol
+for the new path (a `--role runtime-clarify` addition to `agent_smoke.py` is a natural
+follow-up, not designed here); no propagation of `principal_id`/`task_category` into
+`principal_agent.py`/`delegate_agent.py`/`semantic.py`/`authority_feedback.py`/
+`capability.py` — stays purely an `agent_runtime.py`/`agent_experience.py`-level
+concept this phase. No real API calls were made to produce this section.

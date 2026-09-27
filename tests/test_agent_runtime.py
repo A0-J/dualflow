@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import inspect
 
+from dualflow.agent_experience import AgentExperience, AgentExperienceStore
 from dualflow.agent_runtime import AgentDelegationRuntime, AgentRuntimeResult
 from dualflow.authority_feedback import AuthorityVerifierAgent
 from dualflow.capability import Budget, Privilege
-from dualflow.delegate_agent import DelegateAgent
+from dualflow.delegate_agent import CandidateDistribution, DelegateAgent
+from dualflow.experience_decision import AMBIGUOUS_REQUIRES_CLARIFICATION
 from dualflow.framework import EXECUTE, REJECT
 from dualflow.llm import LLMResponse
 from dualflow.principal_agent import PrincipalAgent
@@ -309,3 +311,228 @@ class TestGroundTruthInvariance:
         assert result_a.decision == result_b.decision == EXECUTE
         assert result_a.final_interpretation == result_b.final_interpretation
         assert result_a.principal_match == result_b.principal_match
+
+
+# --------------------------------------------------------------------------
+# Runtime Integration Phase 1 (docs/experiments/agent_connected_eval.md §26)
+# -- opt-in entropy-based clarification + Option B advisory-only evidence,
+# wired into AgentDelegationRuntime for the first time. Everything above
+# this line is unchanged from before this phase and continues to exercise
+# use_clarification=False (the default) exclusively.
+# --------------------------------------------------------------------------
+
+def _make_experience(action: str, *, principal_id: str = "p1",
+                     task_category: str = "cat1") -> AgentExperience:
+    """`tests/test_experience_decision.py`의 `_experience()` 헬퍼와 같은
+    패턴 -- pre/post_distribution은 필드를 채우기만 하면 되는 더미다(이
+    experience의 confirmed_facets/confirmed_interpretation만 실제로
+    쓰인다)."""
+    interp = Interpretation(action, "file", "/reports/2026-08/", frozenset())
+    dummy = CandidateDistribution(belief={interp: 1.0}, entropy=0.0, top=interp,
+                                  top_probability=1.0, n_unique=1, n_samples=1, responses=[])
+    return AgentExperience(
+        principal_id=principal_id, task_category=task_category,
+        delegation="Please prepare last month's report.",
+        clarification_question="Should I export or summarize?",
+        principal_answer=f"Please {action} it.",
+        confirmed_interpretation=interp,
+        pre_distribution=dummy, post_distribution=dummy,
+        confirmed_facets=frozenset({"action"}))
+
+
+class TestClarificationOptOut:
+    """`use_clarification`을 아예 안 넘기는 것과 명시적으로 `False`로
+    주는 것은 byte-identical해야 한다 -- 새 필드 3개도 항상 `None`이어야
+    한다."""
+
+    def _run_benign(self, use_clarification: bool | None):
+        principal_llm = _FakeLLMClient([
+            LLMResponse(text="Please read last month's report."),
+            _structured("read"),
+        ])
+        delegate_llm = _FakeLLMClient([_structured("read")])
+        semantic_llm = _FakeLLMClient([_structured("read")])
+        authority_llm = _FakeLLMClient([])
+
+        kwargs = {} if use_clarification is None else {"use_clarification": use_clarification}
+        runtime = AgentDelegationRuntime(
+            principal=PrincipalAgent(llm=principal_llm),
+            delegate=DelegateAgent(llm=delegate_llm),
+            semantic_verifier=SemanticVerifierAgent(llm_client=semantic_llm),
+            authority_verifier=AuthorityVerifierAgent(llm_client=authority_llm),
+            **kwargs)
+        budget = Budget.of(Privilege("read", "file", "/reports/2026-08/"))
+        result = runtime.run(goal="Read last month's report.", context="finance team",
+                             budget=budget)
+        return result, delegate_llm
+
+    def test_omitted_and_explicit_false_are_identical(self):
+        result_omitted, delegate_llm_omitted = self._run_benign(None)
+        result_explicit, delegate_llm_explicit = self._run_benign(False)
+
+        for result in (result_omitted, result_explicit):
+            assert result.decision == EXECUTE
+            assert result.principal_match is True
+            assert result.clarification_result is None
+            assert result.experience_decision is None
+            assert result.candidate_experience is None
+
+        # propose() 단일 호출만 있었다 -- sample_candidates()는 전혀 안 쓰였다.
+        assert len(delegate_llm_omitted.calls) == 1
+        assert len(delegate_llm_explicit.calls) == 1
+
+
+class TestClarificationStableDistribution:
+    def test_stable_distribution_skips_clarification_and_flows_through(self):
+        principal_llm = _FakeLLMClient([
+            LLMResponse(text="Please read last month's report."),
+            _structured("read"),
+        ])
+        # n=3, 전부 같은 action -> H=0.0 <= threshold -> clarification 없음.
+        delegate_llm = _FakeLLMClient([_structured("read") for _ in range(3)])
+        semantic_llm = _FakeLLMClient([_structured("read")])
+        authority_llm = _FakeLLMClient([])
+
+        runtime = AgentDelegationRuntime(
+            principal=PrincipalAgent(llm=principal_llm),
+            delegate=DelegateAgent(llm=delegate_llm),
+            semantic_verifier=SemanticVerifierAgent(llm_client=semantic_llm),
+            authority_verifier=AuthorityVerifierAgent(llm_client=authority_llm),
+            use_clarification=True, n=3, entropy_threshold=0.8)
+        budget = Budget.of(Privilege("read", "file", "/reports/2026-08/"))
+
+        result = runtime.run(goal="Read last month's report.", context="finance team",
+                             budget=budget)
+
+        assert result.clarification_result is not None
+        assert result.clarification_result.clarified is False
+        assert result.proposal.interpretation == Interpretation(
+            "read", "file", "/reports/2026-08/", frozenset())
+        assert result.final_interpretation == Interpretation(
+            "read", "file", "/reports/2026-08/", frozenset())
+        assert result.decision == EXECUTE
+        # pre-sampling 3회뿐 -- ask_clarification()도 post-sampling도 없었다.
+        assert len(delegate_llm.calls) == 3
+        assert result.experience_decision is None    # experience_store를 안 줬다
+        assert result.candidate_experience is None   # clarified=False -> 저장 후보 없음
+
+
+class TestClarificationNoExperience:
+    def test_ambiguous_distribution_clarifies_without_experience_fields(self):
+        principal_llm = _FakeLLMClient([
+            LLMResponse(text="Please handle last month's report."),      # delegate()
+            _structured("read"),                                         # restate_intent()
+            LLMResponse(text="Just read it, no export needed."),         # answer_clarification()
+        ])
+        delegate_llm = _FakeLLMClient(
+            [_structured("read"), _structured("read"), _structured("export")]   # pre: H≈0.918>0.8
+            + [LLMResponse(text="Read or export?")]                              # ask_clarification()
+            + [_structured("read"), _structured("read"), _structured("read")])   # post: H=0.0
+        semantic_llm = _FakeLLMClient([_structured("read")])
+        authority_llm = _FakeLLMClient([])
+
+        runtime = AgentDelegationRuntime(
+            principal=PrincipalAgent(llm=principal_llm),
+            delegate=DelegateAgent(llm=delegate_llm),
+            semantic_verifier=SemanticVerifierAgent(llm_client=semantic_llm),
+            authority_verifier=AuthorityVerifierAgent(llm_client=authority_llm),
+            use_clarification=True, n=3, entropy_threshold=0.8)
+        budget = Budget.of(Privilege("read", "file", "/reports/2026-08/"))
+
+        result = runtime.run(goal="Handle last month's report, read only.",
+                             context="finance team", budget=budget)
+
+        assert result.clarification_result is not None
+        assert result.clarification_result.clarified is True
+        assert result.final_interpretation.action == "read"
+        assert result.decision == EXECUTE
+        # experience_store/principal_id/task_category를 전혀 안 줬다.
+        assert result.experience_decision is None
+        assert result.candidate_experience is None
+
+
+class TestClarificationAdvisoryHistoryNeverOverrides:
+    """Runtime Integration Phase 1의 핵심 회귀 -- Option B(v3, commit
+    0f1cf7c, B7e Phase 1 real API로 검증 완료, commit 8b701d4)가 runtime
+    레벨에서도 그대로 지켜지는지 직접 확인한다. History는 "summarize"를
+    SUPPORT하지만, 현재 baseline도 실제 Principal의 clarification 답변도
+    "read"다 -- 그러므로 최종 결정은 반드시 "read"여야 하고, advisory
+    relation은 감사용으로만 기록돼야 한다."""
+
+    def test_conflicting_history_is_recorded_but_never_changes_the_decision(self):
+        store = AgentExperienceStore()
+        store.add(_make_experience("summarize"))  # 과거엔 summarize가 confirmed였다
+
+        principal_llm = _FakeLLMClient([
+            LLMResponse(text="Please handle last month's report."),        # delegate()
+            _structured("read"),                                          # restate_intent() -- 진짜 의도
+            LLMResponse(text="Read it, no summary needed this time."),    # answer_clarification()
+        ])
+        delegate_llm = _FakeLLMClient(
+            [_structured("read"), _structured("read"), _structured("summarize")]  # pre: H≈0.918>0.8
+            + [LLMResponse(text="Read or summarize?")]                             # ask_clarification()
+            + [_structured("read"), _structured("read"), _structured("read")])     # post: H=0.0, "read" 확인
+        semantic_llm = _FakeLLMClient([_structured("read")])
+        authority_llm = _FakeLLMClient([])
+
+        runtime = AgentDelegationRuntime(
+            principal=PrincipalAgent(llm=principal_llm),
+            delegate=DelegateAgent(llm=delegate_llm),
+            semantic_verifier=SemanticVerifierAgent(llm_client=semantic_llm),
+            authority_verifier=AuthorityVerifierAgent(llm_client=authority_llm),
+            use_clarification=True, n=3, entropy_threshold=0.8,
+            experience_store=store)
+        budget = Budget.of(Privilege("read", "file", "/reports/2026-08/"))
+
+        result = runtime.run(goal="Handle last month's report, read only.",
+                             context="finance team", budget=budget,
+                             principal_id="p1", task_category="cat1")
+
+        # relation은 계산·기록됐다 -- summarize가 SUPPORT다.
+        assert result.experience_decision is not None
+        assert result.experience_decision.stage == AMBIGUOUS_REQUIRES_CLARIFICATION
+        assert result.experience_decision.resolved_value == "summarize"
+        # 하지만 그 어떤 값도 실제 baseline/final을 바꾸지 않았다.
+        assert result.experience_decision.baseline_value == "read"
+        assert result.experience_decision.final_value == "read"
+        # 그리고 실제 runtime 최종 결정도 "read"다 -- history가 이긴 게 아니라
+        # 실제 clarification에서 Principal이 "read"를 확인해준 결과다.
+        assert result.final_interpretation.action == "read"
+        assert result.decision == EXECUTE
+        assert result.principal_match is True
+
+
+class TestClarificationExperienceNotAutoStored:
+    def test_run_never_calls_store_add_itself(self):
+        principal_llm = _FakeLLMClient([
+            LLMResponse(text="Please handle last month's report."),
+            _structured("read"),
+            LLMResponse(text="Just read it."),
+        ])
+        delegate_llm = _FakeLLMClient(
+            [_structured("read"), _structured("read"), _structured("summarize")]
+            + [LLMResponse(text="Read or summarize?")]
+            + [_structured("read"), _structured("read"), _structured("read")])
+        semantic_llm = _FakeLLMClient([_structured("read")])
+        authority_llm = _FakeLLMClient([])
+        store = AgentExperienceStore()  # 처음엔 비어 있다 -- 이번 episode 이전 history 없음
+
+        runtime = AgentDelegationRuntime(
+            principal=PrincipalAgent(llm=principal_llm),
+            delegate=DelegateAgent(llm=delegate_llm),
+            semantic_verifier=SemanticVerifierAgent(llm_client=semantic_llm),
+            authority_verifier=AuthorityVerifierAgent(llm_client=authority_llm),
+            use_clarification=True, n=3, entropy_threshold=0.8,
+            experience_store=store)
+        budget = Budget.of(Privilege("read", "file", "/reports/2026-08/"))
+
+        result = runtime.run(goal="Handle last month's report, read only.",
+                             context="finance team", budget=budget,
+                             principal_id="p1", task_category="cat1")
+
+        assert result.candidate_experience is not None
+        assert result.candidate_experience.confirmed_facets == frozenset({"action"})
+        assert store.count("p1", "cat1") == 0   # run() 자신은 절대 add()하지 않는다
+
+        store.add(result.candidate_experience)  # 호출자가 명시적으로 저장해야 한다
+        assert store.count("p1", "cat1") == 1
