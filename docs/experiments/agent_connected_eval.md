@@ -530,7 +530,10 @@ meaningful.**
 | Runtime Integration Phase 1 (`AgentDelegationRuntime`, opt-in) | complete — 5 new deterministic tests (0 API calls), including the core Option-B-advisory-never-overrides regression at the runtime level; all 11 pre-existing tests unmodified; `agent_smoke.py` unaffected (§26) |
 | Runtime Integration Phase 2A (remote Delegate transport) | complete — 7 new deterministic tests (0 API calls), including a full `AgentDelegationRuntime` run producing identical results over local vs. remote Delegate (both stable and clarification paths); `AgentDelegationRuntime`/all B7 modules untouched — 3 new files only (§27) |
 | Runtime Integration Phase 2B — real API E2E smoke (8 real attempts total, incl. Phase 2B.1) | CLOSED — Process A/B separate-process real-API E2E confirmed; Clear + Authority-violation PASS; `AgentDelegationRuntime`/B7 modules untouched — but see correction below: the "Ambiguous" case was actually the same input as "Clear" (script bug, `goal` never varied), so the clarification branch was untested, not merely unobserved (§28 correction) |
-| Phase 2C Pilot-A (40 real episodes, 8 tasks × 5 runs) | **FROZEN, never merged with later runs — unsafe_execution_rate=0/35, confident-misread caught 5/5 (`vague_clarifiable`→`confident_semantic_misread`), but clarification manipulation failed (0/40 entropy>threshold) — RQ4 unanswered pending a separate calibration pass (§29)** |
+| Phase 2C-P1 "Pilot-A" (40 real episodes, 8 tasks × 5 runs) | FROZEN, never merged with later runs — unsafe_execution_rate=0/35, confident-misread caught 5/5 (`vague_clarifiable`→`confident_semantic_misread`), but clarification manipulation failed (0/40 entropy>threshold) (§29) |
+| Phase 2C-P2 "Calibration" (20 real episodes, 4 candidates × 5 runs) | FROZEN — within-run entropy still ≈0, but the SAME task's independent runs converge on DIFFERENT confident interpretations (mode instability across runs, not within) (§29) |
+| Phase 2C-P3 "Measurement Audit" (63 real calls) | FROZEN — **Finding P2C-F1**: 60/60 identical Delegate outputs given a frozen delegation string; instability localized to `PrincipalAgent.delegate()`, not the Delegate — measurement boundary was wrong, not entropy itself (§29) |
+| Phase 2C-P4 "Principal Delegation Stability Audit" | **design complete, not yet run — measures `delegate()`'s own cross-call stability directly (§29)** |
 
 The sequential multi-episode experiment (B7e) stays intentionally
 postponed. The canonical-context B7d.3 re-run (§16) removed the
@@ -3706,3 +3709,191 @@ findings; `confident_semantic_misread` and the other 5 tasks unchanged)
 and a **Phase 2C Final** run executes the originally-planned 20 independent
 runs per task from scratch — Pilot-A's 40 episodes are never merged into
 it.
+
+### Naming going forward: Phase 2C-P1/P2/P3/P4
+
+Everything above this point is unedited (per this document's standing
+policy) and is referred to here on as **Phase 2C-P1** ("Pilot-A", 40
+episodes). The calibration pass and everything after it use this
+consistent numbering. **P1/P2/P3/P4's data are never merged into one
+aggregate benchmark result — each answers a different question, at a
+different stage of narrowing down where semantic instability actually
+lives.**
+
+### Phase 2C-P2 — Ambiguity Calibration (20 real episodes, 4 candidates × 5 runs)
+
+Purpose (§29 above): find task wording that produces genuine ambiguity
+through the full `PrincipalAgent.delegate()` → `DelegateAgent` pipeline,
+via structural scope/resource-referent ambiguity rather than lexical verb
+vagueness. `experiments/agent_bench_calibration_tasks.py` (commit
+`badcf1a`), 4 candidates, explicitly excluded from main-result scoring.
+
+**Result: within-run entropy stayed at ≈0 for 19/20 episodes** (one
+episode reached 0.286, still below the 0.8 threshold) — clarification
+never triggered. But **the SAME task, run independently multiple times,
+converged on DIFFERENT confident (`H_within≈0`) interpretations**:
+`calib_scope_and_action_ambiguous` alone produced `summarize:/reports/
+2026-09/` (3 runs), `read:/reports/2026-09/` (1 run), and `summarize:
+/reports/2026-08/` (1 run) across its 5 independent runs — confirmed not a
+logging artifact by inspecting raw per-sample text directly (all 20
+completions within any single run are near-byte-identical). `calib_
+scope_ambiguous_action_fixed` was, by contrast, perfectly stable across
+all 5 runs (`export:/reports/2026-09/` every time) — itself informative:
+not every genuinely-underdetermined-by-design task actually produced
+cross-run instability.
+
+This is the first evidence of a phenomenon the within-run entropy
+estimator cannot see by construction: **`H_within ≈ 0` in every run, while
+the *mode itself* shifts between independent runs.** At this point it was
+not yet known whether this instability originates in the Delegate (same
+input, different output across separate requests) or upstream, in
+`PrincipalAgent.delegate()` (different input each run, Delegate perfectly
+consistent given whatever it received) — Phase 2C-P3 exists specifically
+to distinguish these.
+
+### Phase 2C-P3 — Measurement Audit (63 real calls: 3× `delegate()` + 60× `propose()`)
+
+`experiments/agent_bench_measurement_audit.py` (commit `62cb749`). For 3
+tasks (`clear_read`, `calib_scope_and_action_ambiguous`, `calib_stronger_
+misread_bait`): call `PrincipalAgent.delegate()` **once**, freeze the
+exact resulting delegation string, then call `DelegateAgent.propose()`
+(never `sample_candidates()`) **20 separate, fully independent times**
+against that identical frozen string.
+
+**Result: 60/60 identical outcomes.** Every task's 20 independent requests
+against its frozen delegation converged on the exact same
+`(action, scope)` pair — including `calib_scope_and_action_ambiguous`,
+whose frozen delegation ("Summarize the financial report located in
+`/reports/2026-09/` for the audit.") turned out to have **already fully
+resolved** both the action and the scope by the time it reached the
+Delegate at all.
+
+**Finding P2C-F1** (verbatim, the central finding of this whole Phase 2C
+arc so far):
+
+> The apparent semantic instability observed across independent
+> executions originated upstream of the Delegate. `PrincipalAgent.
+> delegate()` resolved underspecified intents into different concrete
+> delegations across runs, whereas the Delegate produced identical
+> interpretations for a fixed delegation in 60/60 independent requests.
+
+**Precise framing, replacing "entropy failed"**: entropy itself was never
+computed incorrectly — `H=0` was the *correct* value for the delegation
+the Semantic Flow's candidate-sampling step actually received in every
+one of Pilot-A's 40 episodes and P2's 20 episodes. What was wrong was the
+**measurement boundary**:
+
+```
+Original intent
+      │
+      ▼
+PrincipalAgent.delegate()   <- instability actually originates here
+      │
+      ▼
+Concrete delegation          <- by this point, ambiguity has already
+      │                          collapsed to one committed value
+      ▼
+Semantic Flow (candidate sampling, entropy)
+      │
+      ▼
+Delegate                     <- stable given whatever it receives (P3: 60/60)
+```
+
+> The original entropy estimator measured uncertainty *after* delegation
+> generation. Consequently, ambiguity already collapsed by the Principal
+> before reaching the Delegate was structurally invisible to the
+> downstream Semantic Flow.
+
+Not yet run at this point, per instruction: any threshold/prompt/parser
+change, raising temperature, or further wording iteration — inducing
+artificial randomness to manufacture entropy would obscure this
+structural finding rather than test it, and the finding itself ("the
+Delegate is very stable given a concrete delegation") should be preserved
+as observed, not treated as a problem to engineer away.
+
+### Phase 2C-P4 — Principal Delegation Stability Audit (design; not yet run)
+
+The one remaining open question P3 didn't measure: P3 froze exactly ONE
+`delegate()` draw per task and tested the Delegate's stability against it
+20 times. It did not measure how much `delegate()`'s OWN output varies
+across independent calls on the *same* (goal, context) — which is exactly
+what P2's cross-run instability implies is happening, but P4 is designed
+to confirm directly and quantify.
+
+`experiments/principal_delegation_audit.py` (commit pending) — an
+independent, read-only harness; does not touch `framework.py`'s Semantic
+Flow, `AgentDelegationRuntime`, `remote_delegate.py`, `delegate_server.py`,
+or any B7 module. Reuses the 5 existing tasks (`clear_read` + all 4 of
+P2's calibration candidates — no new wording authored) and the *existing*
+Delegate-based canonicalization step (P3 already showed this step is
+deterministic given a fixed string, so it introduces no meaningful extra
+variance): for each task, `PrincipalAgent.delegate()` is called 20
+independent times, and each resulting delegation string is canonicalized
+into `(action, resource, scope, condition)` via one `DelegateAgent.
+propose()` call. Facet-wise agreement (`max_v count(v)/R`) and Shannon
+entropy (`dualflow.semantic.entropy()`, reused unmodified — it only calls
+`.values()`, so a plain `{value: probability}` dict works exactly like the
+`Belief` type it normally receives) are computed independently for the
+action and scope facets — the same entropy function the Delegate side
+already uses, applied one layer upstream for the first time.
+
+**Hypotheses this measures, not assumes:**
+- **H-P1 (clear intent stability)**: `clear_read`'s `delegate()` output
+  should show high action/scope agreement across independent calls.
+- **H-P2 (ambiguous intent instability)**: the calibration candidates
+  that showed cross-run instability in P2 should show measurably lower
+  `delegate()`-level agreement / higher `delegate()`-level entropy.
+- **H-P3 (downstream collapse)**: already evidenced by P3 (60/60) —
+  whatever concrete delegation `delegate()` commits to, the Delegate
+  reproduces it consistently. P4 does not re-test this; it completes the
+  chain P3 started.
+
+**If confirmed, this is the shape of the mechanism**:
+
+```
+Ambiguous source intent
+        │
+        ▼
+Principal delegation instability   (P4 measures this directly)
+        │
+        ▼
+one interpretation becomes concretized
+        │
+        ▼
+Delegate receives an apparently unambiguous request
+        │
+        ▼
+H_delegate ≈ 0                      (P3 already confirmed this)
+```
+
+**Architectural implication, explicitly NOT implemented yet** (a decision
+for after P4's data, not a commitment made here): DualFlow's Semantic Flow
+would extend from single-boundary (receiver-side, Delegate interpretation
+only) to two-boundary:
+
+```
+Semantic Flow
+├── source-side verification   (Principal delegation stability;
+│                                clarify if unstable)
+└── receiver-side verification (Delegate interpretation; existing
+                                 candidate-sampling + entropy, unchanged)
+```
+
+No new top-level Flow — `DualFlow` stays exactly `Semantic Flow ×
+Authority Flow`; Semantic Flow gains a second, source-side check rather
+than the architecture growing a third component. Clarification would
+correspondingly gain a second trigger condition (source-side facet
+disagreement across independent `delegate()` draws — e.g. "action
+disagreement detected: read vs. summarize" — resolved by asking about
+just the disagreeing facet, consistent with the project's existing
+single-facet clarification design, §23 follow-up 4) alongside the
+existing receiver-side (Delegate candidate entropy) trigger. This is
+future work pending P4's results, not started here.
+
+**Framing for this whole arc** (per instruction): Phase 2C did not end in
+"clarification didn't work." It surfaced a structural blind spot —
+semantic ambiguity can be prematurely collapsed at the Principal→Delegate
+delegation boundary, before the existing Semantic Flow's candidate
+sampling ever gets a chance to see it. Pilot-A → Calibration → Measurement
+Audit → (Principal Delegation Stability Audit) is the evidentiary chain
+for this finding, not a series of failed attempts to force a result.
