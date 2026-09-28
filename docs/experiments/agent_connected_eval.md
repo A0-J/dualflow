@@ -4601,3 +4601,89 @@ only:**
 
 Not yet run — budget to be computed and presented before any real API
 call, per this project's standing discipline.
+
+### Phase 3A — result: answerable entirely from already-frozen data (0 new API calls)
+
+Before spending any new API budget, it turned out the 4 measurements
+above don't need new calls at all: `restate_intent(goal, context)`'s
+inputs never vary across `confident_semantic_misread`'s 20 episodes (it
+is a fixed task, same goal/context every run, and never sees the
+delegation text) — so the 20 already-recorded `principal_intent_action`
+values in the frozen Phase 2C Final JSONL *are* 20 independent samples
+of exactly the distribution this diagnostic wanted to characterize.
+Computed directly from that frozen file, no real API calls made for
+this step:
+
+| measurement | result |
+|---|---|
+| `restate_intent()` distribution (20 real independent calls, fixed input) | `summarize: 16, read: 4` |
+| self-consistency (majority share) | 0.80 |
+| accuracy vs. ideal (`summarize`) | **0.80** |
+| Delegate/final action distribution (same 20 episodes) | `read: 16, summarize: 4` — inverse of restate's |
+| paired per-episode agreement (same episode, restate vs. final) | 0.40 (8/20) |
+| when Delegate/final was wrong (16/20 episodes): restate correctly diverged to ideal | **0.75 (12/16)** |
+| when Delegate/final was wrong: restate *also* confidently agreed with the wrong value | **0.25 (4/16) — exactly the 4 unsafe episodes** |
+
+**Interpretation**: `restate_intent()` is not dominated by hard,
+systematic bias — its own per-call accuracy (0.80) is close to the rate
+at which its errors happen to coincide with the Delegate's own errors
+(0.25 conditional vs. 0.20 marginal, not sharply elevated) — consistent
+with mostly-independent per-call sampling noise with only a mild
+same-direction lean, unlike the Delegate/Principal-delegation
+cross-episode uniformity Finding P2C-F1 already characterized. This
+means a single `restate_intent()` call is not a reliable ground-truth
+anchor (it has its own ~20% error rate), but repeated, agreement-gated
+sampling of it is a well-motivated fix — not "ask twice and hope," but
+"only trust a facet once independent samples actually agree on it,"
+mirroring the exact methodology already validated for source-side
+delegation stability (§29 P2C-P4/P5).
+
+**Labeling, per instruction**: this is a *post-hoc diagnostic motivated
+by the Phase 2C safety failures* — not a pre-registered experiment, not
+a Phase 2C criterion, and not folded backward into the frozen 140-episode
+result above.
+
+### Phase 3B — Principal Intent Anchor (standalone module, design + implementation)
+
+Per the recommended direction: add **Intent Grounding** as a third
+component of Semantic Flow (alongside the existing source-side stability
+check and the unchanged receiver-side stability check) — comparing the
+Delegate's interpretation not against a single `restate_intent()` call,
+but against a `PrincipalIntentAnchor`: a per-facet structured statement
+of the Principal's actual plan, where each facet's `confirmed` status is
+*earned* via the same repeated-sampling + entropy methodology already
+validated for source-side stability, not granted by a single trusted
+call. This directly closes the gap Phase 3A diagnosed.
+
+```
+DualFlow
+|
++-- Semantic Flow
+|    |
+|    +-- Uncertainty Check (source-side + receiver-side, existing/unchanged)
+|    |     entropy / clarification
+|    |
+|    +-- Intent Grounding                    <- NEW (Phase 3B)
+|    |     PrincipalIntentAnchor: per-facet value + confirmed
+|    |     (confirmed earned via repeated sampling, not a single call)
+|    |
+|    +-- Semantic Compatibility
+|          match / targeted single-facet clarification (deterministic
+|          question, re-sample with enriched context -- mirrors
+|          SourceClarifyingPrincipal's existing pattern exactly)
+|
++-- Authority Flow (unchanged)
+     grant / scope / condition / feedback / non-amplification
+```
+
+Implemented in `src/dualflow/intent_anchor.py`, reusing without
+modification: `CandidateDistribution`, `dualflow.semantic.entropy()`,
+`source_semantic_gate.facet_entropies()` (generic over any
+`CandidateDistribution`, not duplicated), the same `entropy_threshold`
+(0.8, no new threshold), and the single-facet-per-round, deterministic-
+question, re-sample-with-enriched-context clarification pattern already
+established by `SourceClarifyingPrincipal`. Standalone only — not yet
+wired into `AgentDelegationRuntime`, mirroring exactly how
+`source_semantic_gate.py` itself was validated (design → deterministic
+tests → real-API validation → THEN opt-in runtime integration, each its
+own explicit step).
