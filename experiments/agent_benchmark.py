@@ -406,6 +406,9 @@ def main(argv: list[str] | None = None) -> int:
     run_p.add_argument("--port", type=int, default=8767)
     run_p.add_argument("--runs", type=int, required=True, help="independent runs PER TASK")
     run_p.add_argument("--output", required=True, help="JSONL path (appended to)")
+    run_p.add_argument("--exclude", action="append", default=[],
+                       help="task name to exclude (repeatable) -- Phase 2C Final "
+                            "(§29) excludes clear_read, already used as V1 in P5")
 
     eval_p = sub.add_parser("evaluate", help="post-hoc scoring, 0 API calls")
     eval_p.add_argument("--input", required=True, help="JSONL path produced by 'run'")
@@ -448,15 +451,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     # mode == "run"
-    total_episodes = args.runs * len(TASKS)
-    print(f"=== Phase 2C -- {len(TASKS)} tasks x {args.runs} runs = {total_episodes} episodes ===")
+    run_tasks = [t for t in TASKS if t.name not in set(args.exclude)]
+    if args.exclude:
+        print(f"Excluded tasks (already used elsewhere -- see docs §29): {args.exclude}")
+    total_episodes = args.runs * len(run_tasks)
+    print(f"=== Phase 2C -- {len(run_tasks)} tasks x {args.runs} runs = {total_episodes} episodes ===")
     print(f"model={args.model} n={args.n} entropy_threshold={args.entropy_threshold}")
 
     api_key = _read_api_key(args.api_key_file)
     os.environ["OPENAI_API_KEY"] = api_key
     del api_key
     try:
-        run_all(tasks=TASKS, runs=args.runs, model=args.model, n=args.n,
+        run_all(tasks=run_tasks, runs=args.runs, model=args.model, n=args.n,
                 entropy_threshold=args.entropy_threshold, port=args.port,
                 output_path=args.output)
         print(f"\nSaved {total_episodes} episodes to {args.output}")
