@@ -537,6 +537,8 @@ meaningful.**
 | Semantic Flow extension (source-side + receiver-side) | designed (minimal, no third Flow) — **see P5 results row below (§29)** |
 | Phase 2C-P5 "Source-Side Gate Validation" (200+ real calls, 3 tasks: V1/V2/V3) | **complete — Finding P2C-F2: source-side gate detects both ambiguous cases (H=1.533/2.490) with no false positive on the clear control (H=0), clarifies the disagreeing facet, and the confirmed delegation reaches zero entropy at both the source-side re-check and the existing receiver-side stage (§29)** |
 | Phase 2C diagnostic sequence (P1–P5) + Semantic Flow architecture (source-side + receiver-side, threshold=0.8) | **FROZEN — no further calibration/wording/threshold changes; V1/V2/V3 tasks excluded from Phase 2C Final's evaluation data (§29)** |
+| Source-side gate wired into `AgentDelegationRuntime` (`use_source_verification`, opt-in) | **complete — 6/6 integration-correctness tests pass, 431/431 full suite green, tagged `phase2c-runtime-integration-frozen` at commit `381e46d`; further implementation changes frozen until Phase 2C Final completes (§29)** |
+| Phase 2C Final — pilot (7 tasks × 5 runs = 35 real episodes, both Semantic Flow boundaries enabled) | **pre-registered interpretation criteria fixed before reading results; running (§29)** |
 
 The sequential multi-episode experiment (B7e) stays intentionally
 postponed. The canonical-context B7d.3 re-run (§16) removed the
@@ -4246,3 +4248,80 @@ Phase 2C Final runs on the frozen 8-task suite
 above), with fixed repetitions (20 runs/task, matching the originally
 planned scale) — gated on the runtime integration and its 6 tests above
 completing first. Not started yet.
+
+### Runtime integration — complete (commit `381e46d`, tag `phase2c-runtime-integration-frozen`)
+
+The plan above is now implemented exactly as designed, not merely
+planned: `use_source_verification`/`source_n` added to
+`AgentDelegationRuntime.__init__` (preparatory commit `615f238` gave
+`source_semantic_gate.py` a real, non-synthesized `PrincipalDelegation`
+to hand downstream); all 6 integration-correctness tests pass
+(`tests/test_agent_runtime.py`, `TestSourceVerification*`, 5 new test
+classes); full suite green at 431 passed, 0 failures. Tagged
+`phase2c-runtime-integration-frozen` — per §29's own freeze decision, no
+further implementation changes until Phase 2C Final completes.
+
+Of the 8-task suite, only `clear_read` overlaps with V1/V2/V3 (V2/V3 are
+calibration-only tasks, never part of the 8-task suite) — so Phase 2C
+Final's actual evaluation set is 7 tasks: `narrow_scope_ok`,
+`confident_semantic_misread`, `vague_persistent`,
+`over_privileged_delete`, `silent_misread`, `condition_violation`,
+`sensitive_escalation`. `experiments/agent_benchmark.py` gained a
+repeatable `--exclude` CLI flag (commit `b0e1ca6`) rather than hardcoding
+this into `agent_bench_tasks.py` itself, so the frozen 8-task suite
+definition stays untouched. The driver (`bd3ee57`) now runs both
+boundaries together (`use_clarification=True` and
+`use_source_verification=True`, sharing the same `n`/`entropy_threshold`
+— no new threshold or sample size invented for the source side) and
+logs `source_pre_entropy`/`source_clarified`/`clarified_facet`/
+`source_post_entropy` alongside the existing receiver-side fields;
+`evaluate()`'s new `source_side_stats()` helper was verified against a
+hand-built synthetic JSONL fixture (0 API calls) before any real run.
+
+Given this is the first time both boundaries run together against real
+API data (previously validated only separately — P4/P5 standalone, or
+together only via the 6 deterministic mock-LLM integration tests above),
+a **pilot (7 tasks × 5 runs = 35 episodes)** runs first, per this
+project's own established Pilot-A precedent — not the full 20 runs
+directly, even though the deterministic tests already pass. Per-episode
+real-API call count with both boundaries enabled (`n=source_n=20`) is
+substantially larger than any prior phase: min≈62/max≈126 calls/episode
+(vs. P4's 200/P5's 200+ calls *total*), so the full 140-episode run
+would cost min≈8,680/max≈17,640 calls — computed and reported before
+running, per this whole project's discipline.
+
+### Phase 2C Final — pre-registered pilot interpretation criteria (fixed before reading results)
+
+Per instruction, fixed **before** the pilot's results are read, so no
+appearance of choosing criteria after seeing the data:
+
+- **Safety (primary)**: `unsafe_execution_rate = 0` maintained.
+- **Utility**: no excessive increase in unnecessary REJECT/clarification
+  on tasks that should execute normally.
+- **Source-side effect**: on source-ambiguity tasks, the
+  `source_pre_entropy > 0.8 → clarification → source_post_entropy < 0.8`
+  pattern (established in P5, Finding P2C-F2) reproduces.
+- **Receiver-side effect**: receiver-side entropy stays low after
+  source-side clarification. If receiver-side entropy rebounds to high
+  values despite a confirmed source-side facet, the source-side fix
+  alone is insufficient — a distinct, reportable outcome, not something
+  to patch by re-tuning at this stage.
+- **Facet targeting**: clarification actually targets the genuinely
+  unstable facet, not an arbitrary one.
+- **Authority invariants**: the existing `no_grant`/condition/scope
+  blocking behavior is not weakened by the source-side extension (mirrors
+  integration test 5 above, now checked against real data instead of
+  fakes).
+- **Cost**: latency/API-call increase is recorded, but — at the pilot
+  stage — is not used as a basis to re-tune the architecture.
+- **Pilot → Full decision rule**: absent a structural error, an
+  unexpected unsafe execution, or a logging/evaluator bug, the pilot's
+  frozen configuration scales directly to the full 20 runs/task. Ordinary
+  stochastic variation across runs is not, by itself, grounds to
+  re-adjust task wording, prompts, or the threshold.
+
+**Framing** (per instruction): Phase 2C Final is not a stage for
+*producing* good results by adjustment — P1–P5 already served that
+discovery/calibration role, and the system was frozen at commit
+`381e46d`/tag `phase2c-runtime-integration-frozen`. Final measures how
+that already-frozen system actually behaves; it does not recalibrate it.
