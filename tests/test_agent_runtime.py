@@ -536,3 +536,213 @@ class TestClarificationExperienceNotAutoStored:
 
         store.add(result.candidate_experience)  # 호출자가 명시적으로 저장해야 한다
         assert store.count("p1", "cat1") == 1
+
+
+# --------------------------------------------------------------------------
+# Runtime integration -- source-side Semantic Flow gate (docs/experiments/
+# agent_connected_eval.md §29, Phase 2C-P5, Finding P2C-F2). 6 integration-
+# correctness tests, not new research experiments -- P5 already validated
+# the gate's real-API behavior standalone (commit b0f8e36); this section
+# only confirms the wiring into AgentDelegationRuntime.run() is correct.
+# Everything above this line continues to exercise use_source_verification=
+# False (the default) exclusively.
+# --------------------------------------------------------------------------
+
+class TestSourceVerificationOptOut:
+    """(1) source verification OFF -> 지금까지의(pre-integration) runtime
+    동작과 완전히 동일해야 한다. 안 넘기는 것과 명시적 False도
+    byte-identical해야 한다."""
+
+    def _run_benign(self, use_source_verification: bool | None):
+        principal_llm = _FakeLLMClient([
+            LLMResponse(text="Please read last month's report."),
+            _structured("read"),
+        ])
+        delegate_llm = _FakeLLMClient([_structured("read")])
+        semantic_llm = _FakeLLMClient([_structured("read")])
+        authority_llm = _FakeLLMClient([])
+
+        kwargs = ({} if use_source_verification is None
+                 else {"use_source_verification": use_source_verification})
+        runtime = AgentDelegationRuntime(
+            principal=PrincipalAgent(llm=principal_llm),
+            delegate=DelegateAgent(llm=delegate_llm),
+            semantic_verifier=SemanticVerifierAgent(llm_client=semantic_llm),
+            authority_verifier=AuthorityVerifierAgent(llm_client=authority_llm),
+            **kwargs)
+        budget = Budget.of(Privilege("read", "file", "/reports/2026-08/"))
+        result = runtime.run(goal="Read last month's report.", context="finance team",
+                             budget=budget)
+        return result, principal_llm, delegate_llm
+
+    def test_omitted_and_explicit_false_are_identical(self):
+        result_omitted, principal_omitted, delegate_omitted = self._run_benign(None)
+        result_explicit, principal_explicit, delegate_explicit = self._run_benign(False)
+
+        for result in (result_omitted, result_explicit):
+            assert result.decision == EXECUTE
+            assert result.principal_match is True
+            assert result.source_clarification_result is None
+            assert result.final_interpretation == Interpretation(
+                "read", "file", "/reports/2026-08/", frozenset())
+
+        # delegate() 1회 + restate_intent() 1회뿐 -- source-side sampling이
+        # 전혀 끼어들지 않는다(기존 Runtime Integration Phase 1의
+        # TestClarificationOptOut과 정확히 같은 패턴).
+        assert len(principal_omitted.calls) == 2
+        assert len(principal_explicit.calls) == 2
+        assert len(delegate_omitted.calls) == 1
+        assert len(delegate_explicit.calls) == 1
+
+
+class TestSourceVerificationStable:
+    """(2) ON + clear input -> 여전히 같은 실행 경로, clarification 없음."""
+
+    def test_stable_source_flows_through_without_clarification(self):
+        source_n = 3
+        principal_llm = _FakeLLMClient(
+            [LLMResponse(text="Please read last month's report.") for _ in range(source_n)]
+            + [_structured("read")])                                       # restate_intent()
+        delegate_llm = _FakeLLMClient(
+            [_structured("read") for _ in range(source_n)]                 # canonicalize x3(수렴)
+            + [_structured("read")])                                       # step-3 propose()
+        semantic_llm = _FakeLLMClient([_structured("read")])
+        authority_llm = _FakeLLMClient([])
+
+        runtime = AgentDelegationRuntime(
+            principal=PrincipalAgent(llm=principal_llm),
+            delegate=DelegateAgent(llm=delegate_llm),
+            semantic_verifier=SemanticVerifierAgent(llm_client=semantic_llm),
+            authority_verifier=AuthorityVerifierAgent(llm_client=authority_llm),
+            use_source_verification=True, source_n=source_n, entropy_threshold=0.8)
+        budget = Budget.of(Privilege("read", "file", "/reports/2026-08/"))
+
+        result = runtime.run(goal="Read last month's report.", context="finance team",
+                             budget=budget)
+
+        assert result.source_clarification_result is not None
+        assert result.source_clarification_result.clarified is False
+        assert result.source_clarification_result.pre_distribution.entropy == 0.0
+        assert result.final_interpretation == Interpretation(
+            "read", "file", "/reports/2026-08/", frozenset())
+        assert result.decision == EXECUTE
+        assert result.principal_match is True
+
+
+class TestSourceVerificationUnstableTriggersClarification:
+    """(3) ON + unstable input -> source clarification이 실제로 발동한다."""
+
+    def test_unstable_source_actually_triggers_clarification(self):
+        source_n = 4
+        principal_llm = _FakeLLMClient(
+            [LLMResponse(text="Please prepare the report.") for _ in range(source_n)]
+            + [LLMResponse(text="summarize")]                              # answer_clarification()
+            + [LLMResponse(text="Please summarize the report.") for _ in range(source_n)]
+            + [_structured("summarize")])                                  # restate_intent()
+        delegate_llm = _FakeLLMClient(
+            [_structured("read"), _structured("read"),
+            _structured("summarize"), _structured("summarize")]           # pre: action H=1.0>0.8
+            + [_structured("summarize") for _ in range(source_n)]          # post: 수렴, H=0.0
+            + [_structured("summarize")])                                  # step-3 propose()
+        semantic_llm = _FakeLLMClient([_structured("summarize")])
+        authority_llm = _FakeLLMClient([])
+
+        runtime = AgentDelegationRuntime(
+            principal=PrincipalAgent(llm=principal_llm),
+            delegate=DelegateAgent(llm=delegate_llm),
+            semantic_verifier=SemanticVerifierAgent(llm_client=semantic_llm),
+            authority_verifier=AuthorityVerifierAgent(llm_client=authority_llm),
+            use_source_verification=True, source_n=source_n, entropy_threshold=0.8)
+        budget = Budget.of(Privilege("summarize", "file", "/reports/2026-08/"))
+
+        result = runtime.run(goal="Prepare the report.", context="finance team", budget=budget)
+
+        assert result.source_clarification_result is not None
+        assert result.source_clarification_result.clarified is True
+        assert result.source_clarification_result.target_facet == "action"
+        assert result.source_clarification_result.pre_distribution.entropy > 0.8
+        assert result.source_clarification_result.post_distribution is not None
+        assert result.source_clarification_result.post_distribution.entropy == 0.0
+        assert result.final_interpretation.action == "summarize"
+        assert result.decision == EXECUTE
+
+
+class TestSourceVerificationConfirmedFacetIsStable:
+    """(4) 확정된 facet이 이후 delegation 생성에서 다시 바뀌지 않는다 --
+    run()의 2번(restate_intent)/3번(propose) 단계가 실제로 그 confirmed
+    delegation 텍스트를 받았는지 직접 확인한다(합성/역행 없음)."""
+
+    def test_confirmed_facet_flows_unchanged_into_later_delegation(self):
+        source_n = 4
+        principal_llm = _FakeLLMClient(
+            [LLMResponse(text="Please prepare the report.") for _ in range(source_n)]
+            + [LLMResponse(text="summarize")]
+            + [LLMResponse(text="Please summarize the report.") for _ in range(source_n)]
+            + [_structured("summarize")])
+        delegate_llm = _FakeLLMClient(
+            [_structured("read"), _structured("read"),
+            _structured("summarize"), _structured("summarize")]
+            + [_structured("summarize") for _ in range(source_n)]
+            + [_structured("summarize")])
+        semantic_llm = _FakeLLMClient([_structured("summarize")])
+        authority_llm = _FakeLLMClient([])
+
+        runtime = AgentDelegationRuntime(
+            principal=PrincipalAgent(llm=principal_llm),
+            delegate=DelegateAgent(llm=delegate_llm),
+            semantic_verifier=SemanticVerifierAgent(llm_client=semantic_llm),
+            authority_verifier=AuthorityVerifierAgent(llm_client=authority_llm),
+            use_source_verification=True, source_n=source_n, entropy_threshold=0.8)
+        budget = Budget.of(Privilege("summarize", "file", "/reports/2026-08/"))
+
+        result = runtime.run(goal="Prepare the report.", context="finance team", budget=budget)
+
+        confirmed_text = result.source_clarification_result.final_delegation
+        assert confirmed_text == "Please summarize the report."
+        # run() 자신이 담은 delegation은 confirmed된 것과 완전히 같다 --
+        # 별도로 재생성되거나 pre-round 후보로 되돌아가지 않았다.
+        assert result.delegation.delegation == confirmed_text
+        assert result.delegation is result.source_clarification_result.final_principal_delegation
+        # step-3 propose() 호출(2번째 delegate.propose(), 즉 실제 downstream
+        # 호출)의 input_text에 confirmed delegation 텍스트가 그대로
+        # 들어갔는지 직접 확인한다.
+        step3_call = delegate_llm.calls[-1]
+        assert confirmed_text in step3_call["input_text"]
+        assert result.decision == EXECUTE
+
+
+class TestSourceVerificationAuthorityInvariantUnaffected:
+    """(5) Authority Flow / non-amplification invariant는 source-side
+    verification이 켜져도 그대로 유지된다 -- B가 더 넓게 제안하면 여전히
+    budget ceiling까지만 좁혀진다."""
+
+    def test_authority_negotiation_still_narrows_with_source_verification_on(self):
+        source_n = 2
+        principal_llm = _FakeLLMClient(
+            [LLMResponse(text="Please read last month's report.") for _ in range(source_n)]
+            + [_structured("read", scope="/reports/2026-08/")])            # restate_intent() -- 진짜 의도는 좁은 scope
+        delegate_llm = _FakeLLMClient(
+            [_structured("read", scope="/reports/2026-08/") for _ in range(source_n)]  # canonicalize(안정)
+            + [_structured("read", scope="/reports/")])                     # step-3 propose() -- B는 더 넓게 제안
+        semantic_llm = _FakeLLMClient([_structured("read", scope="/reports/")])
+        # Authority가 협상으로 ceiling까지 좁혀 제안 -> 재검증 통과.
+        authority_llm = _FakeLLMClient([_structured("read", scope="/reports/2026-08/")])
+
+        runtime = AgentDelegationRuntime(
+            principal=PrincipalAgent(llm=principal_llm),
+            delegate=DelegateAgent(llm=delegate_llm),
+            semantic_verifier=SemanticVerifierAgent(llm_client=semantic_llm),
+            authority_verifier=AuthorityVerifierAgent(llm_client=authority_llm),
+            use_source_verification=True, source_n=source_n, entropy_threshold=0.8)
+        budget = Budget.of(Privilege("read", "file", "/reports/2026-08/"))
+
+        result = runtime.run(goal="Read last month's report.", context="", budget=budget)
+
+        assert len(authority_llm.calls) == 1  # 협상이 여전히 1회 일어난다
+        assert result.authority_verdict.negotiated is True
+        assert result.proposal.interpretation.scope == "/reports/"         # B의 원래(넓은) 제안
+        assert result.final_interpretation.scope == "/reports/2026-08/"    # 협상 후 좁혀진 값 --
+                                                                             # source verification이 non-amplification을
+                                                                             # 우회하게 하지 않는다
+        assert result.principal_match is True
+        assert result.decision == EXECUTE

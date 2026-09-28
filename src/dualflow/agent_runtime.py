@@ -73,6 +73,28 @@ runtime 레벨에서도 구조적으로 지킨다. Verified experience 저장도
 `experience_store.add(...)`를 절대 호출하지 않는다(B7c의 "이 함수는
 저장하지 않는다, 호출자가 명시적으로 add()해야 한다" 원칙을 그대로
 유지).
+
+RUNTIME INTEGRATION — SOURCE-SIDE SEMANTIC GATE (2026-09-28, docs/
+experiments/agent_connected_eval.md §29, Phase 2C-P5 Finding P2C-F2)
+— `source_semantic_gate.SourceClarifyingPrincipal`(P5에서 200+ real API
+호출로 standalone 검증 완료, commit `b1e2f86`/`615f238`)을 이 runtime의
+1번 단계에 opt-in으로 연결한다. 새 생성자 파라미터
+`use_source_verification`/`source_n`을 하나도 안 넘기면 이 클래스는
+지금까지와 byte-identical하게 동작한다.
+
+`use_source_verification=True`일 때만 1번 단계(`principal.delegate()`
+단일 호출)가 `SourceClarifyingPrincipal.resolve()`로 바뀐다 — 독립적으로
+`source_n`번 delegate()를 뽑아 facet-level entropy를 재고(§29 gate,
+threshold는 기존 `entropy_threshold`를 그대로 재사용 — 새 threshold를
+만들지 않는다), 불안정하면 정확히 그 disagreeing facet 하나만 결정론적
+질문으로 확인한 뒤 그 확정값을 constraint로 재생성한다. 이 결과의
+`final_principal_delegation`(실제로 생성된, 합성되지 않은
+`PrincipalDelegation`)이 2번 단계 이후 기존 파이프라인 전체(principal_
+intent 재구성, Delegate propose/clarification, Semantic/Authority
+Verification, `_fuse()`)에 그대로 흘러간다 — 그 이후 로직은 하나도
+수정되지 않았다. `AgentRuntimeResult.source_clarification_result`는
+감사/기록용으로만 실린다(`source_pre_entropy`/`source_clarified`/
+`clarified_facet`/`source_post_entropy`는 이 값에서 파생된다).
 """
 
 from __future__ import annotations
@@ -88,6 +110,7 @@ from .experience_decision import FacetDecision, FrozenCandidateEvidenceHarness
 from .framework import EXECUTE, REJECT
 from .principal_agent import PrincipalAgent, PrincipalDelegation, PrincipalIntent
 from .semantic import Interpretation, SemanticVerdict, SemanticVerifierAgent, parse_structured_action
+from .source_semantic_gate import SourceClarificationResult, SourceClarifyingPrincipal
 
 
 @dataclass(frozen=True)
@@ -119,6 +142,14 @@ class AgentRuntimeResult:
     experience_decision: FacetDecision | None = None
     candidate_experience: AgentExperience | None = None
 
+    # Source-side Semantic Flow (§29 Phase 2C-P5, Finding P2C-F2) --
+    # `use_source_verification=False`(기본값)에서는 항상 None. 감사용일
+    # 뿐이며 `decision`/`final_interpretation`에 영향을 준 적이 없다 --
+    # 영향을 주는 건 `final_principal_delegation`이 1번 단계의 delegation
+    # 자체를 대체한다는 것뿐이고, 그 이후 로직(2번 단계~_fuse())은 이
+    # 필드를 전혀 참조하지 않는다.
+    source_clarification_result: SourceClarificationResult | None = None
+
 
 class AgentDelegationRuntime:
     """Phase B의 oracle-free end-to-end 실행 진입점. 네 개의 독립 Agent를
@@ -138,7 +169,9 @@ class AgentDelegationRuntime:
                  n: int = 10,
                  entropy_threshold: float = 0.8,
                  experience_store: AgentExperienceStore | None = None,
-                 max_verified_entropy: float = 0.0):
+                 max_verified_entropy: float = 0.0,
+                 use_source_verification: bool = False,
+                 source_n: int = 20):
         self.principal = principal
         self.delegate = delegate
         self.semantic_verifier = semantic_verifier
@@ -156,6 +189,17 @@ class AgentDelegationRuntime:
             principal=principal, delegate=delegate, n=n, entropy_threshold=entropy_threshold)
         self._experience_harness = FrozenCandidateEvidenceHarness(entropy_threshold=entropy_threshold)
 
+        # Source-side Semantic Flow -- 마찬가지로 opt-in. use_source_
+        # verification이 False(기본값)면 아래 객체는 만들어지기만 하고
+        # run()에서 전혀 쓰이지 않는다. threshold는 receiver-side와 같은
+        # entropy_threshold를 그대로 재사용한다 -- 새 threshold를 만들지
+        # 않는다(§29 freeze).
+        self.use_source_verification = use_source_verification
+        self.source_n = source_n
+        self._source_clarifying_principal = SourceClarifyingPrincipal(
+            principal=principal, delegate=delegate, n=source_n,
+            entropy_threshold=entropy_threshold)
+
     def run(self, *, goal: str, context: str, budget: Budget,
            principal_id: str | None = None, task_category: str | None = None,
            episode_id: str | None = None) -> AgentRuntimeResult:
@@ -169,8 +213,22 @@ class AgentDelegationRuntime:
         `self.experience_store`가 주어졌을 때만 의미가 있다 — experience
         조회/저장 후보 계산에만 쓰이고, 그 외에는 아무 영향도 없다(둘 다
         기본값 None으로 둬도 기존 동작과 완전히 동일)."""
-        # 1) Agent A가 delegation을 만든다.
-        delegation = self.principal.delegate(goal=goal, context=context)
+        # 1) Agent A가 delegation을 만든다. use_source_verification=False
+        #    (기본값)면 기존 그대로 단일 delegate() 호출. True면 source-
+        #    side Semantic Flow 경계(§29 Phase 2C-P5, Finding P2C-F2)가
+        #    먼저 발동한다 -- 독립적으로 source_n번 delegate()를 뽑아
+        #    facet-level entropy를 재고, 불안정하면 그 disagreeing facet
+        #    하나만 확인 후 재생성한다. 이후 코드(2번 단계부터)는 결과로
+        #    나온 delegation 하나만 보고, use_source_verification이
+        #    켜졌는지조차 모른다 -- 완전히 동일한 PrincipalDelegation
+        #    모양이기 때문이다.
+        source_clarification_result: SourceClarificationResult | None = None
+        if not self.use_source_verification:
+            delegation = self.principal.delegate(goal=goal, context=context)
+        else:
+            source_clarification_result = self._source_clarifying_principal.resolve(
+                goal=goal, context=context)
+            delegation = source_clarification_result.final_principal_delegation
 
         # 2) Agent A가 원래 goal/context에서만 독립적으로 의도를
         #    재구성한다 — 이 시점에 proposal 변수는 아직 존재하지 않는다
@@ -243,14 +301,17 @@ class AgentDelegationRuntime:
                           semantic_verdict, authority_verdict,
                           clarification_result=clarification_result,
                           experience_decision=experience_decision,
-                          candidate_experience=candidate_experience)
+                          candidate_experience=candidate_experience,
+                          source_clarification_result=source_clarification_result)
 
     def _fuse(self, delegation: PrincipalDelegation, principal_intent: PrincipalIntent,
              proposal: DelegateProposal, semantic_verdict: SemanticVerdict,
              authority_verdict: AuthorityVerdict, *,
              clarification_result: ClarificationResult | None = None,
              experience_decision: FacetDecision | None = None,
-             candidate_experience: AgentExperience | None = None) -> AgentRuntimeResult:
+             candidate_experience: AgentExperience | None = None,
+             source_clarification_result: SourceClarificationResult | None = None
+             ) -> AgentRuntimeResult:
         # AuthorityVerifierAgent가 협상으로 proposal을 좁혔을 수 있다 —
         # 실행 후보는 B의 원래 proposal이 아니라 authority_verdict.
         # interpretation이다(B5와 같은 관례: 협상 결과가 최종본).
@@ -298,7 +359,8 @@ class AgentDelegationRuntime:
             semantic_verdict, authority_verdict, final_interpretation, principal_match,
             clarification_result=clarification_result,
             experience_decision=experience_decision,
-            candidate_experience=candidate_experience)
+            candidate_experience=candidate_experience,
+            source_clarification_result=source_clarification_result)
 
 
 def _proposal_from_clarification(result: ClarificationResult) -> DelegateProposal:
