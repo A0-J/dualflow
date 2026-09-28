@@ -88,7 +88,8 @@ def run_episode(runtime: AgentDelegationRuntime, task: AgentBenchTask, *,
         goal=task.goal, context=task.context, budget=task.budget)
     latency_s = time.monotonic() - started
 
-    cr = result.clarification_result
+    cr = result.clarification_result  # receiver-side (Delegate) clarification -- unchanged
+    scr = result.source_clarification_result  # source-side (Principal) gate -- §29 Phase 2C-P5
     n_calls = 3  # delegate() + restate_intent() + semantic, always present
     n_calls += 0 if result.authority_verdict.n_llm == 0 else result.authority_verdict.n_llm
     tokens_in = 0
@@ -114,6 +115,28 @@ def run_episode(runtime: AgentDelegationRuntime, task: AgentBenchTask, *,
             for r in cr.post_distribution.responses:
                 tokens_in += r.input_tokens or 0
                 tokens_out += r.output_tokens or 0
+    if scr is not None:
+        # Each source-side round is source_n independent principal.delegate()
+        # calls PLUS source_n canonicalizing delegate.propose() calls (§29
+        # design) -- both counted for n_calls. Token totals below cover only
+        # the principal.delegate()/answer_clarification() responses that
+        # SourceClarificationResult actually exposes (distribution.responses
+        # are the Principal's own LLMResponses, not the canonicalizing
+        # propose() calls') -- a documented, honest partial count, not a
+        # silently wrong total. The deterministic clarifying question
+        # (§29 design) is never an LLM call, so no token/call entry for it.
+        n_calls += 2 * scr.pre_distribution.n_samples
+        for r in scr.pre_distribution.responses:
+            tokens_in += r.input_tokens or 0
+            tokens_out += r.output_tokens or 0
+        if scr.clarified:
+            n_calls += 1  # answer_clarification() only -- question is deterministic
+            n_calls += 2 * scr.post_distribution.n_samples
+            tokens_in += (scr.answer.response.input_tokens or 0)
+            tokens_out += (scr.answer.response.output_tokens or 0)
+            for r in scr.post_distribution.responses:
+                tokens_in += r.input_tokens or 0
+                tokens_out += r.output_tokens or 0
 
     return {
         "task_id": task.name,
@@ -124,6 +147,7 @@ def run_episode(runtime: AgentDelegationRuntime, task: AgentBenchTask, *,
         "model": model,
         "delegation": result.delegation.delegation,
         "principal_intent_action": result.principal_intent.intended_action.action,
+        # Receiver-side (Delegate) clarification -- existing, unchanged (§23).
         "pre_entropy": cr.pre_distribution.entropy if cr else None,
         "pre_belief": _belief_summary(cr.pre_distribution) if cr else None,
         "pre_raw_responses": ([r.text for r in cr.pre_distribution.responses] if cr else None),
@@ -133,6 +157,17 @@ def run_episode(runtime: AgentDelegationRuntime, task: AgentBenchTask, *,
         "post_entropy": (cr.post_distribution.entropy if cr and cr.post_distribution else None),
         "post_belief": (_belief_summary(cr.post_distribution)
                         if cr and cr.post_distribution else None),
+        # Source-side (Principal) gate -- new, §29 Phase 2C-P5/Finding
+        # P2C-F2. Secondary metrics exactly as named in the Phase 2C Final
+        # protocol: source_pre_entropy/source_clarified/clarified_facet/
+        # source_post_entropy. "receiver_entropy" (also requested) is the
+        # existing "pre_entropy"/"post_entropy" pair above -- not duplicated
+        # under a new name, to avoid two names for the same value.
+        "source_pre_entropy": scr.pre_distribution.entropy if scr else None,
+        "source_clarified": scr.clarified if scr else None,
+        "clarified_facet": scr.target_facet if scr else None,
+        "source_post_entropy": (scr.post_distribution.entropy
+                                if scr and scr.post_distribution else None),
         "final_interpretation": {
             "action": result.final_interpretation.action,
             "resource": result.final_interpretation.resource,
@@ -171,12 +206,19 @@ def run_all(*, tasks: list[AgentBenchTask], runs: int, model: str, n: int,
         llm_client = build_llm_client(model)
 
         def _make_runtime() -> AgentDelegationRuntime:
+            # Phase 2C Final (docs/experiments/agent_connected_eval.md §29):
+            # both Semantic Flow boundaries enabled -- source-side (new,
+            # Phase 2C-P5/Finding P2C-F2) and receiver-side (existing,
+            # unchanged), sharing the same n/entropy_threshold per the §29
+            # freeze decision (no new threshold, no separate sample size
+            # invented for the source side).
             return AgentDelegationRuntime(
                 principal=PrincipalAgent(llm=llm_client),
                 delegate=remote_delegate,
                 semantic_verifier=SemanticVerifierAgent(llm_client=llm_client),
                 authority_verifier=AuthorityVerifierAgent(llm_client=llm_client),
-                use_clarification=True, n=n, entropy_threshold=entropy_threshold)
+                use_clarification=True, n=n, entropy_threshold=entropy_threshold,
+                use_source_verification=True, source_n=n)
 
         total_episodes = runs * len(tasks)
         completed = 0
@@ -191,7 +233,9 @@ def run_all(*, tasks: list[AgentBenchTask], runs: int, model: str, n: int,
                                       model=model)
                     out.write(json.dumps(row) + "\n")
                     out.flush()
-                    print(f"  pre_H={row['pre_entropy']} clarified={row['clarified']} "
+                    print(f"  source_H={row['source_pre_entropy']} "
+                         f"source_clarified={row['source_clarified']} "
+                         f"pre_H={row['pre_entropy']} clarified={row['clarified']} "
                          f"final={row['final_interpretation']['action']}:"
                          f"{row['final_interpretation']['scope']} decision={row['decision']} "
                          f"calls={row['api_call_count']} latency={row['latency_s']}s")
@@ -210,6 +254,27 @@ def evaluate(jsonl_path: str) -> dict:
             if line:
                 rows.append(json.loads(line))
 
+    def source_side_stats(task_rows: list[dict]) -> dict:
+        """RQ2 (§29 Phase 2C Final): source-side instability detection rate,
+        clarification rate, post-clarification stability -- additive, does
+        not touch any existing key. Rows with `source_pre_entropy is None`
+        (source verification not enabled for that row) are skipped rather
+        than crashing -- defensive only, every Phase 2C Final row has it."""
+        with_source = [r for r in task_rows if r.get("source_pre_entropy") is not None]
+        if not with_source:
+            return {}
+        n = len(with_source)
+        clarified = [r for r in with_source if r["source_clarified"]]
+        return {
+            "source_clarification_rate": len(clarified) / n,  # == instability detection rate
+                                                               # (gate clarifies iff unstable)
+            "mean_source_pre_entropy": statistics.mean(r["source_pre_entropy"] for r in with_source),
+            "mean_source_post_entropy": (
+                statistics.mean(r["source_post_entropy"] for r in clarified
+                                if r["source_post_entropy"] is not None)
+                if clarified else None),
+        }
+
     def per_task_stats(task_rows: list[dict], expected) -> dict:
         n = len(task_rows)
         if expected.ideal is None:  # vague_persistent -- no ground truth, descriptive only
@@ -218,6 +283,7 @@ def evaluate(jsonl_path: str) -> dict:
                 "execute_rate": sum(1 for r in task_rows if r["decision"] == "EXECUTE") / n,
                 "clarification_rate": sum(1 for r in task_rows if r["clarified"]) / n,
                 "mean_pre_entropy": statistics.mean(r["pre_entropy"] for r in task_rows),
+                **source_side_stats(task_rows),
                 "note": "no single ground truth -- descriptive stats only",
             }
 
@@ -262,6 +328,7 @@ def evaluate(jsonl_path: str) -> dict:
             "mean_input_tokens": statistics.mean(r["input_tokens"] for r in task_rows),
             "mean_output_tokens": statistics.mean(r["output_tokens"] for r in task_rows),
             "mean_latency_s": statistics.mean(r["latency_s"] for r in task_rows),
+            **source_side_stats(task_rows),
         }
 
     per_task = {}
@@ -309,6 +376,7 @@ def evaluate(jsonl_path: str) -> dict:
             "mean_input_tokens": statistics.mean(r["input_tokens"] for r in scored_rows),
             "mean_output_tokens": statistics.mean(r["output_tokens"] for r in scored_rows),
             "mean_latency_s": statistics.mean(r["latency_s"] for r in scored_rows),
+            **source_side_stats(scored_rows),
         }
 
     return {"per_task": per_task, "aggregate": aggregate, "n_episodes": len(rows),
