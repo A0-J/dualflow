@@ -154,8 +154,11 @@ def run_episode(runtime: AgentDelegationRuntime, task: AgentBenchTask, *,
     }
 
 
-def run_all(*, runs: int, model: str, n: int, entropy_threshold: float,
-           port: int, output_path: str) -> None:
+def run_all(*, tasks: list[AgentBenchTask], runs: int, model: str, n: int,
+           entropy_threshold: float, port: int, output_path: str) -> None:
+    """Generic over `tasks` -- the main 8-task suite and the calibration
+    candidates (`agent_bench_calibration_tasks.py`) both go through this
+    exact same execution path; only the task LIST and output file differ."""
     api_key_already_set = "OPENAI_API_KEY" in os.environ  # caller (main()) sets this
     assert api_key_already_set, "run_all() expects OPENAI_API_KEY already in os.environ"
 
@@ -175,12 +178,12 @@ def run_all(*, runs: int, model: str, n: int, entropy_threshold: float,
                 authority_verifier=AuthorityVerifierAgent(llm_client=llm_client),
                 use_clarification=True, n=n, entropy_threshold=entropy_threshold)
 
-        total_episodes = runs * len(TASKS)
+        total_episodes = runs * len(tasks)
         completed = 0
         with open(output_path, "a", encoding="utf-8") as out:
             for run_id in range(1, runs + 1):
                 batch_id = ((run_id - 1) // 5) + 1
-                for task in TASKS:
+                for task in tasks:
                     completed += 1
                     print(f"\n[{completed}/{total_episodes}] run={run_id} batch={batch_id} "
                          f"task={task.name}", flush=True)
@@ -339,11 +342,41 @@ def main(argv: list[str] | None = None) -> int:
     eval_p = sub.add_parser("evaluate", help="post-hoc scoring, 0 API calls")
     eval_p.add_argument("--input", required=True, help="JSONL path produced by 'run'")
 
+    calib_p = sub.add_parser(
+        "calibrate", help="run the small, EXCLUDED-from-main-results ambiguity-wording "
+        "calibration set (agent_bench_calibration_tasks.py) -- real API")
+    calib_p.add_argument("--api-key-file", required=True)
+    calib_p.add_argument("--model", default=DEFAULT_MODEL)
+    calib_p.add_argument("--n", type=int, default=DEFAULT_N)
+    calib_p.add_argument("--entropy-threshold", type=float, default=DEFAULT_ENTROPY_THRESHOLD)
+    calib_p.add_argument("--port", type=int, default=8768)
+    calib_p.add_argument("--runs", type=int, default=5, help="independent runs PER CANDIDATE")
+    calib_p.add_argument("--output", required=True, help="JSONL path (appended to)")
+
     args = p.parse_args(argv)
 
     if args.mode == "evaluate":
         result = evaluate(args.input)
         print(json.dumps(result, indent=2, default=str))
+        return 0
+
+    if args.mode == "calibrate":
+        from agent_bench_calibration_tasks import CALIBRATION_TASKS
+        total_episodes = args.runs * len(CALIBRATION_TASKS)
+        print(f"=== Phase 2C calibration -- {len(CALIBRATION_TASKS)} candidates x {args.runs} "
+             f"runs = {total_episodes} episodes (EXCLUDED from main-result reporting) ===")
+        print(f"model={args.model} n={args.n} entropy_threshold={args.entropy_threshold}")
+
+        api_key = _read_api_key(args.api_key_file)
+        os.environ["OPENAI_API_KEY"] = api_key
+        del api_key
+        try:
+            run_all(tasks=CALIBRATION_TASKS, runs=args.runs, model=args.model, n=args.n,
+                    entropy_threshold=args.entropy_threshold, port=args.port,
+                    output_path=args.output)
+            print(f"\nSaved {total_episodes} calibration episodes to {args.output}")
+        finally:
+            os.environ.pop("OPENAI_API_KEY", None)
         return 0
 
     # mode == "run"
@@ -355,7 +388,7 @@ def main(argv: list[str] | None = None) -> int:
     os.environ["OPENAI_API_KEY"] = api_key
     del api_key
     try:
-        run_all(runs=args.runs, model=args.model, n=args.n,
+        run_all(tasks=TASKS, runs=args.runs, model=args.model, n=args.n,
                 entropy_threshold=args.entropy_threshold, port=args.port,
                 output_path=args.output)
         print(f"\nSaved {total_episodes} episodes to {args.output}")
