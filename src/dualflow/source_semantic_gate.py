@@ -29,9 +29,18 @@ before the existing receiver-side candidate-sampling/entropy check
 (`DelegateAgent.sample_candidates()`/`clarification.ClarifyingDelegate`),
 which remains completely unchanged.
 
+Phase 2C-P5(200+개 real API 호출)이 이 모듈을 standalone으로 검증했다
+(§29 Finding P2C-F2): clear input은 false positive 없이 통과했고, 두
+ambiguous 케이스(H=1.533/2.490)는 정확히 action facet만 clarify했으며,
+확정된 delegation은 기존 receiver-side pipeline에서 둘 다 H=0으로
+안정화됐다 — source-side intervention이 downstream semantic state를
+실제로 바꾼다는 것까지 real data로 확인됐다. 이후 `agent_runtime.py`가
+opt-in으로 이 모듈을 호출한다(REVISION 1 — 처음 이 모듈이 작성됐을
+때는 아직 연결되지 않았었다; 지금은 `AgentDelegationRuntime.__init__`의
+`use_source_verification` 플래그를 통해서만 호출된다, 기본값 False로
+기존 동작 완전히 유지).
+
 이 모듈이 하지 않는 것:
-  - `AgentDelegationRuntime`을 수정하거나 여기 연결하는 것 — 아직 전혀
-    연결되지 않는다. Phase 2C-P5(독립 검증)까지만 이 단계의 범위다.
   - 새 entropy 공식을 만드는 것 — `dualflow.semantic.entropy()`를 그대로
     재사용한다(Delegate 쪽이 이미 쓰는 것과 정확히 같은 함수).
   - 새 threshold를 만드는 것 — 기존 0.8을 그대로 provisional로 쓴다
@@ -57,7 +66,7 @@ from dataclasses import dataclass
 
 from .clarification import _select_target_facet
 from .delegate_agent import CandidateDistribution, DelegateAgent
-from .principal_agent import PrincipalAgent, PrincipalClarification
+from .principal_agent import PrincipalAgent, PrincipalClarification, PrincipalDelegation
 from .semantic import Interpretation, entropy
 
 _ALL_FACETS = ("action", "resource", "scope", "condition")
@@ -65,7 +74,7 @@ _ALL_FACETS = ("action", "resource", "scope", "condition")
 
 def sample_principal_delegations(*, principal: PrincipalAgent, delegate: DelegateAgent,
                                  goal: str, context: str, n: int
-                                 ) -> tuple[CandidateDistribution, dict[Interpretation, str]]:
+                                 ) -> tuple[CandidateDistribution, dict[Interpretation, PrincipalDelegation]]:
     """`DelegateAgent.sample_candidates()`의 source-side 대응. `principal.
     delegate()`를 `n`번 독립적으로 호출하고, 각 결과 delegation 문자열을
     `delegate.propose()`(수정 없음, 그대로 재사용) 한 번으로 canonicalize
@@ -74,20 +83,23 @@ def sample_principal_delegations(*, principal: PrincipalAgent, delegate: Delegat
 
     기존 `CandidateDistribution`을 그대로 재사용한다(새 타입을 안 만든다)
     — belief는 canonicalize된 `Interpretation`들의 empirical distribution
-    이다. 두 번째 반환값은 각 `Interpretation`이 실제로 나온 delegation
-    원문 하나를 보존한 매핑이다(합의된 값에 대해 나중에 "진짜 생성된"
-    delegation 문자열을 복원하기 위해서 — 새로 합성하지 않는다,
-    `agent_runtime._proposal_from_clarification()`의 원칙과 동일)."""
+    이다. 두 번째 반환값은 각 `Interpretation`을 실제로 만들어낸
+    `PrincipalDelegation`(delegation 원문 + 그 LLMResponse) 하나를 보존한
+    매핑이다 — 합의된 값에 대해 나중에 "진짜 생성된" delegation을
+    복원하기 위해서다(새로 합성하지 않는다, `agent_runtime.
+    _proposal_from_clarification()`의 원칙과 동일). `PrincipalDelegation`
+    은 `principal_agent.py`가 이미 정의한 것을 그대로 재사용한다 — 새
+    타입이 아니다."""
     samples: list[Interpretation] = []
     responses = []
-    delegation_by_interp: dict[Interpretation, str] = {}
+    delegation_by_interp: dict[Interpretation, PrincipalDelegation] = {}
     for _ in range(n):
         delegation_result = principal.delegate(goal=goal, context=context)
         proposal = delegate.propose(delegation=delegation_result.delegation, context=context)
         interp = proposal.interpretation
         samples.append(interp)
         responses.append(delegation_result.response)
-        delegation_by_interp.setdefault(interp, delegation_result.delegation)
+        delegation_by_interp.setdefault(interp, delegation_result)
 
     counts = Counter(samples)
     total = len(samples)
@@ -154,7 +166,8 @@ class SourceClarificationResult:
     question: str | None
     answer: PrincipalClarification | None
     final_interpretation: Interpretation
-    final_delegation: str
+    final_principal_delegation: PrincipalDelegation  # 실제 생성된 것, 합성 아님
+    final_delegation: str  # == final_principal_delegation.delegation, 편의용
 
 
 class SourceClarifyingPrincipal:
@@ -177,11 +190,14 @@ class SourceClarifyingPrincipal:
         decision = self.gate.decide(pre)
 
         if decision.stable:
-            final_delegation = pre_delegations.get(pre.top, next(iter(pre_delegations.values())))
+            final_principal_delegation = pre_delegations.get(
+                pre.top, next(iter(pre_delegations.values())))
             return SourceClarificationResult(
                 clarified=False, pre_distribution=pre, post_distribution=None,
                 target_facet=None, question=None, answer=None,
-                final_interpretation=pre.top, final_delegation=final_delegation)
+                final_interpretation=pre.top,
+                final_principal_delegation=final_principal_delegation,
+                final_delegation=final_principal_delegation.delegation)
 
         # 정확히 하나의 facet만 target으로 삼는다 -- 기존 legacy IG 로직
         # (clarification._select_target_facet(), select_question()/
@@ -204,8 +220,11 @@ class SourceClarifyingPrincipal:
             principal=self.principal, delegate=self.delegate, goal=goal,
             context=enriched_context, n=self.n)
 
-        final_delegation = post_delegations.get(post.top, next(iter(post_delegations.values())))
+        final_principal_delegation = post_delegations.get(
+            post.top, next(iter(post_delegations.values())))
         return SourceClarificationResult(
             clarified=True, pre_distribution=pre, post_distribution=post,
             target_facet=target_facet, question=question, answer=answer,
-            final_interpretation=post.top, final_delegation=final_delegation)
+            final_interpretation=post.top,
+            final_principal_delegation=final_principal_delegation,
+            final_delegation=final_principal_delegation.delegation)

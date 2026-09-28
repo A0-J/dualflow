@@ -201,6 +201,25 @@ class TestFinalDelegationIsRealNotSynthesized:
 
         assert result.final_delegation in texts
 
+    def test_final_principal_delegation_is_a_real_PrincipalDelegation(self):
+        """`final_principal_delegation`은 합성된 값이 아니라 실제로
+        `principal.delegate()`가 만든 (delegation, response) 쌍이어야
+        한다 -- runtime 통합에서 그대로 PrincipalDelegation 자리에
+        넣을 수 있어야 하므로."""
+        from dualflow.principal_agent import PrincipalDelegation
+
+        n = 3
+        principal_llm = _FakeLLMClient([_delegation_text("Please read it.") for _ in range(n)])
+        delegate_llm = _FakeLLMClient([_structured("read") for _ in range(n)])
+        principal, delegate = _make_principal_and_delegate(principal_llm, delegate_llm)
+
+        clarifier = SourceClarifyingPrincipal(principal=principal, delegate=delegate, n=n)
+        result = clarifier.resolve(goal="Read the report.", context="")
+
+        assert isinstance(result.final_principal_delegation, PrincipalDelegation)
+        assert result.final_principal_delegation.delegation == result.final_delegation
+        assert result.final_principal_delegation.delegation == "Please read it."
+
 
 class TestNoGroundTruthAPI:
     def test_resolve_signature_has_no_truth_or_label_parameter(self):
