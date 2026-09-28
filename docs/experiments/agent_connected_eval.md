@@ -534,7 +534,9 @@ meaningful.**
 | Phase 2C-P2 "Calibration" (20 real episodes, 4 candidates × 5 runs) | FROZEN — within-run entropy still ≈0, but the SAME task's independent runs converge on DIFFERENT confident interpretations (mode instability across runs, not within) (§29) |
 | Phase 2C-P3 "Measurement Audit" (63 real calls) | FROZEN — **Finding P2C-F1**: 60/60 identical Delegate outputs given a frozen delegation string; instability localized to `PrincipalAgent.delegate()`, not the Delegate — measurement boundary was wrong, not entropy itself (§29) |
 | Phase 2C-P4 "Principal Delegation Stability Audit" (200 real calls) | FROZEN — H-P1/H-P2 confirmed: clear intent H=0/0, ambiguous intents up to action H=1.539/scope H=1.157, negative control (`calib_scope_ambiguous_action_fixed`) stayed at H=0 (§29) |
-| Semantic Flow extension (source-side + receiver-side) | **designed (minimal, no third Flow) — implementation + Phase 2C-P5 validation next, Phase 2C Final paused until P5 passes (§29)** |
+| Semantic Flow extension (source-side + receiver-side) | designed (minimal, no third Flow) — **see P5 results row below (§29)** |
+| Phase 2C-P5 "Source-Side Gate Validation" (200+ real calls, 3 tasks: V1/V2/V3) | **complete — Finding P2C-F2: source-side gate detects both ambiguous cases (H=1.533/2.490) with no false positive on the clear control (H=0), clarifies the disagreeing facet, and the confirmed delegation reaches zero entropy at both the source-side re-check and the existing receiver-side stage (§29)** |
+| Phase 2C diagnostic sequence (P1–P5) + Semantic Flow architecture (source-side + receiver-side, threshold=0.8) | **FROZEN — no further calibration/wording/threshold changes; V1/V2/V3 tasks excluded from Phase 2C Final's evaluation data (§29)** |
 
 The sequential multi-episode experiment (B7e) stays intentionally
 postponed. The canonical-context B7d.3 re-run (§16) removed the
@@ -4068,3 +4070,179 @@ delegation boundary, before the existing Semantic Flow's candidate
 sampling ever gets a chance to see it. Pilot-A → Calibration → Measurement
 Audit → (Principal Delegation Stability Audit) is the evidentiary chain
 for this finding, not a series of failed attempts to force a result.
+
+### Phase 2C-P5 — Source-Side Gate Validation (Results, real API)
+
+Implemented exactly as designed above: `src/dualflow/source_semantic_gate.py`
+(`sample_principal_delegations()`, `facet_entropies()`, `SourceSemanticGate`,
+`SourceClarifyingPrincipal`) plus `tests/test_source_semantic_gate.py` (12
+deterministic tests, 0 API calls — commit `b1e2f86`, extended `615f238`),
+standalone and **not yet wired into `AgentDelegationRuntime`**. Run via
+`experiments/source_gate_validation.py` (commit `b0f8e36`), model
+`gpt-4o-mini-2024-07-18`, `n=20`, on P4's own 3 tasks — no new wording.
+
+| Task | pre_H | clarified | target_facet | confirmed answer | post_H (source-side) | receiver-side H on confirmed delegation |
+| --- | --- | --- | --- | --- | --- | --- |
+| V1 `clear_read` | 0.000 | No | — | — | — | 0.000 |
+| V2 `calib_scope_and_action_ambiguous` | 1.533 | Yes | action | summarize | 0.469 | 0.000 |
+| V3 `calib_stronger_misread_bait` | 2.490 | Yes | action | summarize | 0.000 | 0.000 |
+
+V1 produced no false-positive clarification (source-side gate correctly
+passes a stable, clear intent straight through — same shape as the
+existing receiver-side gate's own negative-control behavior). V2 and V3
+both triggered exactly one clarification round on the actual disagreeing
+facet (`action`); the deterministic template question and the Principal's
+own `answer_clarification()` — no new LLM call for the question itself,
+per design — produced a confirmed value that a fresh, independent 20-draw
+re-sampling then converged on (`post_H` at or below the 0.8 threshold in
+both cases). The confirmed `final_delegation` — a real, non-synthesized
+`PrincipalDelegation` (§ preparatory commit `615f238`) — was then passed,
+unmodified, through the **existing, untouched** receiver-side pipeline
+(`DelegateAgent.sample_candidates()`, `n=20`): both V2 and V3 reached
+`receiver_side_entropy = 0.000`.
+
+Note on V2's `post_H = 0.469` (not exactly `0.000`): this is the expected,
+successful outcome, not a partial failure — the gate's criterion is
+"below the clarification threshold" (`0.8`), not "exactly zero." A single
+clarification round narrowing 4 competing interpretations down to enough
+agreement to clear the threshold, while leaving some minor residual
+scope-level variation, is exactly the single-round (not iterate-to-zero)
+design already established for the receiver side's own `ClarifyingDelegate`
+(§23 follow-up 4/5).
+
+**Finding P2C-F2 — Source-side semantic verification is effective.**
+Source-side instability was detected for both ambiguous validation cases
+(H=1.533 and H=2.490) while the clear control produced no false-positive
+clarification (H=0). The gate selected the action facet for clarification,
+after which the Principal confirmed summarize. Re-evaluation reduced
+source-side entropy below the clarification threshold (0.469 and 0.000),
+and the resulting confirmed delegations produced zero entropy in the
+existing receiver-side verification stage. This demonstrates that
+ambiguity resolved before delegation execution can be detected and
+corrected at the source boundary rather than being silently collapsed
+into a deterministic downstream request.
+
+Together with Finding P2C-F1 (§29 above — the blind spot exists), Finding
+P2C-F2 closes the loop: the extension not only detects the previously
+invisible instability, it demonstrably removes it before the delegation
+ever reaches the existing (unchanged) receiver-side Semantic Flow stage.
+
+### Freeze: Phase 2C diagnostic sequence (P1–P5) and Semantic Flow architecture
+
+Per instruction, effective immediately, all of the following are frozen —
+no further calibration, wording, or threshold changes based on this data:
+
+- **The P1→P5 diagnostic sequence itself** (Pilot-A, Calibration,
+  Measurement Audit, Principal Delegation Stability Audit, Source-Side
+  Gate Validation) — each stage's data stays exactly as reported above,
+  never re-run or merged with later data.
+- **The Semantic Flow architecture diagram** (§29 above: source-side check
+  → clarify disagreeing facet → concrete delegation → receiver-side check,
+  unchanged → Authority Flow / Joint Verification). `DualFlow` stays
+  exactly `Semantic Flow × Authority Flow` — no third top-level Flow.
+- **`entropy_threshold = 0.8`**, reused as-is at both the source-side and
+  receiver-side boundaries — provisional, tests architectural feasibility,
+  not a claim of optimality (already stated when the gate was designed;
+  restated here as frozen for the remainder of Phase 2C).
+- **Clarification target = the highest-information unstable facet**, via
+  the existing, unmodified legacy IG-based `_select_target_facet()` —
+  reused, not reimplemented, at the source-side boundary too.
+- **Confirmed facet = authoritative constraint** for the delegation
+  regenerated after clarification (mirrors the existing receiver-side
+  provenance-gate design of §23 follow-up 2/3: a confirmed value is
+  binding, not merely advisory).
+- **V1 (`clear_read`), V2 (`calib_scope_and_action_ambiguous`), and V3
+  (`calib_stronger_misread_bait`) are excluded from Phase 2C Final's
+  evaluation data** — already used for design/threshold validation here,
+  not held out as unseen evaluation tasks.
+
+No further search for new ambiguous wording, no recalibration of existing
+tasks, and no threshold retuning is planned for the remainder of Phase 2C.
+The next step is a minimal, opt-in integration of this architecture into
+`AgentDelegationRuntime`'s production `run()` path (below), followed by
+Phase 2C Final on the frozen 8-task suite (`experiments/agent_bench_tasks.py`).
+
+### Runtime integration (planned) and Phase 2C Final — redefined research questions
+
+**Integration plan** (not yet implemented as of this writing): add
+`use_source_verification: bool = False` (default preserves exact current
+behavior) and `source_n: int = 20` to `AgentDelegationRuntime.__init__`;
+when enabled, construct a `SourceClarifyingPrincipal` and call
+`.resolve(goal=goal, context=context)` in place of a bare
+`principal.delegate(goal, context)` at `run()`'s existing step 1, using
+its `final_principal_delegation` (a real `PrincipalDelegation`, per commit
+`615f238`) to feed the unchanged remainder of the pipeline (receiver-side
+Semantic Flow → Authority Flow → Joint Verification). `AgentRuntimeResult`
+gains a new, `None`-defaulted `source_clarification_result` field (holding
+the full `SourceClarificationResult`, exposing `source_pre_entropy`,
+`source_clarified`, `clarified_facet`, `source_post_entropy` for Phase 2C
+Final's metrics) — additive only, matching every prior runtime change
+this project has made (§26).
+
+```
+goal, context
+      │
+      ▼
+Principal source-side sampling (use_source_verification)
+      │
+      ├─ stable? ──Yes──▶ pass through (current behavior, unchanged)
+      │
+      No
+      │
+      ▼
+Facet clarification (source-side, deterministic question)
+      │
+      ▼
+Constrained delegation (confirmed facet = authoritative)
+      │
+      ▼
+Existing receiver-side Semantic Flow (unchanged)
+      │
+      ▼
+Authority Flow
+      │
+      ▼
+Joint Verification
+```
+
+Before Phase 2C Final runs, exactly 6 integration-correctness tests (not
+new research experiments) must pass:
+
+1. `use_source_verification=False` → runtime behavior identical to current
+   (pre-integration) behavior, byte-for-byte.
+2. `use_source_verification=True` + clear/stable input → same execution
+   path, no clarification triggered.
+3. `use_source_verification=True` + unstable input → source-side
+   clarification actually triggers.
+4. The confirmed facet, once set, does not change across a subsequent
+   delegation in the same resolved call.
+5. Authority Flow / non-amplification invariant is unaffected by source-
+   side verification being enabled.
+6. The full existing pytest suite stays green.
+
+Once these pass, this integration point is committed/tagged and further
+implementation changes are frozen until Phase 2C Final completes.
+
+**Phase 2C Final's research questions** (redefined, replacing the
+original single "does clarification work" framing now that the source-
+side boundary exists):
+
+- **RQ1 (utility preservation)**: does the extension preserve utility for
+  normal delegation — do clear/narrow-scope cases execute normally,
+  without unnecessary clarification?
+- **RQ2 (source-side resolution)**: does it resolve source-side ambiguity
+  before execution — instability detection rate, clarification rate,
+  post-clarification stability?
+- **RQ3 (safety)**: does the combined semantic + authority verification
+  prevent unsafe execution — `unsafe_execution_rate`?
+
+**Secondary metrics**: `source_pre_entropy`, `source_clarified`,
+`clarified_facet`, `source_post_entropy`, `receiver_entropy`,
+`principal_match`, `authority_decision`, `final_decision`,
+`unsafe_execution`, `completion`, `latency`, API call count.
+
+Phase 2C Final runs on the frozen 8-task suite
+(`experiments/agent_bench_tasks.py`), excluding V1/V2/V3 (already used
+above), with fixed repetitions (20 runs/task, matching the originally
+planned scale) — gated on the runtime integration and its 6 tests above
+completing first. Not started yet.
