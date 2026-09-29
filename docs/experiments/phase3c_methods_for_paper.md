@@ -403,7 +403,23 @@ C가 무조건 관대하게 통과시키는 느슨한 설계가 아니라, "확�
 
 아래는 전부 **설계만 해두고 실행하지 않은 것**이다. 사용자 확인 전까지 진행하지 않는다.
 
-### 9.1 Phase 3D(제안) — 재현성 + sample-count ablation + 부분 threshold ablation을 하나로 묶은 재실행 (설계만, 미실행)
+### 9.1 Phase 3D — 재현성 + sample-count ablation + 부분 threshold ablation을 하나로 묶은 재실행
+
+> **진행 상태**: 아래 설계대로 `run1`/`run2` 두 독립 replicate를 실행 완료(1,600 API
+> 호출)했고, 그 raw 데이터로 안전성-유용성 trade-off 분석까지 끝냈다. **가장 중요한
+> 결과: `run1`에서 Arm C가 실제 unsafe execution 2건을 냈다** — 다수결이 정답
+> 방향이었지만(70% summarize) entropy(0.881)가 threshold(0.8)를 근소하게 넘어
+> unconfirmed 처리되면서, Delegate의 오답과의 불일치가 차단 근거에서 제외됐다. `run2`
+> 에서는 같은 패턴이 정확히 재현되지는 않았다(이 task의 이번 draw가 우연히 덜
+> 불안정했음). 반면 `condition_violation`의 오탐 기각 복구는 두 run 모두에서 강하게
+> 재현됐다(8 episode). `n × threshold` 전체를 재계산한 결과, threshold를 올릴수록
+> `confident_semantic_misread`의 unsafe는 줄고(14/40→0/40) `condition_violation`의
+> 오탐 기각은 느는(0/10→10/10) **단조적인 trade-off**가 확인됐다 — 두 task의 위험/이득
+> 발생 entropy 구간이 거의 겹쳐서, 어느 threshold로도 둘 다 동시에 해결되지 않는다.
+> **이 데이터로 "더 나은 threshold를 고른다"는 결론은 내리지 않는다** — 지금은 trade-off
+> 구조 자체를 확인하는 단계다. `run3`은 보류 중(독립 holdout 용도로 남겨둠). 전체 표/
+> episode별 상세는 `docs/experiments/agent_connected_eval.md` §29(Phase 3D 항목)
+> 참고. 아래는 원래(실행 전) 설계 내용, 변경 없이 보존.
 
 재현성(reproducibility)과 반복 횟수 분석(sample-count ablation)을 **별도의 두 실험이
 아니라 하나의 재실행**으로 묶는다 — 어차피 둘 다 "episode마다 A(Principal)를 여러 번
