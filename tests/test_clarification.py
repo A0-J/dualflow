@@ -11,7 +11,7 @@ import inspect
 import pytest
 
 from dualflow.clarification import ClarificationResult, ClarifyingDelegate
-from dualflow.delegate_agent import DelegateAgent
+from dualflow.delegate_agent import CandidateDistribution, DelegateAgent
 from dualflow.llm import LLMResponse
 from dualflow.principal_agent import PrincipalAgent
 from dualflow.semantic import Interpretation
@@ -384,3 +384,62 @@ class TestNoGroundTruthAPI:
         clarifier = _make(principal_llm, delegate_llm, n=3, entropy_threshold=0.8)
 
         clarifier.resolve(goal="x", context="", delegation="y")  # 예외 없어야 함
+
+
+class TestPrecomputedPreDistribution:
+    """B7e(docs/experiments/agent_connected_eval.md §25 follow-up)용
+    `pre_distribution` 파라미터. 기본값 `None`일 때 byte-identical 동작을
+    지키는 것(하위 호환)과, 넘겼을 때 실제로 재sampling을 건너뛰는 것
+    (identity 보장) 둘 다 고정한다."""
+
+    def test_default_none_samples_internally_exactly_as_before(self):
+        """새 파라미터를 아예 안 쓰면 기존 테스트들과 동일하게 동작해야
+        한다 -- 이 테스트는 그 회귀 보장 자체를 명시적으로 고정한다."""
+        delegate_llm = _FakeLLMClient([_structured("summarize") for _ in range(10)])
+        principal_llm = _FakeLLMClient([])
+
+        clarifier = _make(principal_llm, delegate_llm, n=10, entropy_threshold=0.8)
+        result = clarifier.resolve(goal="x", context="", delegation="Please prepare the report.")
+
+        assert result.clarified is False
+        assert len(delegate_llm.calls) == 10  # sample_candidates() ran internally
+
+    def test_precomputed_stable_distribution_skips_internal_sampling(self):
+        """`pre_distribution`을 넘기면 `sample_candidates()`가 전혀
+        호출되지 않는다 -- delegate_llm에 응답을 하나도 안 채워둬도 동작
+        해야 한다는 게 그 증거다."""
+        precomputed = CandidateDistribution(
+            belief={SUMMARIZE: 1.0}, entropy=0.0, top=SUMMARIZE, top_probability=1.0,
+            n_unique=1, n_samples=10, responses=[])
+        delegate_llm = _FakeLLMClient([])  # 비어 있어도 됨 -- 호출되면 IndexError로 즉시 드러남
+        principal_llm = _FakeLLMClient([])
+
+        clarifier = _make(principal_llm, delegate_llm, n=10, entropy_threshold=0.8)
+        result = clarifier.resolve(goal="x", context="", delegation="Please prepare the report.",
+                                   pre_distribution=precomputed)
+
+        assert result.clarified is False
+        assert result.pre_distribution is precomputed  # 같은 object, 재sampling 없음
+        assert len(delegate_llm.calls) == 0
+
+    def test_precomputed_ambiguous_distribution_is_the_exact_object_used_for_clarification(self):
+        """harness가 판단에 쓴 분포와 clarification이 쓰는 분포가 반드시
+        같은 object이도록 강제하는 것이 이 파라미터의 핵심 목적이다 --
+        `is`로 확인한다(값이 같은 게 아니라 진짜 같은 object)."""
+        precomputed = CandidateDistribution(
+            belief={SUMMARIZE: 0.5, EXPORT: 0.5}, entropy=1.0, top=EXPORT, top_probability=0.5,
+            n_unique=2, n_samples=10, responses=[])
+        delegate_llm = _FakeLLMClient(
+            [LLMResponse(text="Summarize or export?")]      # ask_clarification() -- no pre-sampling
+            + [_structured("summarize") for _ in range(10)])  # post
+        principal_llm = _FakeLLMClient([LLMResponse(text="Summarize only.")])
+
+        clarifier = _make(principal_llm, delegate_llm, n=10, entropy_threshold=0.8)
+        result = clarifier.resolve(goal="x", context="", delegation="Please prepare the report.",
+                                   pre_distribution=precomputed)
+
+        assert result.clarified is True
+        assert result.pre_distribution is precomputed
+        # delegate_llm이 정확히 11번(질문 1 + post 10)만 불렸다 -- pre-sampling
+        # 10번이 없었다는 뜻.
+        assert len(delegate_llm.calls) == 11

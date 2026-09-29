@@ -15,7 +15,8 @@ everything B7d.6/§22 established) and without inventing a new
 ambiguity/explicitness classifier (the existing entropy-threshold gate
 already used by `clarification.ClarifyingDelegate` is reused unchanged).
 
-Consumption contract (fixed before any main-experiment API run):
+Consumption contract (fixed before any main-experiment API run; revised
+under REVISION 2 below):
 
   1. **Stability gate first, using the existing criterion.** If the
      current candidate distribution's entropy is already at or below
@@ -27,14 +28,11 @@ Consumption contract (fixed before any main-experiment API run):
      explicit instruction" as a natural-language property — it only
      checks whether the *already-sampled* distribution happens to satisfy
      the existing stability criterion. When it does, a historical value
-     cannot override it, by construction. But if real sampling on an
+     cannot override it, by construction. If real sampling on an
      explicit-change delegation turns out unstable despite the text being
-     explicit, this harness *will* proceed to consult history — and if
-     that changes the decision away from the explicit instruction, that
-     is a real, observed `stale-history override` (F4), not automatically
-     a contract bug. Whether that actually happens is an empirical
-     question for the main experiment to measure, not something assumed
-     true here.
+     explicit, this harness *will* proceed to consult history — but, as of
+     REVISION 2, consulting history no longer means automatically
+     overriding the decision (see point 4).
   2. **Eligibility gate, using existing provenance.** If the facet under
      consideration is not in `experience.confirmed_facets`, there is
      nothing safe to consult — evidence is not looked at, decision stays
@@ -45,16 +43,56 @@ Consumption contract (fixed before any main-experiment API run):
      the historical experience via `HistoricalEvidenceComparator`. If none
      is `SUPPORT`, evidence is consulted but not applicable — decision
      stays baseline (`support absent`).
-  4. **Facet-level resolution only.** If exactly one facet value is
-     `SUPPORT`ed, that is the resolved value for *that facet only*. The
-     decision interpretation, if uniquely determinable, is one of the
-     *current* candidates that already carries that value — never a
-     synthesized `Interpretation` built from historical resource/scope/
-     condition values. If more than one *distinct current Interpretation*
-     shares the resolved facet value (only possible if other facets also
-     vary, which the current pilot scenario does not exercise), no single
-     point decision is picked — the facet-level resolution is still
-     reported, but `decision_interpretation` is `None`.
+  4. **No automatic resolution (REVISION 2 / Option B: conservative
+     abstention).** If exactly one facet value is `SUPPORT`ed, this
+     harness does **not** apply it as the decision. Historical evidence is
+     advisory, not authoritative: it identifies that a prior confirmed
+     interpretation exists and records the relation for audit, but the
+     current decision stays at the baseline value until a Principal
+     confirms it through the existing clarification path. The stage
+     `AMBIGUOUS_REQUIRES_CLARIFICATION` is a signal meant to be consumed by
+     that path (not yet wired here — see "이 모듈이 하지 않는 것" below),
+     carrying the supported value as `resolved_value` for reference and the
+     full relation map in `relations` for audit — but `final_value` always
+     equals `baseline_value` at this stage. No synthesized `Interpretation`
+     built from historical resource/scope/condition values is ever
+     produced, and no cross-facet amplification is possible, because
+     nothing is ever applied automatically in the first place.
+
+REVISION HISTORY:
+  - REVISION 1 (original): step 4 above *did* automatically resolve the
+    facet to the `SUPPORT`ed historical value when exactly one candidate
+    value matched, producing `AMBIGUOUS_RESOLVED_BY_EVIDENCE` with
+    `final_value = resolved_value`. The B7d-v3 main experiment (real API,
+    200 calls, docs/experiments/agent_connected_eval.md §24) validated this
+    against real ambiguous/explicit-change delegations. A deterministic
+    (zero-API) counterexample then showed this contract *does* override an
+    explicit-export delegation's decision when real sampling on it happens
+    to be unstable (entropy > threshold) — a genuinely reachable F4
+    (stale-history override), not a hypothetical. A follow-up audit of the
+    entire sender-side pipeline (`principal_agent.py`, `agent_runtime.py`)
+    found no structural, non-textual signal — distinct from entropy —
+    for "this facet was explicitly asserted by the current request" as
+    opposed to "the model is merely confident about it": `PrincipalIntent`
+    (`restate_intent()`) is itself a fresh per-invocation LLM inference,
+    not pre-existing sender state, and its prompt forces all four fields
+    regardless of what the original goal specified. Without trustworthy
+    current-side provenance, an automatic-override contract cannot
+    distinguish the two cases it most needs to distinguish.
+  - REVISION 2 (this revision, Option B): automatic resolution is
+    withdrawn. Historical evidence downgrades from "authoritative decision
+    source" to "advisory evidence that flags where clarification is
+    needed." F4 (stale-history override) is now structurally unreachable
+    through this harness, because nothing is ever applied automatically —
+    see `tests/test_experience_decision.py::TestH2StructuralCounterexample`
+    for the same deterministic counterexample re-run against this
+    revision, now confirming no override occurs. This is not a rollback of
+    REVISION 1's finding (the ambiguous-transfer signal it measured, §24
+    H1, still stands as a real observation) — it is a narrowing of what
+    this harness is trusted to decide on its own, in direct response to
+    what REVISION 1 empirically exposed. See §24 Follow-up ("Option B:
+    conservative abstention") in agent_connected_eval.md for the full
+    design rationale.
 
 이 모듈이 하지 않는 것:
   - Delegate candidate generation에 관여하는 것 — `distribution`은 항상
@@ -79,17 +117,33 @@ from .experience_evidence import EvidenceRelation, HistoricalEvidenceComparator
 from .semantic import Interpretation
 
 # 각 stage 이름은 그대로 failure-taxonomy 매핑에 쓰인다(문서 참고):
-#   STABLE_BASELINE                -> 이번 candidate distribution이 안정적이어서
-#                                      evidence를 아예 안 봄 (실제 sampling이
-#                                      불안정하면 이 stage로 안 떨어질 수 있다 —
-#                                      F4는 그때 실측으로 확인하는 것)
-#   AMBIGUOUS_NO_ELIGIBLE_EVIDENCE -> F1 (evidence unavailable)
-#   AMBIGUOUS_NO_SUPPORT           -> F2 (support absent)
-#   AMBIGUOUS_RESOLVED_BY_EVIDENCE -> 성공 경로 (H1이 측정하는 것)
+#   STABLE_BASELINE                  -> 이번 candidate distribution이 안정적이어서
+#                                        evidence를 아예 안 봄. F4는 여기서
+#                                        구조적으로 불가능하다(history를
+#                                        보지도 않으므로).
+#   AMBIGUOUS_NO_ELIGIBLE_EVIDENCE   -> F1 (evidence unavailable)
+#   AMBIGUOUS_NO_SUPPORT             -> F2 (support absent)
+#   AMBIGUOUS_REQUIRES_CLARIFICATION -> REVISION 2(Option B)의 새 경로 —
+#                                        eligible history가 현재 candidate
+#                                        중 하나를 SUPPORT하지만, 자동으로
+#                                        적용하지 않는다. relations는
+#                                        감사용으로 채워지고 resolved_value는
+#                                        참고용으로 남지만 final_value는
+#                                        항상 baseline_value다. 향후
+#                                        ClarifyingDelegate 경로로 넘길 수
+#                                        있는 signal.
+#   AMBIGUOUS_RESOLVED_BY_EVIDENCE   -> REVISION 1(원래) contract에서만
+#                                        쓰였던 자동-해결 성공 경로. 이
+#                                        모듈의 `decide()`는 더 이상 이
+#                                        stage를 반환하지 않는다 — 상수는
+#                                        과거 결과(§24 main experiment
+#                                        JSON, 옛 테스트/문서)를 참조할 때를
+#                                        위해서만 남겨둔다.
 STABLE_BASELINE = "stable_baseline"
 AMBIGUOUS_NO_ELIGIBLE_EVIDENCE = "ambiguous_no_eligible_evidence"
 AMBIGUOUS_NO_SUPPORT = "ambiguous_no_support"
-AMBIGUOUS_RESOLVED_BY_EVIDENCE = "ambiguous_resolved_by_evidence"
+AMBIGUOUS_REQUIRES_CLARIFICATION = "historical_evidence_requires_clarification"
+AMBIGUOUS_RESOLVED_BY_EVIDENCE = "ambiguous_resolved_by_evidence"  # REVISION 1 only; no longer emitted.
 
 
 @dataclass(frozen=True)
@@ -97,19 +151,28 @@ class FacetDecision:
     """`FrozenCandidateEvidenceHarness.decide()` 호출 1회의 결과.
 
     `final_value`가 실제로 보고해야 할 "이번 decision의 facet 값"이다 —
-    baseline이든 evidence-resolved든 상관없이 항상 채워진다. `resolved_
-    value`/`decision_interpretation`은 evidence가 실제로 적용됐을 때만
-    `None`이 아니다."""
+    항상 채워진다. REVISION 2(Option B) 이후로 `final_value`는 evidence가
+    이 harness에 의해 자동으로 적용된 적이 없으므로(`AMBIGUOUS_REQUIRES_
+    CLARIFICATION`을 포함해 모든 stage에서) 항상 `baseline_value`와 같다
+    — evidence가 실제로 current decision을 바꾸는 것은 이 harness 밖의
+    별도 clarification/Principal-confirmation 단계에서만 일어날 수 있다.
+    `resolved_value`는 REVISION 2부터 "자동으로 채택된 값"이 아니라
+    "historical evidence가 support했다고 감사용으로 기록해두는 값"이다 —
+    `decision_interpretation`은 STABLE_BASELINE에서만 채워진다(그 외
+    stage는 애초에 자동 decision을 만들지 않으므로 항상 `None`)."""
 
     facet: str
     stage: str
     used_historical_evidence: bool
 
     baseline_value: object          # distribution.top의 해당 facet 값 (개입 전)
-    resolved_value: object | None   # evidence로 확인된 값 (stage가 RESOLVED일 때만)
-    decision_interpretation: Interpretation | None  # 유일하게 결정 가능할 때만
+    resolved_value: object | None   # evidence가 support한 값(참고/감사용) — REVISION 2부터
+                                    # final_value에 자동 반영되지 않는다.
+    decision_interpretation: Interpretation | None  # STABLE_BASELINE에서만 채워짐
 
-    final_value: object             # 이번 decision에서 실제로 쓸 값
+    final_value: object             # 이번 decision에서 실제로 쓸 값 (REVISION 2:
+                                    # 항상 baseline_value와 같다 — 이 harness는
+                                    # 더 이상 자동으로 override하지 않는다)
 
     relations: dict = None          # 감사/기록용 — {facet 값: EvidenceRelation}.
                                     # comparator가 실제로 호출된 stage(support
@@ -173,10 +236,17 @@ class FrozenCandidateEvidenceHarness:
             f"a single historical value.")
         resolved_value = supported_values[0]
 
-        # 4. Facet-level resolution만 — 전체 Interpretation을 새로 만들지 않는다.
-        matches = by_value[resolved_value]
-        decision_interp = matches[0] if len(matches) == 1 else None
-
-        return FacetDecision(facet, AMBIGUOUS_RESOLVED_BY_EVIDENCE, True,
-                             baseline_value, resolved_value, decision_interp, resolved_value,
+        # 4. REVISION 2 (Option B: conservative abstention) — eligible
+        #    history가 현재 candidate 중 하나를 SUPPORT하더라도, 이
+        #    harness는 자동으로 채택하지 않는다. Historical evidence는
+        #    advisory일 뿐 authoritative decision source가 아니다:
+        #    "prior confirmed interpretation이 존재하고, 이 candidate를
+        #    support한다"는 사실 자체는 relations에 감사 가능한 형태로
+        #    기록하고, resolved_value에 참고용으로 남기지만, final_value는
+        #    baseline_value 그대로 유지한다. 실제로 이 facet을 확정하는
+        #    것은 (아직 이 harness에 연결되지 않은) 기존 clarification/
+        #    Principal-confirmation 경로의 몫이다 — 전체 Interpretation을
+        #    historical 값으로 새로 만드는 일은 어차피 일어나지 않는다.
+        return FacetDecision(facet, AMBIGUOUS_REQUIRES_CLARIFICATION, True,
+                             baseline_value, resolved_value, None, baseline_value,
                              relations=relations)

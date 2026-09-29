@@ -15,9 +15,21 @@ literal, model-visible current_episode.context/delegation strings directly
 passthrough. These tests pin that down as a regression: the scenario file's
 current-episode strings must stay byte-identical to agent_smoke.py's
 EXAMPLE_CURRENT_CONTEXT/EXAMPLE_CURRENT_DELEGATION (still the canonical,
-real-API-validated wording — agent_smoke.py itself is not yet migrated to
-read from the scenario file, deliberately deferred to right before B7e),
-and build_current_context() must never go back to reconstructing prose.
+real-API-validated wording), and build_current_context() must never go
+back to reconstructing prose.
+
+Status update (B7e, docs/experiments/agent_connected_eval.md §25):
+migrating agent_smoke.py to read from the scenario file was originally
+deferred to "right before B7e" -- B7e has now started, and the decision
+is NOT to do that migration. agent_smoke.py continues to serve as the
+frozen reproducer for the pre-v3/B7a-B7d experiments (B7d.6's `git diff
+--stat` discipline depends on it never changing); B7e's own chain
+scenario (experiments/scenarios/external_audit_finance_chain.json) and
+driver (experiments/diagnostics/experience_chain_experiment.py) instead
+reuse agent_smoke.py's EXAMPLE_GOAL/EXAMPLE_CONTEXT/EXAMPLE_AMBIGUOUS_
+DELEGATION and this scenario file's current_episode fields BY IMPORT
+(byte-identical, per this file's own lesson), without editing either
+source. The two reproducers stay separate on purpose, not merged.
 """
 
 from __future__ import annotations
