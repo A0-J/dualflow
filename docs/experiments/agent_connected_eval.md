@@ -5033,3 +5033,41 @@ Summary here for the log:
   full-pipeline reproducibility) is recorded in §9.2, decision pending.
 - Cost ablation, runtime integration, and cross-model validation remain
   un-started, per instruction.
+
+### Phase 3C — additional limitation found while designing the follow-up (0 new API calls, docs-only)
+
+While designing a combined reproducibility + sample-count-ablation
+rerun, found that the already-frozen Phase 3C result has one more
+limitation, not previously flagged: **Arm B and Arm C each drew their
+own independent set of 20 `restate_intent()` samples per episode**
+(`intent_anchor_arms_comparison.py`'s `arm_b_row()`/`arm_c_row()` each
+call `sample_principal_intents()`/`build_intent_anchor()` separately) —
+they do not share the same 20 raw responses. So the observed
+`5/49→1/49` false-reject difference between B and C reflects both (a)
+the aggregation-rule difference (full-Interpretation equality vs.
+facet-level confirmed-only blocking) and, potentially, (b) sampling
+variance between the two independently-drawn sets — the two are not
+cleanly separated in the already-collected data.
+
+**The frozen numbers are not changed or re-run.** Per instruction, this
+is recorded as an added limitation only: throughout `phase3c_methods_
+for_paper.md`, the B-vs-C comparison is now described as an *observed
+difference*, not a *causal effect of provenance-aware aggregation* —
+that stronger causal language is reserved for after a rerun that fixes
+this (§ below).
+
+**Fix folded into the Phase 3D design** (`phase3c_methods_for_paper.md`
+§9.1, design only, not run): draw exactly one shared set of 20
+`restate_intent()` responses per episode, apply both Arm B's and Arm
+C's decision rule to that same set. This removes the sampling-variance
+confound between B and C entirely, and — as a direct side effect —
+halves the per-episode API cost for this comparison (40 calls/episode →
+20). Combined with full raw logging (all 20 responses in order, raw
+per-facet entropy, not just the aggregated boolean), a single such
+rerun on the 2 informative tasks (`confident_semantic_misread` +
+`condition_violation`, 40 episodes) answers three things from one
+800-call collection: reproducibility of the original Phase 3C pattern,
+the fixed-n sample-count curve (via prefixes, 0 extra calls), and a
+partial threshold ablation (via re-applying different thresholds to the
+same raw entropy, 0 extra calls) — with adaptive early-stopping
+explicitly kept as a separate, later design question. Not yet run.
