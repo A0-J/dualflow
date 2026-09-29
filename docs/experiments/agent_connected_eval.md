@@ -543,7 +543,7 @@ meaningful.**
 | `restate_intent()` reliability diagnostic (post-hoc, motivated by the Phase 2C safety failures) | **complete, 0 new API calls (Phase 3A) — answered entirely from already-frozen data: 80% self-consistency/accuracy, errors ~independent of Delegate's own errors (§29)** |
 | Principal Intent Anchor (Phase 3B, standalone module `src/dualflow/intent_anchor.py`) | **implemented — 11 deterministic tests, 442/442 full suite green; includes an explicit, honest residual-limitation test (§29)** |
 | Phase 3B-R (real-API standalone validation, 20 episodes, 736 calls) | **complete — all 4 previously-unsafe episodes caught (0 Case B observed at this n), detection 75%→100%, semantic accuracy 80%→100%, 0 new false blocks; framed as detection-focused validation, not "safety solved" (§29)** |
-| Phase 3C (3-arm controlled comparison: Current / Repeated-Restate / Grounded, REJECT-only, no correction loop) | **implemented, verified (140/140 Arm A consistency, 0 API calls) — pilot complete (35 episodes, 1,000 calls): safety and mechanism(a) improve for B/C, mechanism(b) tied on aggregate but one divergence case shows C's provenance-aware value directly; full 20/task run next, unchanged design (§29)** |
+| Phase 3C (3-arm controlled comparison: Current / Repeated-Restate / Grounded, REJECT-only, no correction loop) | **CLOSED — FROZEN, full run (140 episodes, 4,000 calls): unsafe 4/120→0/120 for both B and C (repeated anchoring's effect); false reject 4/49→5/49 for B (repeated sampling alone costs utility)→1/49 for C (provenance-aware grounding recovers it without losing safety); `detect\|wrong` explicitly not a headline metric — 16 "missed" cases all caught by defense-in-depth (semantic_confirmed/Authority), 0 unsafe. RQ1-3 answered. Fixed as paper Figure/Table data (§29)** |
 
 The sequential multi-episode experiment (B7e) stays intentionally
 postponed. The canonical-context B7d.3 re-run (§16) removed the
@@ -4893,3 +4893,103 @@ next, unchanged, as its own fresh, independent collection (mirroring how
 every earlier pilot→full step in this project — most recently Phase 2C
 Final's own pilot — was never merged with the full run's later,
 independently-collected data).
+
+### Phase 3C — full run (140 episodes, 4,000 real API calls) — FROZEN result
+
+Fresh, independent 20-episodes/task collection (not merged with the
+pilot's 25 episodes above, per precedent). 0 errors across all 140
+episodes.
+
+| | Arm A: Current | Arm B: Repeated-Restate | Arm C: Grounded |
+| --- | --- | --- | --- |
+| Unsafe execution | 4/120 | **0/120** | **0/120** |
+| False reject (n=49, `ideal_authorized=True` only) | 4/49 | 5/49 | **1/49** |
+| New API calls | 0 | 2,000 | 2,000 |
+
+**① Safety improvement is repeated anchoring's effect, shared by both
+new arms.** All 4 unsafe cases (`confident_semantic_misread`, exactly
+reproducing Phase 2C Final) are eliminated by both B and C — neither
+introduces a *new* unsafe case anywhere in the 100-episode real-arm set.
+
+**② Repeated sampling alone is not sufficient — it costs utility.** Arm
+B's false-reject count *increased* over Arm A (4/49 → 5/49): comparing
+the majority-vote Interpretation to the Delegate's via full structural
+equality is too conservative — any facet difference, confirmed or not,
+blocks. This is exactly why Arm B is in this design at all: without it,
+Arm C's result would be indistinguishable from "just sample 20 times,"
+with no way to attribute the difference to the provenance-aware
+structure specifically.
+
+**③ Provenance-aware facet grounding recovers the utility Arm B gives
+up, without losing the safety gain.** False rejects: B 5/49 → **C 1/49**,
+while unsafe execution stays at 0/120 for both. Concentrated entirely in
+`condition_violation`'s 5 authorized-correct episodes — reproducing and
+statistically solidifying the pilot's single divergence case:
+
+| `condition_violation`, authorized-correct cases (n=5) | False reject |
+| --- | --- |
+| A | 4/5 |
+| B | 5/5 |
+| C | 1/5 |
+
+The one remaining Arm C false reject traces to a **confirmed**-facet
+disagreement (the anchor genuinely, confidently disagreed on
+`condition`) — not an ignored uncertain facet. Worth stating plainly:
+Arm C is not a loosely-passing system that lets ambiguity slide through
+unchecked; a *confirmed* disagreement still blocks, exactly as designed.
+
+**On `P(detect | Delegate wrong)` (17/51 → 16/51 → 15/51): not a headline
+metric — presented only as mechanism analysis, not "semantic detector
+accuracy."** Read naively, detection looks flat or slightly down for
+B/C, which would appear to contradict the safety result. It doesn't,
+because Semantic Flow is not the only thing standing between a wrong
+interpretation and execution. Tracing Arm C's own facet causation on
+the 31 wrong-delegate episodes across the 5 real-arm tasks:
+
+- **15**: confirmed-facet mismatch — correctly blocked *by Arm C itself*.
+- **1**: unconfirmed-only mismatch — not blocked by C's own check, but
+  still safely REJECTed via the independent `semantic_confirmed` gate.
+- **15** (all `condition_violation`): the anchor *fully agreed* with the
+  wrong delegate (neither `restate_intent()` nor the Delegate's proposal
+  surfaces the "reviewed" condition from the same underspecified
+  goal/context text) — **all 15 caught by Authority's condition-missing
+  hard-reject**, not by Semantic Flow at all.
+
+All 16 of the cases Arm C's own semantic check "missed" were still
+caught by a different gate — 0 became unsafe. This is not Semantic Flow
+being a perfect detector; it is Authority Flow covering a failure mode
+Semantic Flow structurally cannot see (both Principal-side
+reconstructions draw on the same incomplete text), exactly the
+`DualFlow = Semantic Flow × Authority Flow` defense-in-depth argument
+this whole project has made from the start — now demonstrated at the
+arm-comparison level too. The pilot's flagged risk (an ignored
+unconfirmed facet hiding a real error) did not materialize here either:
+0 of Arm C's (zero) unsafe cases trace to it.
+
+**Research questions, answered:**
+
+- **RQ1 — does repeated semantic anchoring mitigate confident semantic
+  misinterpretation?** Yes, in these experiments: unsafe execution
+  4/120 → 0/120 for both B and C.
+- **RQ2 — is repeated anchoring alone sufficient?** No: it improves
+  safety but at a utility cost (false reject 4/49 → 5/49 for Arm B).
+- **RQ3 — does provenance-aware facet grounding reduce this trade-off
+  without sacrificing the observed safety gain?** Yes, in this full run:
+  false reject 5/49 → 1/49 relative to naive repeated-restatement
+  matching, while unsafe execution remains 0/120.
+
+**Headline result, exact wording:**
+
+> Repeated semantic anchoring removed all four observed unsafe
+> executions, while provenance-aware facet grounding preserved this
+> safety improvement and reduced false rejections from 5/49 to 1/49
+> compared with naïve repeated-restatement matching.
+
+Deliberately reported as raw counts (`5/49` → `1/49`), not a multiplier
+("4–5×") — the effect is concentrated in `condition_violation`'s n=5
+authorized-correct cases, too small a base to responsibly headline a
+ratio.
+
+**Phase 3C is closed on this result** — fixed as the paper Figure/Table
+data. No further scaling of this comparison planned; the next step is a
+different phase, not more episodes of this one.
