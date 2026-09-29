@@ -544,6 +544,7 @@ meaningful.**
 | Principal Intent Anchor (Phase 3B, standalone module `src/dualflow/intent_anchor.py`) | **implemented — 11 deterministic tests, 442/442 full suite green; includes an explicit, honest residual-limitation test (§29)** |
 | Phase 3B-R (real-API standalone validation, 20 episodes, 736 calls) | **complete — all 4 previously-unsafe episodes caught (0 Case B observed at this n), detection 75%→100%, semantic accuracy 80%→100%, 0 new false blocks; framed as detection-focused validation, not "safety solved" (§29)** |
 | Phase 3C (3-arm controlled comparison: Current / Repeated-Restate / Grounded, REJECT-only, no correction loop) | **CLOSED — FROZEN, full run (140 episodes, 4,000 calls): unsafe 4/120→0/120 for both B and C (repeated anchoring's effect); false reject 4/49→5/49 for B (repeated sampling alone costs utility)→1/49 for C (provenance-aware grounding recovers it without losing safety); `detect\|wrong` explicitly not a headline metric — 16 "missed" cases all caught by defense-in-depth (semantic_confirmed/Authority), 0 unsafe. RQ1-3 answered. Fixed as paper Figure/Table data (§29)** |
+| Phase 3C statistical rigor pass (McNemar's exact test, informative-subset correction, claim-scope fix, 0 new API calls) | **complete — all comparisons p≥0.05 (not conventionally significant, discordant n=3-4), 44/49 false-reject denominator identified as fully concordant/uninformative, explicit supported-vs-unsupported claim list fixed, `n=5/10/15`/threshold ablation confirmed impossible from current logs; full detail in `docs/experiments/phase3c_methods_for_paper.md` (§29)** |
 
 The sequential multi-episode experiment (B7e) stays intentionally
 postponed. The canonical-context B7d.3 re-run (§16) removed the
@@ -4993,3 +4994,42 @@ ratio.
 **Phase 3C is closed on this result** — fixed as the paper Figure/Table
 data. No further scaling of this comparison planned; the next step is a
 different phase, not more episodes of this one.
+
+### Phase 3C — statistical rigor pass (0 new API calls) and precise claim scope
+
+Full detail, tables, and Methods-ready prose: `docs/experiments/
+phase3c_methods_for_paper.md` (§5.2, §5.3, claim-scope subsection, §9).
+Summary here for the log:
+
+- **Informative-subset correction**: of the 49-episode false-reject
+  denominator, 44 are fully concordant (0 reject across all 3 arms,
+  0 information) — the entire A/B/C difference lives in `condition_
+  violation`'s 5 episodes.
+- **McNemar's exact test** (paired, since A/B/C run on identical
+  episodes): unsafe execution A vs B and A vs C both p=0.125 (4
+  discordant pairs, all in one direction); false reject A vs C p=0.25
+  (3 discordant), B vs C p=0.125 (4 discordant, all one direction).
+  **None reach conventional significance (α=0.05)** — the discordant
+  counts are simply too small. Full contingency tables and the 5-episode
+  transition table are in the linked doc.
+- **Claim scope fixed explicitly**: supported — the observed reduction
+  under the specific fixed `n=20`/`threshold=0.8` setting (descriptive,
+  not a significance claim). Not supported by this data — that `n=20`
+  or `threshold=0.8` are optimal, that the effect generalizes across
+  models, or that a single full run's result would replicate.
+- **New limitation identified**: the per-episode logging kept only
+  aggregated summaries (majority vote, boolean confirmed/unconfirmed),
+  not the raw ordered 20 responses or raw per-facet entropy values —
+  so `n`/threshold ablation cannot be computed retroactively from this
+  dataset without new API calls. Logging requirements for the next such
+  experiment are specified (not implemented) in the linked doc §9.1,
+  explicitly separating fixed-n prefix-reanalysis (answerable from a
+  single n=20 collection, 0 new calls) from adaptive early-stopping
+  (a genuinely different sampling process, needs its own new
+  collection).
+- **Reproducibility rerun**: not performed. A cost-scoped proposal
+  (targeting only the 2 informative tasks, ~1,600 calls/replicate for
+  verification-mechanism-only reproducibility, ~5,200/replicate for
+  full-pipeline reproducibility) is recorded in §9.2, decision pending.
+- Cost ablation, runtime integration, and cross-model validation remain
+  un-started, per instruction.
