@@ -545,7 +545,8 @@ meaningful.**
 | Phase 3B-R (real-API standalone validation, 20 episodes, 736 calls) | **complete — all 4 previously-unsafe episodes caught (0 Case B observed at this n), detection 75%→100%, semantic accuracy 80%→100%, 0 new false blocks; framed as detection-focused validation, not "safety solved" (§29)** |
 | Phase 3C (3-arm controlled comparison: Current / Repeated-Restate / Grounded, REJECT-only, no correction loop) | **CLOSED — FROZEN, full run (140 episodes, 4,000 calls): unsafe 4/120→0/120 for both B and C (repeated anchoring's effect); false reject 4/49→5/49 for B (repeated sampling alone costs utility)→1/49 for C (provenance-aware grounding recovers it without losing safety); `detect\|wrong` explicitly not a headline metric — 16 "missed" cases all caught by defense-in-depth (semantic_confirmed/Authority), 0 unsafe. RQ1-3 answered. Fixed as paper Figure/Table data (§29)** |
 | Phase 3C statistical rigor pass (McNemar's exact test, informative-subset correction, claim-scope fix, 0 new API calls) | **complete — all comparisons p≥0.05 (not conventionally significant, discordant n=3-4), 44/49 false-reject denominator identified as fully concordant/uninformative, explicit supported-vs-unsupported claim list fixed, `n=5/10/15`/threshold ablation confirmed impossible from current logs; full detail in `docs/experiments/phase3c_methods_for_paper.md` (§29)** |
-| Phase 3D — shared-sample controlled replication (run1+run2, 1,600 real API calls) + safety-utility trade-off analysis (0 further calls) | **run1/run2 complete — new finding: run1 showed 2 real unsafe executions for Arm C (majority correct-leaning at H=0.881, just above threshold, mismatch ignored); did not recur identically in run2. `condition_violation`'s false-reject recovery reproduced robustly in both (8 episodes total). Full n×threshold sweep confirms a clean, monotonic safety-utility trade-off (unsafe 14→0, false-reject 0→10/10 as threshold rises 0.4→1.2), with both tasks' risk/benefit entropy bands overlapping (~0.7-0.95) — no single hard threshold clears both. Secondary finding: entropy from small-n prefixes is noisy, stabilizing only ~n=15-20. `run3` explicitly deferred as an independent holdout, not used to pick any setting (§29)** |
+| Phase 3D — shared-sample controlled replication (run1+run2, 1,600 real API calls) + safety-utility trade-off analysis (0 further calls) | **run1/run2 complete — new finding: run1 showed 2 real unsafe executions for Arm C (majority correct-leaning at H=0.881, just above threshold, mismatch ignored); did not recur identically in run2. `condition_violation`'s false-reject recovery reproduced robustly in both (8 episodes total). Full n×threshold sweep confirms a clean, monotonic safety-utility trade-off (unsafe 14→0, false-reject 0→10/10 as threshold rises 0.4→1.2), with both tasks' risk/benefit entropy bands overlapping (~0.7-0.95) — no single hard threshold clears both. Secondary finding: entropy from small-n prefixes is noisy, stabilizing only ~n=15-20 (§29)** |
+| Phase 3D — `run3` pre-registered as independent validation of frozen `threshold=0.8` | **design fixed (genuinely before `run3` exists) — `run1`/`run2` = development/threshold-selection set, `0.8` frozen (pre-existing default, now justified by the observed trade-off, not newly picked), `run3`'s `n=20`/`threshold=0.8` result is primary, sweep is sensitivity-analysis-only, no re-tuning on `run3`'s outcome. Not yet run (§29)** |
 
 The sequential multi-episode experiment (B7e) stays intentionally
 postponed. The canonical-context B7d.3 re-run (§16) removed the
@@ -5187,3 +5188,51 @@ trade-off structure (already visible from `run1`+`run2`'s raw data with
 0 further API calls); if run later, it is reserved as an independent
 holdout, not used to inform any threshold/design decision made from
 this analysis.
+
+### Phase 3D — `run3` pre-registered as independent validation (fixed BEFORE `run3` exists)
+
+Per instruction, `run1`+`run2` are assigned the role of **development /
+threshold-selection set**; `run3` (not yet run) is assigned the role of
+**independent validation** of a threshold frozen from that development
+set — the same development/held-out-validation discipline as `8aa4612`'s
+pilot criteria, and unlike `b4e17a5` (correctly reverted earlier in this
+project — §29), this is fixed genuinely *before* `run3`'s data exists,
+so "pre-registered" applies accurately here.
+
+**Threshold frozen: `0.8`.** Provenance, stated precisely to avoid
+reading as cherry-picked: `0.8` is not a new value derived from this
+grid — it is the pre-existing standing threshold this project has
+reused since Phase 2C-P4/P5, long before `run1`/`run2` were collected.
+What `run1`+`run2`'s trade-off grid (above) newly provides is an
+explicit justification for *keeping* it: at `n=20`, `0.8` sits
+immediately before the transition where `condition_violation`'s
+false-reject rate starts climbing (`0/10` at ≤0.8 → `6/10` at `0.85` →
+`10/10` by `0.95`), while already capturing most of the achievable
+`confident_semantic_misread` safety improvement (`14/40` at `0.4` down
+to `2/40` by `0.75-0.85`, `0/40` only from `0.9`). `0.8` is therefore a
+defensible operating point on the observed frontier, not a provably
+optimal one — no claim of optimality is made (consistent with the
+existing claim-scope list in `phase3c_methods_for_paper.md`).
+
+**Pre-registered evaluation plan for `run3` (fixed now, before running
+it):**
+
+1. **Primary result**: `run3`'s safety (unsafe execution) and utility
+   (false rejection) outcomes at exactly `n=20`, `threshold=0.8` —
+   reported first, and treated as the result that matters for
+   validating the frozen setting.
+2. **Threshold sweep on `run3`'s data is a supplementary/sensitivity
+   analysis only** — it may be reported (e.g., to show the same
+   qualitative trade-off shape holds), but it is **not** used to
+   re-select or adjust the threshold.
+3. **No threshold re-adjustment based on `run3`**, regardless of
+   outcome. If `run3`'s primary result at `0.8` looks materially worse
+   than `run1`/`run2`'s, that is reported honestly as a validation
+   finding (e.g., "the frozen setting did not hold up on independent
+   data") — not a cue to tune `0.8` to something that fits `run3` too.
+4. Same collection design as `run1`/`run2`, unchanged: shared 20-sample
+   set per episode across Arm B/C, full raw response logging, same 2
+   tasks (`confident_semantic_misread`, `condition_violation`), same
+   40 episodes, same 800-call budget.
+
+`run3` is not yet run. This plan is fixed prior to running it.
