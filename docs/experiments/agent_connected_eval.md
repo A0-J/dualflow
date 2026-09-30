@@ -546,7 +546,7 @@ meaningful.**
 | Phase 3C (3-arm controlled comparison: Current / Repeated-Restate / Grounded, REJECT-only, no correction loop) | **CLOSED — FROZEN, full run (140 episodes, 4,000 calls): unsafe 4/120→0/120 for both B and C (repeated anchoring's effect); false reject 4/49→5/49 for B (repeated sampling alone costs utility)→1/49 for C (provenance-aware grounding recovers it without losing safety); `detect\|wrong` explicitly not a headline metric — 16 "missed" cases all caught by defense-in-depth (semantic_confirmed/Authority), 0 unsafe. RQ1-3 answered. Fixed as paper Figure/Table data (§29)** |
 | Phase 3C statistical rigor pass (McNemar's exact test, informative-subset correction, claim-scope fix, 0 new API calls) | **complete — all comparisons p≥0.05 (not conventionally significant, discordant n=3-4), 44/49 false-reject denominator identified as fully concordant/uninformative, explicit supported-vs-unsupported claim list fixed, `n=5/10/15`/threshold ablation confirmed impossible from current logs; full detail in `docs/experiments/phase3c_methods_for_paper.md` (§29)** |
 | Phase 3D — shared-sample controlled replication (run1+run2, 1,600 real API calls) + safety-utility trade-off analysis (0 further calls) | **run1/run2 complete — new finding: run1 showed 2 real unsafe executions for Arm C (majority correct-leaning at H=0.881, just above threshold, mismatch ignored); did not recur identically in run2. `condition_violation`'s false-reject recovery reproduced robustly in both (8 episodes total). Full n×threshold sweep confirms a clean, monotonic safety-utility trade-off (unsafe 14→0, false-reject 0→10/10 as threshold rises 0.4→1.2), with both tasks' risk/benefit entropy bands overlapping (~0.7-0.95) — no single hard threshold clears both. Secondary finding: entropy from small-n prefixes is noisy, stabilizing only ~n=15-20 (§29)** |
-| Phase 3D — `run3` pre-registered as independent validation of frozen `threshold=0.8` | **design fixed (genuinely before `run3` exists) — `run1`/`run2` = development/threshold-selection set, `0.8` frozen (pre-existing default, now justified by the observed trade-off, not newly picked), `run3`'s `n=20`/`threshold=0.8` result is primary, sweep is sensitivity-analysis-only, no re-tuning on `run3`'s outcome. Not yet run (§29)** |
+| Phase 3D — `run3` pre-registered as independent validation of frozen `threshold=0.8` | **complete (800 real calls) — primary result at n=20/threshold=0.8: unsafe_C=0/40 (matches run2, run1's 2 cases didn't recur), false_reject_C=3/9 (worst of 3 replicates, traced to CONFIRMED — not unconfirmed — condition-facet mismatches this draw). Threshold retained unchanged per pre-registration; safety fairly stable across 3 replicates, utility benefit shows more run-to-run variance than 2 replicates suggested (§29)** |
 
 The sequential multi-episode experiment (B7e) stays intentionally
 postponed. The canonical-context B7d.3 re-run (§16) removed the
@@ -5236,3 +5236,59 @@ it):**
    40 episodes, same 800-call budget.
 
 `run3` is not yet run. This plan is fixed prior to running it.
+
+### Phase 3D — `run3` results (independent validation, 800 real API calls, threshold=0.8 NOT retuned)
+
+Ran cleanly: 40/40 episodes, no errors. Per the pre-registered plan
+above, the primary result is reported first, exactly as specified, with
+no adjustment to `threshold=0.8` regardless of outcome.
+
+**Primary result (`n=20`, `threshold=0.8`), all three replicates:**
+
+| replicate | unsafe_C | false_reject_C |
+| --- | --- | --- |
+| run1 | 2/40 | 2/9 |
+| run2 | 0/40 | 0/9 |
+| **run3** | **0/40** | **3/9** |
+
+`run3`'s per-task breakdown: `confident_semantic_misread`
+unsafe_C=0/20, false_reject_C=0/4 (clean, consistent with all 3
+replicates); `condition_violation` unsafe_C=0/20,
+**false_reject_C=3/5 — the worst of the three replicates.**
+
+**Safety**: held in 2 of 3 replicates (`run2`, `run3` both 0/40);
+`run1`'s 2 unsafe cases did not recur in `run3` either — consistent
+with the earlier framing that this is a probabilistic boundary event,
+not a guaranteed-to-repeat failure.
+
+**Utility — traced precisely, and mechanistically DIFFERENT from
+`run1`/`run2`'s pattern**: `run3`'s 3 false rejects in
+`condition_violation` are not "unconfirmed facets ignored" misses --
+they are **confirmed mismatches, correctly blocked by Arm C's own
+design**. The `condition` facet's 20-sample distribution this replicate
+was more lopsided toward "no condition" (16/4 and 17/3×2, entropy
+0.610–0.722 — all *below* 0.8, i.e. confirmed) than in `run1`/`run2`
+(13/7 to 15/5, entropy 0.811–0.934, unconfirmed). Same mechanism, same
+threshold, same task — but this replicate's independent draw happened
+to land more of these episodes on the "confidently disagrees" side of
+0.8 rather than the "too uncertain to block" side.
+
+**Honest validation finding (per the pre-registered plan — reported as-
+is, threshold NOT adjusted)**: the *size* of Arm C's utility benefit
+over Arm B on `condition_violation` is more variable across independent
+replicates than `run1`/`run2` alone suggested (`false_reject_C`: `2/9`,
+`0/9`, `3/9`) — driven by how often that replicate's entropy values land
+on the confirmed vs. unconfirmed side of the same fixed `0.8` line, not
+by any change in the underlying rule. The safety result is more stable
+(0/3 or occasionally low single-digit unsafe, never a large or
+systematic count). Supplementary sensitivity sweep (`run3` alone,
+`experiments/phase3d_tradeoff_analysis.py`) reproduces the same
+monotonic trade-off shape seen in `run1`+`run2` (unsafe falls, false-
+reject rises, as threshold increases) — used here only to confirm the
+qualitative shape holds independently, not to pick a different value.
+
+**`threshold=0.8` is retained, unchanged**, per the pre-registered
+commitment — this validation neither confirms it as clearly optimal nor
+disqualifies it; it shows the operating point's safety side is fairly
+stable across 3 independent replicates while its utility side carries
+more run-to-run variance than a 2-replicate look could reveal.
