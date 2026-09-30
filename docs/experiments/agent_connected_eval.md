@@ -5987,3 +5987,57 @@ above), everything else (Phase 3A/3B-R, McNemar's exact test, Runtime
 Case Study, the B7a-B7e/v2/v3 mechanism-design history) as table/prose/
 appendix material, not additional figures -- per instruction, this
 matches the project's own inventory judgment.
+
+### Follow-up — audit items resolved before freezing (denominator note, canonicalizer transparency, fig3 label bug)
+
+Per instruction, two things had to be confirmed/documented before treating
+the experiment set as frozen and moving to paper writing:
+
+**1. Denominator consistency (GPT-4.1-mini "12/40" vs. "12/20" at every
+`n`)**: not an inconsistency -- `/40` pools both tasks (`confident_
+semantic_misread` 20 + `condition_violation` 20 episodes); `condition_
+violation`'s unsafe count is 0 for all 3 models, so `12/40 = 12
+(confident_semantic_misread) + 0 (condition_violation)`. The `/20`
+n-sweep figures are `confident_semantic_misread` alone. Same
+arithmetic for false-reject `4/9`: `correct_auth` is 4
+(`confident_semantic_misread`) + 5 (`condition_violation`) = 9,
+verified directly against the data (not asserted). Added an explicit
+breakdown sentence to `phase3c_methods_for_paper.md` §5.7.1 so this
+doesn't read as two different experiments.
+
+**2. Canonicalizer transparency (the 4/400 GPT-4.1-mini `condition_
+violation` cases behind Rule 2)**: full list, for the record --
+
+```
+2x  ("date is 2026-09-23", "report is reviewed")            -> ("reviewed",)
+1x  ("date is 2026-09-23 or later", "report has been reviewed") -> ("reviewed",)
+1x  ("date is 2026-09-23", "report has been reviewed")       -> ("reviewed",)
+```
+
+All 4 are from the full, unfiltered enumeration of GPT-4.1-mini's 400
+`condition_violation` `restate_intent()` responses (1% of that task's
+samples) -- not cherry-picked to flip any specific episode's decision.
+Framing committed for the paper: *"Not a change to the model's judgment
+rule or threshold -- a fix to a deterministic parser that failed to
+canonicalize a semantically identical condition phrasing; verified that
+existing GPT-4o-mini and GPT-4.1 results were unchanged after the fix."*
+
+**3. fig3 axis-label bug found and fixed while re-checking fig3's
+design** (unrelated to the two audit items above, found by inspection):
+`figure_3_threshold_frontier()`'s x/y-axis labels had hardcoded
+`n=40`/`n=10` pooled-episode counts, stale since before `run3` was
+added to the pooled dataset -- the actual current pooled counts are
+`n=60` (`confident_semantic_misread`, all episodes) and `n=15`
+(`condition_violation`'s `correct_auth` subset), verified directly.
+Fixed to compute these dynamically from the data instead of hardcoding,
+so this can't go stale again. The plotted curve itself (unsafe vs.
+false-reject per threshold) was unaffected -- only the axis label text
+was wrong.
+
+**Status**: experiment set now treated as frozen for the paper. Next
+step, per instruction, is paper writing (5-page structure: Introduction
+-> DualFlow Design -> Experimental Setup -> Evaluation [Fig 1-4 in
+order, Phase 3A/3B-R/McNemar as small table/prose] -> Discussion/
+Limitations/Conclusion), not Runtime Integration Option B -- that is
+explicitly deferred to a future master's-thesis expansion, not this
+paper.
