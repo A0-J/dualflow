@@ -5775,3 +5775,105 @@ interpretation as the Delegate, the entropy signal this entire defense
 family depends on disappears entirely, and no configuration recovers it
 (Case 3) — the empirically-grounded boundary of this project's
 approach, not a hypothetical.
+
+### Architecture audit — agent vs. deterministic-module classification (code-grounded, pre-experiment)
+
+Prompted by a question about how many "agents" this system actually
+runs (5? 4?), audited the production `AgentDelegationRuntime.run()`
+call path directly (not the separate `verify()` Fast/Slow/AND/Adaptive
+strategies, which are a different, controlled-benchmark-only entry
+point) rather than answering from memory. This is a pre-experiment
+architecture audit, not a result observed from any run's output — per
+instruction, this kind of check ("what am I actually testing") is
+explicitly fine to do before/independent of a frozen experiment, unlike
+peeking at episode content mid-run to retune design.
+
+**Principal Agent (A) and Delegate Agent (B)**: unambiguous LLM agents
+— own prompts, own goals, own outputs (`principal.delegate()`/
+`restate_intent()`, `delegate.propose()`). Not in question.
+
+**Semantic Verifier — genuinely an LLM-based agent.** The runtime calls
+`semantic_verifier.verify_agent_proposal()` (`agent_runtime.py:290`,
+implemented `semantic.py:664-691`) **unconditionally, every time** —
+it always calls `self.llm_client.generate()` with its own dedicated
+prompt (`_AGENT_SEMANTIC_INSTRUCTIONS`), forms its own independent
+interpretation, and compares that to B's proposal to decide
+`confirmed`. Own goal, own inference path, own prompt, own judgment —
+qualifies as an agent.
+
+**Authority Verifier — NOT an LLM agent by default; a deterministic
+policy checker with an optional, non-final LLM assist.** The runtime
+calls `authority_verifier.verify_agent_proposal()`
+(`agent_runtime.py:296`, implemented `authority_feedback.py:343-404`).
+The final decision is always made by `check_authority()` (pure rule,
+budget/grant comparison — `authority_feedback.py:371`). If already
+allowed, or a hard reject (`no_grant`/`condition_missing`), **the LLM
+is never called at all** (`authority_feedback.py:373-376`). Only in the
+narrow `scope_exceeded` (recoverable) case is the LLM invoked, and even
+then only to propose within an already-computed ceiling — its proposal
+is always re-verified by `check_authority()` before being trusted,
+never adopted directly (`authority_feedback.py:397-404`, code comment:
+*"LLM 판단 자체가 최종 authority가 되는 일은 없다(non-amplification)"*).
+So for the majority of episodes (anything already-allowed, or any hard
+reject — e.g. Case 2's `over_privileged_delete`), Authority makes **0
+LLM calls**.
+
+**`_fuse()` (Joint Decision) — deterministic orchestrator, not an
+agent.** `agent_runtime.py:307-355` is a pure if/elif chain
+(`not semantic_confirmed → REJECT`, `not authority_allowed → REJECT`,
+`not principal_match → REJECT`, `else → EXECUTE`), zero LLM calls.
+
+**Recommended framing for the paper** (adopted, per instruction —
+matches the code exactly and is more precise than the earlier symmetric
+"Semantic Verification Agent / Authority Verification Agent" phrasing):
+
+> Semantic Verification Agent independently reconstructs and verifies
+> the delegated semantics through an LLM-based reasoning step at every
+> verification instance.
+>
+> Authority Verification Module performs deterministic capability
+> validation over action, resource, scope, and conditions. An
+> LLM-assisted negotiation step is optionally invoked only for
+> recoverable scope violations, and its output is always revalidated
+> against the deterministic authority constraints.
+
+Structurally: `Principal Agent → Delegate Agent → {Semantic
+Verification Agent, Authority Verification Module} → Deterministic
+Fusion`. This framing states the project's non-amplification principle
+precisely — the LLM may *propose* a narrower scope but can never
+originate a new grant or make the final authority call, which is
+exactly what `check_authority()` re-validating every LLM-assisted
+proposal enforces. Avoid describing the system as a "4-agent
+architecture"; "Principal–Delegate multi-agent runtime with an
+LLM-based Semantic Verification Agent and a deterministic Authority
+Verification Module" is accurate.
+
+### Frozen Phase 2C Final input file located (for the GPT-4.1-mini cross-model addition)
+
+The original `--frozen-input` file (140 episodes, 7 tasks × 20,
+`delegate_final_interpretation`/`semantic_confirmed`/`authority_allowed`
+per episode) was never committed to git — found instead in this
+session's scratchpad
+(`.../scratchpad/phase2c_final.jsonl`, 140 rows, all 7 tasks present,
+20 each, verified by field inspection). Copied into
+`experiments/data/phase2c_final.jsonl` (400KB, committed) so it no
+longer depends on ephemeral temp storage — every later Phase 3A/3B/3C/
+3D script that takes `--frozen-input` can now point at a durable,
+version-controlled path instead of a per-session scratchpad file.
+
+Budget for the planned GPT-4.1-mini addition (RQ4, per instruction —
+same 2-task/40-episode/shared-20-sample protocol as the existing
+GPT-4.1 collection, not a fresh full Phase 3C+ablation for the new
+model), verified via `--budget-only` against this file:
+
+```
+target tasks: ['confident_semantic_misread', 'condition_violation']  n_episodes=40  n=20
+computed budget: 40 episodes x 20 calls = 800 total new API calls
+```
+
+Not yet run — awaiting go-ahead. Per instruction, once run it will be
+executed non-`--verbose` (integrity-only prints: progress count/task/
+run_id/error, no per-episode result content) and its full output opened
+for analysis only after the run completes, exactly matching the
+pilot/debug vs. frozen-run vs. post-hoc-analysis staging described for
+this addition.

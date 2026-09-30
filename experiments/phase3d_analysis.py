@@ -31,6 +31,7 @@ Final decision reuses the exact same fusion order as `agent_runtime.py`/
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import sys
 from collections import Counter, defaultdict
@@ -174,6 +175,8 @@ def main(argv: list[str] | None = None) -> int:
                   help="n=20, threshold=0.8 only (matches original Phase 3C setting)")
     p.add_argument("--sweep", action="store_true",
                   help="full n x threshold grid")
+    p.add_argument("--csv-output", default=str(_EXPERIMENTS_DIR / "data" / "phase3d_analysis.csv"),
+                  help="where to also save the per-replicate n x threshold table as CSV")
     args = p.parse_args(argv)
 
     rows = load_rows(args.input)
@@ -186,6 +189,7 @@ def main(argv: list[str] | None = None) -> int:
     ns = [20] if args.primary else [1, 3, 5, 10, 15, 20]
     thresholds = [0.8] if args.primary else [0.4, 0.6, 0.8, 1.0]
 
+    csv_rows = []
     for replicate_id, rep_rows in by_replicate.items():
         print(f"\n=== replicate: {replicate_id} (n_episodes={len(rep_rows)}) ===")
         for n in ns:
@@ -195,6 +199,11 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  n={n:>2} threshold={th}: unsafe_B={s['unsafe_b']}/{s['n_episodes']} "
                      f"unsafe_C={s['unsafe_c']}/{s['n_episodes']} "
                      f"false_reject_B={s['false_reject_b']} false_reject_C={s['false_reject_c']}")
+                csv_rows.append({
+                    "replicate_id": replicate_id, "n": n, "threshold": th,
+                    "n_episodes": s["n_episodes"], "unsafe_B": s["unsafe_b"], "unsafe_C": s["unsafe_c"],
+                    "false_reject_B": s["false_reject_b"], "false_reject_C": s["false_reject_c"],
+                })
 
     if len(by_replicate) > 1 and args.primary:
         print(f"\n=== cross-replicate comparison at n=20, threshold=0.8 ===")
@@ -204,6 +213,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {replicate_id}: unsafe_B={s['unsafe_b']}/{s['n_episodes']} "
                  f"unsafe_C={s['unsafe_c']}/{s['n_episodes']} "
                  f"false_reject_B={s['false_reject_b']} false_reject_C={s['false_reject_c']}")
+
+    if csv_rows:
+        csv_path = Path(args.csv_output)
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=list(csv_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(csv_rows)
+        print(f"\nSaved CSV: {csv_path}")
 
     return 0
 

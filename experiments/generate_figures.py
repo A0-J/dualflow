@@ -7,11 +7,15 @@ recomputed with new logic, only plotted.
 
     python experiments/generate_figures.py
 
-Saves PNGs to docs/experiments/figures/.
+Saves PNGs to docs/experiments/figures/, and (2026-10, per instruction --
+"출력도 CSV로 저장해줘 이제부턴") the exact underlying data for each figure
+as a same-named .csv next to it, so every plotted number is also available
+in a directly re-importable, non-image form.
 """
 
 from __future__ import annotations
 
+import csv
 import json
 import sys
 from pathlib import Path
@@ -26,7 +30,7 @@ sys.path.insert(0, str(_EXPERIMENTS_DIR.parent / "src"))
 
 from phase3d_analysis import evaluate_episode, load_rows  # noqa: E402
 
-NS = (1, 3, 5, 10, 15, 20)
+NS = (1, 2, 3, 4, 5, 10, 15, 20)
 THRESHOLDS = (0.4, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.2)
 COLORS = {"A": "#888888", "B": "#4C72B0", "C": "#55A868"}
 
@@ -34,6 +38,62 @@ COLORS = {"A": "#888888", "B": "#4C72B0", "C": "#55A868"}
 def _load_jsonl(path: Path) -> list[dict]:
     with open(path, encoding="utf-8") as f:
         return [json.loads(line) for line in f if line.strip()]
+
+
+def _save_csv(stem: str, rows: list[dict]) -> None:
+    """Writes `rows` (list of flat dicts, same keys) to
+    `docs/experiments/figures/<stem>.csv` -- the exact numbers plotted in
+    `<stem>.png`, so a reader can regenerate the figure or check a value
+    without opening the image."""
+    if not rows:
+        return
+    out = _FIGURES_DIR / f"{stem}.csv"
+    with open(out, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"saved {out}")
+
+
+# ---------------------------------------------------------------------------
+# Figure 0 -- Phase 2C Final per-task breakdown (the motivating problem
+# statement -- reuses phase3c_full.jsonl's `arm_a` field, which IS the
+# original, unmodified Phase 2C Final decision for all 7 tasks, §2.3 of
+# the methods doc: Arm A costs 0 new API calls because it's the frozen
+# Phase 2C Final record copied forward, not recomputed).
+# ---------------------------------------------------------------------------
+def figure_0_phase2c_final_breakdown():
+    rows = _load_jsonl(_DATA_DIR / "phase3c_full.jsonl")
+    by_task: dict[str, list[dict]] = {}
+    for r in rows:
+        by_task.setdefault(r["task_id"], []).append(r)
+
+    task_order = ["narrow_scope_ok", "confident_semantic_misread", "vague_persistent",
+                 "silent_misread", "condition_violation", "over_privileged_delete",
+                 "sensitive_escalation"]
+    unsafe_counts = [sum(1 for r in by_task[t] if r["arm_a"]["unsafe"]) for t in task_order]
+    n_per_task = [len(by_task[t]) for t in task_order]
+    colors = ["#C44E52" if u > 0 else "#888888" for u in unsafe_counts]
+
+    fig, ax = plt.subplots(figsize=(9, 4.5))
+    bars = ax.bar(range(len(task_order)), unsafe_counts, color=colors)
+    ax.set_xticks(range(len(task_order)))
+    ax.set_xticklabels(task_order, rotation=30, ha="right", fontsize=8)
+    ax.set_ylabel("Unsafe execution (count, /20)")
+    ax.set_title("Phase 2C Final: unsafe execution by task (140 episodes, 7 tasks x 20, frozen)")
+    for i, (u, n) in enumerate(zip(unsafe_counts, n_per_task)):
+        ax.text(i, u + 0.1, f"{u}/{n}", ha="center", fontsize=9)
+    ax.grid(alpha=0.3, axis="y")
+    fig.tight_layout()
+    out = _FIGURES_DIR / "fig0_phase2c_final_breakdown.png"
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+    print(f"saved {out}")
+
+    _save_csv("fig0_phase2c_final_breakdown", [
+        {"task": t, "unsafe_execution": u, "n_episodes": n}
+        for t, u, n in zip(task_order, unsafe_counts, n_per_task)
+    ])
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +140,12 @@ def figure_1_phase3c_headline():
     plt.close(fig)
     print(f"saved {out}")
 
+    _save_csv("fig1_phase3c_headline", [
+        {"arm": arm, "unsafe_execution": unsafe[a], "n_scored": n_scored,
+         "false_rejection": false_reject[a], "n_correct_authorized": n_correct_auth}
+        for arm, a in zip(["A (Current)", "B (Repeated-Restate)", "C (Grounded)"], "abc")
+    ])
+
 
 # ---------------------------------------------------------------------------
 # Figure 2 -- sampling-count ablation (GPT-4o-mini), dual y-axis
@@ -102,11 +168,16 @@ def figure_2_sampling_ablation():
            + _load_jsonl(_DATA_DIR / "phase3d_run2.jsonl")
            + _load_jsonl(_DATA_DIR / "phase3d_run3.jsonl"))
 
+    csv_rows = []
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
     for ax, task, metric_label in zip(
             axes, ("confident_semantic_misread", "condition_violation"),
             ("Unsafe execution", "False rejection")):
         unsafe_b, unsafe_c, fr_b, fr_c = _sampling_curve(rows, task)
+        for i, n in enumerate(NS):
+            csv_rows.append({"task": task, "n": n, "api_calls_per_episode": n,
+                             "unsafe_B": unsafe_b[i], "unsafe_C": unsafe_c[i],
+                             "false_reject_B": fr_b[i], "false_reject_C": fr_c[i]})
         y_b, y_c = (unsafe_b, unsafe_c) if task == "confident_semantic_misread" else (fr_b, fr_c)
 
         ax.plot(NS, y_b, "o-", color=COLORS["B"], label="Arm B (Repeated-Restate)")
@@ -129,6 +200,8 @@ def figure_2_sampling_ablation():
     fig.savefig(out, dpi=150)
     plt.close(fig)
     print(f"saved {out}")
+
+    _save_csv("fig2_sampling_ablation", csv_rows)
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +253,12 @@ def figure_3_threshold_frontier():
     plt.close(fig)
     print(f"saved {out}")
 
+    _save_csv("fig3_threshold_frontier", [
+        {"threshold": th, "unsafe_execution_confident_semantic_misread": u,
+         "false_rejection_condition_violation": fr, "is_frozen_threshold": th == 0.8}
+        for th, u, fr in zip(THRESHOLDS, unsafe_pts, fr_pts)
+    ])
+
 
 # ---------------------------------------------------------------------------
 # Figure 4 -- cross-model bifurcation
@@ -213,9 +292,15 @@ def figure_4_cross_model_bifurcation():
     plt.close(fig)
     print(f"saved {out}")
 
+    _save_csv("fig4_cross_model_bifurcation", [
+        {"n": n, "unsafe_execution_gpt4o_mini": yb, "unsafe_execution_gpt41": y41}
+        for n, yb, y41 in zip(NS, y_gpt4o, y_gpt41)
+    ])
+
 
 def main() -> int:
     _FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    figure_0_phase2c_final_breakdown()
     figure_1_phase3c_headline()
     figure_2_sampling_ablation()
     figure_3_threshold_frontier()
