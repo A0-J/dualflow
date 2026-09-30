@@ -102,9 +102,16 @@ def collect_one_episode(principal: PrincipalAgent, task, frozen_row: dict, n: in
     for _ in range(n):
         intent = principal.restate_intent(goal=task.goal, context=task.context)
         interp = intent.intended_action
+        resp = intent.response
         responses.append({
             "action": interp.action, "resource": interp.resource, "scope": interp.scope,
             "condition": sorted(interp.condition), "raw_text": intent.raw_text,
+            # 2026-09-30 추가 -- 글자 수로 토큰/비용을 추정하지 않고, API가
+            # 실제로 보고한 usage/model/sampling parameter를 매 호출
+            # 그대로 기록한다(§29 cost/billing 불일치 논의 참고).
+            "served_model": resp.model, "temperature": resp.temperature, "top_p": resp.top_p,
+            "input_tokens": resp.input_tokens, "output_tokens": resp.output_tokens,
+            "cached_input_tokens": resp.cached_input_tokens,
         })
 
     return {

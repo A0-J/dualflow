@@ -14,28 +14,39 @@ from types import SimpleNamespace
 from dualflow.llm import LLMResponse, OpenAILLMClient
 
 
+class _FakeInputTokensDetails:
+    def __init__(self, cached_tokens: int):
+        self.cached_tokens = cached_tokens
+
+
 class _FakeUsage:
-    def __init__(self, input_tokens: int, output_tokens: int):
+    def __init__(self, input_tokens: int, output_tokens: int, cached_tokens: int | None = None):
         self.input_tokens = input_tokens
         self.output_tokens = output_tokens
+        if cached_tokens is not None:
+            self.input_tokens_details = _FakeInputTokensDetails(cached_tokens)
 
 
 class _FakeResponses:
     """`client.responses.create(...)`를 흉내 낸다."""
 
-    def __init__(self, output_text: str, usage: _FakeUsage | None):
+    def __init__(self, output_text: str, usage: _FakeUsage | None, model: str | None = None):
         self._output_text = output_text
         self._usage = usage
+        self._model = model
         self.calls: list[dict] = []
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
+        if self._model is not None:
+            return SimpleNamespace(output_text=self._output_text, usage=self._usage,
+                                   model=self._model)
         return SimpleNamespace(output_text=self._output_text, usage=self._usage)
 
 
 class _FakeOpenAIClient:
-    def __init__(self, output_text: str, usage: _FakeUsage | None = None):
-        self.responses = _FakeResponses(output_text, usage)
+    def __init__(self, output_text: str, usage: _FakeUsage | None = None, model: str | None = None):
+        self.responses = _FakeResponses(output_text, usage, model)
 
 
 class TestLLMResponse:
@@ -89,6 +100,70 @@ class TestOpenAILLMClient:
         assert resp.text == "ok"
         assert resp.input_tokens is None
         assert resp.output_tokens is None
+
+    def test_default_temperature_and_top_p_are_explicit_1_0(self):
+        """2026-09-30 추가 — 이전엔 전혀 지정 안 하고 API 기본값에 맡겼는데,
+        cross-model entropy 비교에서는 이게 통제해야 할 독립변수라는 지적을
+        받아 명시적으로 노출시켰다. 기본값은 기존 API 기본값과 같은 1.0/1.0
+        이라 여기서 바꾸지 않으면 이전까지의 모든 real-API 실행과
+        byte-identical한 조건이 유지된다."""
+        fake = _FakeOpenAIClient("ok")
+        llm = OpenAILLMClient(client=fake, model="gpt-4o-mini")
+
+        llm.generate(instructions="x", input_text="y")
+
+        call = fake.responses.calls[0]
+        assert call["temperature"] == 1.0
+        assert call["top_p"] == 1.0
+
+    def test_custom_temperature_and_top_p_are_passed_through_and_recorded(self):
+        fake = _FakeOpenAIClient("ok")
+        llm = OpenAILLMClient(client=fake, model="gpt-4o-mini", temperature=0.7, top_p=0.9)
+
+        resp = llm.generate(instructions="x", input_text="y")
+
+        call = fake.responses.calls[0]
+        assert call["temperature"] == 0.7
+        assert call["top_p"] == 0.9
+        assert resp.temperature == 0.7
+        assert resp.top_p == 0.9
+
+    def test_served_model_snapshot_is_recorded_when_available(self):
+        """요청한 이름(`gpt-4.1`)과 실제 서빙된 snapshot(`gpt-4.1-2025-04-14`)
+        이 다를 수 있다 — 그 실제 값을 기록해서 사후 감사 가능하게 한다."""
+        fake = _FakeOpenAIClient("ok", model="gpt-4.1-2025-04-14")
+        llm = OpenAILLMClient(client=fake, model="gpt-4.1")
+
+        resp = llm.generate(instructions="x", input_text="y")
+
+        assert resp.model == "gpt-4.1-2025-04-14"
+
+    def test_cached_input_tokens_extracted_when_present(self):
+        """2026-09-30 추가 -- 실제 caching 적용 여부를 글자 수 추정이 아니라
+        API가 보고한 값 그대로 기록해야 한다는 지적에 대응."""
+        fake = _FakeOpenAIClient("ok", usage=_FakeUsage(100, 5, cached_tokens=80))
+        llm = OpenAILLMClient(client=fake, model="gpt-4o-mini")
+
+        resp = llm.generate(instructions="x", input_text="y")
+
+        assert resp.input_tokens == 100
+        assert resp.cached_input_tokens == 80
+
+    def test_cached_input_tokens_defaults_to_none_when_absent(self):
+        fake = _FakeOpenAIClient("ok", usage=_FakeUsage(100, 5))  # no cached_tokens
+        llm = OpenAILLMClient(client=fake, model="gpt-4o-mini")
+
+        resp = llm.generate(instructions="x", input_text="y")
+
+        assert resp.cached_input_tokens is None
+
+    def test_served_model_defaults_to_none_when_fake_lacks_the_field(self):
+        fake = _FakeOpenAIClient("ok")  # model=None -- mimics a minimal fake with no .model
+        llm = OpenAILLMClient(client=fake, model="gpt-4o-mini")
+
+        resp = llm.generate(instructions="x", input_text="y")
+
+        assert resp.model is None
 
     def test_no_openai_import_required(self):
         """OpenAILLMClient는 openai 패키지를 import하지 않는다 — 순수 mock으로도
