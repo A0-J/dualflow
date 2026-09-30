@@ -1,0 +1,4 @@
+replicate_id,n,threshold,n_episodes,unsafe_B,unsafe_C,false_reject_B,false_reject_C
+run1,20,0.8,40,0,2,5/9,2/9
+run2,20,0.8,40,0,0,5/9,0/9
+run3,20,0.8,40,0,0,5/9,3/9
