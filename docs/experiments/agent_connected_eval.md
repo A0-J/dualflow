@@ -5497,3 +5497,46 @@ re-run are now met (harness verified, canonicalizer verified,
 controlled sampling). Next decision: proceed to a full 40-episode/task,
 n∈{1,3,5,10,15,20}, both-model re-run, or treat this validation-scale
 result as sufficient and move on — pending the user's call.
+
+### Cross-model full re-run — protocol frozen, budget corrected, launching
+
+**Decision**: the 3-episode validation is sufficient as a sanity check
+but too small to support a "model generalization" claim in the paper —
+proceeding to the full re-run (40 episodes/task × 2 tasks, both models).
+
+**Protocol frozen, unchanged from the validation pass** (per
+instruction, explicit checklist):
+`temperature=1.0` / `top_p=1.0` (explicit, `src/dualflow/llm.py`
+commit `8127135`) — `threshold=0.8` (unchanged project default) —
+`experiments/phase3d_condition_canonicalizer.py` (unchanged, commit
+`7cb50bc`) — served model snapshot recorded per call — raw ordered
+20-sample responses stored per episode (unchanged design) — token
+usage (`input_tokens`/`output_tokens`/`cached_input_tokens`) recorded
+per call — same frozen `confident_semantic_misread`/
+`condition_violation` episode set (`run_id` 1-20 each, from Phase 2C
+Final) reused for both models, Delegate output held fixed.
+
+**Budget, corrected before running**: the originally proposed
+"3,200 calls" double-counted tasks — `_load_frozen_episodes()` already
+returns 40 *total* episodes across the 2 tasks (20 each), not 40
+*per* task. Verified directly via `--budget-only`:
+
+```
+target tasks: ['confident_semantic_misread', 'condition_violation']  n_episodes=40  n=20
+computed budget: 40 episodes x 20 calls = 800 total new API calls
+```
+
+**Actual budget: 800 calls/model x 2 models = 1,600 total new API
+calls** (half the originally-proposed figure) — `n∈{1,3,5,10,15,20}` is
+answered entirely by prefix-slicing this single shared 20-sample
+collection per episode, 0 additional calls per `n` value, exactly as
+already established for the GPT-4o-mini-only ablation.
+
+**Framing commitment for the write-up** (per instruction, fixed before
+seeing the full-run numbers): GPT-4.1's near-zero-entropy result will
+be described as *"under the evaluated delegation prompts and sampling
+configuration, GPT-4.1 exhibited near-zero empirical action entropy"* —
+an observed property of this task/protocol, not a claim that "GPT-4.1
+is inherently deterministic." Reproducing the same qualitative pattern
+(or not) across models is the finding that matters, not whether the
+exact headline numbers match GPT-4o-mini's.
