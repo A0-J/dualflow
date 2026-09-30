@@ -26,7 +26,7 @@ sys.path.insert(0, str(_EXPERIMENTS_DIR.parent / "src"))
 
 from phase3d_analysis import evaluate_episode, load_rows  # noqa: E402
 
-NS = (1, 3, 5, 10, 15, 20)
+NS = (1, 2, 3, 4, 5, 10, 15, 20)
 THRESHOLDS = (0.4, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.2)
 COLORS = {"A": "#888888", "B": "#4C72B0", "C": "#55A868"}
 

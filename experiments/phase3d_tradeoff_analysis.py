@@ -31,7 +31,7 @@ from phase3d_analysis import (  # noqa: E402
 from dualflow.framework import EXECUTE, REJECT  # noqa: E402
 
 TASKS = ("confident_semantic_misread", "condition_violation")
-NS = (1, 3, 5, 10, 15, 20)
+NS = (1, 2, 3, 4, 5, 10, 15, 20)
 THRESHOLDS = (0.4, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.2)
 
 

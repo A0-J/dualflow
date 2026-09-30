@@ -29,7 +29,7 @@ sys.path.insert(0, str(_EXPERIMENTS_DIR.parent / "src"))
 
 from phase3d_analysis import evaluate_episode, load_rows  # noqa: E402
 
-NS = (1, 3, 5, 10, 15, 20)
+NS = (1, 2, 3, 4, 5, 10, 15, 20)
 THRESHOLD = 0.8  # frozen, per the pre-registered plan -- not swept here
 TASKS = ("confident_semantic_misread", "condition_violation")
 
