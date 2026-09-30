@@ -147,11 +147,14 @@ def main(argv: list[str] | None = None) -> int:
                        "stored in every row so replicates are never conflated")
     p.add_argument("--model", default=DEFAULT_MODEL)
     p.add_argument("--n", type=int, default=DEFAULT_N)
+    p.add_argument("--episodes-per-task", type=int, default=None,
+                   help="limit to the first K frozen episodes/task (default: all 20) -- "
+                        "for a small validation pass before a full run")
     p.add_argument("--output", required=True)
     p.add_argument("--budget-only", action="store_true")
     args = p.parse_args(argv)
 
-    episodes_by_task = {name: _load_frozen_episodes(args.frozen_input, name)
+    episodes_by_task = {name: _load_frozen_episodes(args.frozen_input, name)[:args.episodes_per_task]
                         for name in TARGET_TASK_NAMES}
     n_episodes = sum(len(v) for v in episodes_by_task.values())
     total_calls = n_episodes * args.n
