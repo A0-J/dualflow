@@ -185,6 +185,12 @@ Arm B와 마찬가지로 `restate_intent()`를 20회 반복 호출하지만, 그
 (둘 다 "read"라고 답했으나 정답은 "summarize"). 이 발견이 Phase 3C 설계의 직접적
 동기가 되었다.
 
+![Phase 2C Final: task별 unsafe execution — confident_semantic_misread 하나에만 집중](figures/fig0_phase2c_final_breakdown.png)
+
+(그림은 7-task 140 episode 전체를 보여준다 — 위 표의 4/120은 이 중 Authority가
+애초에 권한을 허용하지 않는 2개 task(`over_privileged_delete`, `sensitive_escalation`,
+§2.3)를 제외한 분모다; 그림에서 이 둘도 예상대로 0/20임을 함께 확인할 수 있다.)
+
 ### 5.2 Phase 3C — 3-Arm 비교 (5-task, 140 episode, 신규 API 호출 4,000회)
 
 | | Arm A (Current) | Arm B (Repeated-Restate) | Arm C (Grounded) |
