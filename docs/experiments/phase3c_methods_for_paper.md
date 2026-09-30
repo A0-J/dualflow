@@ -9,7 +9,8 @@
 >
 > **범위**: §1–8은 Phase 2C Final과 Phase 3C(3-arm 비교, 단일 모델·단일 run)를 다룬다.
 > §5.5 이후와 §9는 Phase 3D — (i) Arm B/C 공유-표본 재설계 재현 실험(`run1`/`run2`/`run3`),
-> (ii) sampling-count/threshold trade-off 특성화, (iii) 교차 모델(GPT-4.1) 검증,
+> (ii) sampling-count/threshold trade-off 특성화, (iii) 교차 모델(GPT-4o-mini/
+> GPT-4.1-mini/GPT-4.1) 검증,
 > (iv) 실제 runtime을 통과하는 2+1 케이스 스터디 — 를 다룬다. 그림 4개는
 > `docs/experiments/figures/`에 있으며, 전부 이미 수집된 데이터로부터 생성했다
 > (`experiments/generate_figures.py`, 신규 API 호출 0회).
@@ -185,11 +186,29 @@ Arm B와 마찬가지로 `restate_intent()`를 20회 반복 호출하지만, 그
 (둘 다 "read"라고 답했으나 정답은 "summarize"). 이 발견이 Phase 3C 설계의 직접적
 동기가 되었다.
 
-![Phase 2C Final: task별 unsafe execution — confident_semantic_misread 하나에만 집중](figures/fig0_phase2c_final_breakdown.png)
+이 표의 그림 버전은 §5.2의 **Figure 1 panel (a)**다 — Phase 3C의 Arm A가 이 Phase 2C
+Final 원본 결정을 그대로 재사용한 값이라(§2.3), 두 실험이 독립된 결과가 아니라
+"어디서 실패했는가(panel a) → 그것을 어떻게 고쳤는가(panel b/c)"로 이어지는 하나의
+이야기다. 그래서 별도 그림 대신 §5.2에서 하나의 Figure로 함께 제시한다(panel (a)에서
+이 표의 4/120은 Authority가 애초에 권한을 허용하지 않는 2개 task(`over_privileged_delete`,
+`sensitive_escalation`, §2.3)를 제외한 분모이며, panel (a)는 이 둘도 예상대로 0/20임을
+함께 보여준다).
 
-(그림은 7-task 140 episode 전체를 보여준다 — 위 표의 4/120은 이 중 Authority가
-애초에 권한을 허용하지 않는 2개 task(`over_privileged_delete`, `sensitive_escalation`,
-§2.3)를 제외한 분모다; 그림에서 이 둘도 예상대로 0/20임을 함께 확인할 수 있다.)
+### 5.1.1 Phase 3A/3B/3B-R — 왜 반복 앵커링이 필요했는가 (mechanism diagnosis, 그래프 없이 표+서술로 요약)
+
+Phase 2C Final의 실패(§5.1)와 Phase 3C의 해법(§5.2) 사이를 잇는 두 개의 작은 진단
+실험이다. 이 자체가 메인 주장은 아니고(그래서 별도 그림을 만들지 않는다), Phase 3C
+설계가 "왜 필요했는가"를 보여주는 mechanism evidence다.
+
+| 진단 | 핵심 수치 | 결론 |
+|---|---|---|
+| **Phase 3A** — `restate_intent()` 자체의 신뢰도 진단 (post-hoc, Phase 2C Final의 안전 실패를 보고 나서 설계한 진단이며 사전 등록이 아님 — 0 신규 API 호출) | self-consistency/accuracy 80%, Delegate 오류와의 상관 25% vs 20%(marginal, 약함) | 단일 재구성만으로는 Delegate 오류를 독립적으로 잡아내기에 충분하지 않다 |
+| **Phase 3B-R** — Intent Anchor 표준 검증 (20 episode, 736회 신규 API 호출) | Phase 2C Final의 unsafe 4건 전부 탐지 | 반복 앵커링이 실제로 실패 원인을 잡아낸다는 mechanism-level 증거 — 이후 Phase 3C의 140-episode 3-arm 비교로 확장(3B-R은 3C의 파일럿 격이므로 3C 결과와 별도로 강조하지 않는다) |
+
+> A single independent restatement achieved 80% semantic accuracy, but its correctness
+> was only weakly associated with delegate correctness, motivating repeated intent
+> reconstruction. Repeated intent anchoring first recovered all four previously unsafe
+> cases in a 20-episode validation, motivating the subsequent full three-arm evaluation.
 
 ### 5.2 Phase 3C — 3-Arm 비교 (5-task, 140 episode, 신규 API 호출 4,000회)
 
@@ -198,6 +217,13 @@ Arm B와 마찬가지로 `restate_intent()`를 20회 반복 호출하지만, 그
 | 안전 실행 실패율 | 4/120 | **0/120** | **0/120** |
 | 오탐 기각률(n=49, 정답이면서 허용된 경우만) | 4/49 | 5/49 | **1/49** |
 | 신규 API 호출 | 0 | 2,000 | 2,000 |
+
+![Figure 1: Failure localization and mitigation — (a) Phase 2C Final이 어디서 실패했는지, (b)/(c) Phase 3C의 A/B/C가 그것을 어떻게 고쳤는지](figures/fig1_failure_localization_and_mitigation.png)
+
+이 문서 전체에서 오탐 기각(false rejection) 수치는 항상 **A/B/C 세 값을 함께** 적는다
+(A=4/49, B=5/49, C=1/49) — 아래 §8 헤드라인 문장처럼 B와 C만 비교하는 서술이 필요한
+곳에서도, 표·그림 등 전체를 요약하는 자리에는 반드시 A를 함께 표기해 숫자가 문맥에 따라
+달라 보이지 않게 한다.
 
 **분모 49는 부풀려져 있다 — 실제로 세 Arm이 갈리는 지점은 5개뿐이다.** 49개 중
 44개(`narrow_scope_ok` 20 + `silent_misread` 20 + `confident_semantic_misread` 4)는
@@ -297,9 +323,7 @@ C용 20개가 서로 다른 표본**이다. 따라서 지금 관측된 "B: 5/49 
 **다음 재실행에서는 이를 고친다**: episode마다 **단 하나의 20개 표본**만 뽑고, 그
 **같은 20개**에 Arm B의 규칙과 Arm C의 규칙을 모두 적용한다. 이러면 B vs C 비교가
 순수하게 집계 방식의 차이만 반영하게 되고(표본 잡음 제거), API 호출도 episode당 40회
-→ 20회로 줄어든다 — 아래 §5.5가 그 재실행이다.
-
-![Phase 3C headline: Arm A/B/C의 안전 실행 실패와 오탐 기각](figures/fig1_phase3c_headline.png)
+→ 20회로 줄어든다 — 아래 §5.5가 그 재실행이다(§5.2의 Figure 1 참고).
 
 ### 5.5 Phase 3D — 공유-표본(Shared-Sample) 재설계 재현 실험 (`run1`/`run2`/`run3`, 신규 API 호출 2,400회)
 
@@ -425,7 +449,7 @@ prefix를 잘라 재현할 수 있다). `n=1–5` 구간을 촘촘히(2, 4 추�
 가능하게 훨씬 더 나쁘다 — 촘촘한 격자(`n=2,4` 추가)로 다시 보니 이 경계 조건은
 `n=3` 하나만으로 특성화했을 때보다 더 뚜렷하고 더 나쁘다.
 
-### 5.7 Phase 3D — 교차 모델 검증 (GPT-4.1)
+### 5.7 Phase 3D — 교차 모델 검증 (GPT-4.1 발견 과정; §5.7.1에서 GPT-4.1-mini로 확장)
 
 **탐색적 1차 수집(800회, `--model gpt-4.1`, sampling 파라미터 미통제)에서 두 가지
 실제 프로토콜 격차가 발견되어, 어떤 일반화 결론을 내리기 전에 먼저 해결했다.**
@@ -506,8 +530,113 @@ entropy로 한 방향에 수렴하면, 반복 샘플링과 entropy-threshold 조
 결정적(deterministic)"이라는 주장이 아니라, *"이번에 평가한 위임 프롬프트와 sampling
 설정 아래에서, GPT-4.1은 `confident_semantic_misread`에서 표본 수(n=1–20)와
 entropy threshold(0.4–1.2) 둘 다에 대해 불변인 near-zero 실측 action entropy를
-보였다"*는 관찰이다. 교차 모델 검증은 이 하나의 명확한 대조로 닫혔다 — 추가 모델
-계획은 없다.
+보였다"*는 관찰이다.
+
+### 5.7.1 세 번째 모델 — GPT-4.1-mini (family/scale control)
+
+GPT-4o-mini와 GPT-4.1 두 점만으로는 "왜 다른가?"가 관찰에 머문다 — 이 차이가 (i)
+mini급 vs. full급(규모) 차이인지, (ii) 4o 세대 vs. 4.1 세대(family) 차이인지 구분할
+수 없다. GPT-4.1-mini(4.1 세대의 mini급 모델)를 추가하면 이 둘을 구분하는 중간
+control이 된다: 만약 GPT-4.1-mini가 GPT-4o-mini처럼 sampling-sensitive하면 "규모"
+가설이, GPT-4.1처럼 flat하면 "family" 가설이 지지된다. **이 실험의 목적은 어느
+모델이 더 낫다는 순위를 매기는 것이 아니다** — RQ4: *"반복 의미 샘플링의 이득이
+서로 다른 LLM에 걸쳐 일관되는가?"*에 답하는 것이다.
+
+**범위, 의도적으로 제한**: 새 모델마다 Phase 3C 전체나 전체 threshold sweep을 다시
+돌리지 않는다 — 기존 GPT-4.1 수집과 동일한 2-task/40-episode/공유-20-표본 프로토콜
+(신규 API 호출 800회)만 반복한다. `--frozen-input`은 Phase 2C Final의 원본 140-episode
+기록(`experiments/data/phase2c_final.jsonl`, 이번에 세션 scratchpad에서 복구해 커밋)을
+그대로 재사용해, 세 모델이 정확히 같은 episode 입력을 본다는 것을 보장했다(입력
+자체가 달라지면 모델 효과와 episode 차이가 섞이기 때문).
+
+**실행 규율(사전에 확정, per instruction)**: 이 실행은 "frozen full experiment"
+단계로 다뤘다 — 진행 중에는 진행률/에러/파일 저장 여부 같은 integrity만 확인하고
+(`--verbose` 끈 채 실행), episode 내용을 보고 도중에 threshold·prompt·n을 조정하지
+않았다. 완료 후에야(40/40 episode, 에러 0건 확인 후) 전체 데이터를 열어 분석했다 —
+이미 GPT-4o-mini/GPT-4.1 결과를 알고 있는 상태에서 중간 결과를 보고 반응하면 모델
+간 비교 자체가 오염되기 때문이다.
+
+**분석 전, 새로운 프로토콜 격차 하나를 발견·수정**: GPT-4.1-mini도 `condition` facet을
+자유 문장으로 표현했고(기존 canonicalizer가 대부분 처리), 그중 4/400건은 기존
+canonicalizer가 인식하지 못하는 **새로운 패턴**이었다 — `("date is 2026-09-23",
+"report is reviewed")`처럼, review를 긍정하는 요소 하나와 맥락의 참조 날짜를 그대로
+반복한(새로운 요구조건이 아닌) 요소 하나가 함께 있는 2-요소 tuple. 기존 규칙("모든
+요소가 review를 포함해야 함")은 이를 "요소 하나가 review를 포함하지 않는다"는 이유로
+놓쳤다. **좁게, 관측된 패턴만 반영해 확장**했다 — "date is..."로 시작하는 요소를
+제거한 뒤 남은 요소가 전부 review 긍정이면 `("reviewed",)`로 정규화(부정 표현은
+여전히 차단). 이 변경 후 **기존 GPT-4o-mini/GPT-4.1 세 replicate의 수치가 정확히
+그대로**임을 재확인했다(`2/9, 0/9, 3/9` 등, 완전히 동일) — 이번에도 대칭적 no-op임을
+확인한 뒤에만 새 결과를 신뢰했다.
+
+**정확한 서술(논문/발표에 그대로 쓸 문장, per instruction)**: 모델 판단 규칙이나
+threshold를 변경한 것이 아니라, 의미적으로 동일한 condition 표현을 canonical form으로
+변환하지 못하던 deterministic parser를 수정했으며, 수정 후 기존 GPT-4o-mini와
+GPT-4.1 결과가 변하지 않음을 확인하였다. (*Not a change to the model's judgment rule
+or threshold — a fix to a deterministic parser that failed to canonicalize a
+semantically identical condition phrasing; verified that existing GPT-4o-mini and
+GPT-4.1 results were unchanged after the fix.*)
+
+**영향받은 4/400건 전체 (투명성을 위해 기록, "결과를 보고 유리하게 evaluator를
+바꿨다"는 의심에 대응)**:
+
+| raw condition (원본) | 발생 횟수 | 정규화 결과 |
+|---|---|---|
+| `("date is 2026-09-23", "report is reviewed")` | 2 | `("reviewed",)` |
+| `("date is 2026-09-23 or later", "report has been reviewed")` | 1 | `("reviewed",)` |
+| `("date is 2026-09-23", "report has been reviewed")` | 1 | `("reviewed",)` |
+
+이 4건 모두 `condition_violation` task, `restate_intent()`의 20개 반복 샘플 중
+일부였다(전체 400개 GPT-4.1-mini `condition_violation` 응답 중 4개, 1%) — 특정
+episode의 최종 판정을 뒤집기 위해 표적으로 고른 것이 아니라, 전체 데이터를 전수
+조사해 나온 것 전부다.
+
+**결과 (n=20, threshold=0.8):**
+
+| | GPT-4o-mini | GPT-4.1-mini | GPT-4.1 |
+|---|---|---|---|
+| unsafe(`confident_semantic_misread`+`condition_violation`, /40) | 0/40 | **12/40** | 12/40 |
+| false-reject(/9) | 0/9 | 4/9 | 4/9 |
+
+**분모 표기 명시(교수님 질문 방지용)**: "12/40"과 (아래에서 말하는) "매 `n`마다
+`unsafe=12/20`"은 서로 다른 실험이 아니라 **같은 결과를 두 다른 집계 단위로 적은
+것**이다. `/40`은 이 replicate의 **두 task를 합친** 전체 episode 수(`confident_
+semantic_misread` 20 + `condition_violation` 20); `condition_violation`의 unsafe는
+세 모델 전부 항상 0이므로, 12/40 = (`confident_semantic_misread`의 12/20) +
+(`condition_violation`의 0/20)이다. `/20`은 `confident_semantic_misread` **task
+하나만** 볼 때의 분모이며, 아래 n-sweep 결과("`n=1`부터 `n=20`까지 전부 12/20")가
+바로 이 task-단위 숫자다. 마찬가지로 false-reject `4/9`의 9는 두 task의
+`correct_auth`(정답이면서 허용된 episode) 개수를 합친 것 — `confident_semantic_
+misread`의 4개 + `condition_violation`의 5개다.
+
+![교차 모델 일반화: confident_semantic_misread의 unsafe execution, n에 따른 변화, 3개 모델](figures/fig4_cross_model_bifurcation.png)
+
+**GPT-4.1-mini는 GPT-4o-mini가 아니라 GPT-4.1과 사실상 동일하게 행동했다** —
+`confident_semantic_misread`에서 `n=1`부터 `n=20`까지 모든 지점에서 `unsafe=12/20`
+으로 완전히 flat했다(그림에서 GPT-4.1-mini와 GPT-4.1의 선이 정확히 겹친다). 이는
+위에서 세운 두 가설 중 **"family" 가설과 일치하는 관측**이다 — GPT-4o-mini만
+sampling-sensitive했고, 4.1 세대의 두 모델(mini/full 모두)은 이 task에서 동일하게
+flat했다. `condition_violation`은 세 모델 모두 정규화 이후 0에 가깝게 정리됐다
+(GPT-4.1-mini/GPT-4.1 각 4/9 — 어휘 격차를 바로잡기 전 raw 상태와는 다른 수치).
+
+**과장하지 않는 서술**: 이는 "4.1 세대는 결정론적"이라거나 "더 강한 모델일수록
+sampling 이득이 준다"는 인과적 결론이 아니라, **이번에 평가한 프롬프트·sampling
+설정 아래 3개 모델 중 2개(GPT-4.1-mini, GPT-4.1)에서 관측된 flat 패턴이 규모가 아니라
+family와 함께 움직였다는 하나의 관측**이다. 모델 3개로는 "규모 vs. family" 중 어느
+쪽이 근본 원인인지 확정할 수 없다 — 다른 provider/세대의 모델을 더 추가해야 나올 수
+있는 결론이며, 이번 범위에는 포함하지 않는다(§9.4).
+
+**교차 모델 검증 헤드라인 (최종, 모델 순위가 아니라 의존성 자체가 메시지)**:
+
+> Repeated sampling behavior is model-dependent.
+>
+> 반복 의미 샘플링의 효과는 모델에 따라 달라진다 — 어떤 모델이 "더 낫다"는 뜻이
+> 아니라, DualFlow의 반복 샘플링 기반 방어가 모델이 실제로 노출하는 output 다양성에
+> 근본적으로 의존한다는 뜻이다.
+
+교차 모델 검증은 이 3개 모델(GPT-4o-mini/GPT-4.1-mini/GPT-4.1)로 닫혔다 — 이것으로
+"어느 모델이 이겼는가"가 아니라 "이 방어의 효과가 모델에 의존적이다"라는 하나의
+분명한 메시지가 나오며, 모델을 더 추가하는 것은 이 메시지를 더 날카롭게 하기보다
+흐릴 수 있다고 판단했다.
 
 ### 5.8 Runtime Case Study — 실제 `AgentDelegationRuntime`을 통과하는 2+1 케이스
 
@@ -638,17 +767,21 @@ Scope), 인과적 표현은 여전히 쓰지 않는다.
 C가 무조건 관대하게 통과시키는 느슨한 설계가 아니라, "확인된 불일치는 여전히
 막는다"는 원칙이 실제로 작동한 결과다.
 
-### Model Generalization — GPT-4.1 교차 검증이 RQ1–3의 범위를 어떻게 좁히는가
+### Model Generalization — 교차 모델 검증이 RQ1–3의 범위를 어떻게 좁히는가
 
-§5.7의 교차 모델 결과는 RQ1–3의 "Yes"가 **암묵적으로 모델에 조건부(model-conditional)
-였다는 것**을 드러낸다. GPT-4o-mini에서는 반복 샘플링·facet 정합 둘 다 효과가
-있었지만, 이는 이 모델이 반복 호출 사이에 실제 output 다양성을 보였기 때문에
-가능했던 것이다. GPT-4.1은 `confident_semantic_misread`에서 80개 `n`×threshold
-조합 전부에 걸쳐 `H=0.000`으로 수렴했고, 그 결과 Arm B/C 둘 다 어떤 설정으로도
-Arm A(1회 재구성) 대비 아무런 안전성 개선을 만들어내지 못했다(§5.7). 즉 RQ1–3의
-"Yes"는 **"기반 모델이 반복 시행 사이에 탐지 가능한 output 다양성을 보이는 한"**이라는
-전제 위에 있다는 것이 이번에 경험적으로 확인됐다 — 이전까지는 이론적 가능성으로만
-언급됐던 것이 이제는 실제 현재 모델(GPT-4.1)에서 재현된 관측 결과다.
+§5.7/§5.7.1의 교차 모델 결과(3개 모델: GPT-4o-mini/GPT-4.1-mini/GPT-4.1)는 RQ1–3의
+"Yes"가 **암묵적으로 모델에 조건부(model-conditional)였다는 것**을 드러낸다.
+GPT-4o-mini에서는 반복 샘플링·facet 정합 둘 다 효과가 있었지만, 이는 이 모델이
+반복 호출 사이에 실제 output 다양성을 보였기 때문에 가능했던 것이다. GPT-4.1-mini와
+GPT-4.1은 `confident_semantic_misread`에서 (80칸 grid 기준 GPT-4.1, n-sweep 기준
+GPT-4.1-mini) 둘 다 `H≈0.000`으로 수렴했고, 그 결과 Arm B/C 둘 다 어떤 설정으로도
+Arm A(1회 재구성) 대비 아무런 안전성 개선을 만들어내지 못했다(§5.7/§5.7.1). 즉
+RQ1–3의 "Yes"는 **"기반 모델이 반복 시행 사이에 탐지 가능한 output 다양성을 보이는
+한"**이라는 전제 위에 있다는 것이 이번에 경험적으로 확인됐다 — 이전까지는 이론적
+가능성으로만 언급됐던 것이 이제는 실제 현재 모델(GPT-4.1-mini, GPT-4.1)에서 재현된
+관측 결과다. 3개 모델 중 2개(4.1 세대)가 함께 이 패턴을 보였다는 것은, 이 무효과가
+"어느 한 모델만의 우연"이 아니라 규모보다 family와 함께 움직일 가능성을 시사하지만
+(§5.7.1), 3개 모델만으로 그 원인을 확정하지는 않는다.
 
 ### 정확한 주장 범위 (Claim Scope) — 이 데이터가 말할 수 있는 것과 말할 수 없는 것
 
@@ -672,10 +805,10 @@ Arm A(1회 재구성) 대비 아무런 안전성 개선을 만들어내지 못�
   않는 것보다 측정 가능하게 더 나쁠 수 있다** — §5.6에서 직접 관측된, 이전에는
   알려지지 않았던 경계 조건.
 - **반복 샘플링·facet 정합의 효과는 모델에 조건부다**: GPT-4o-mini에서는 관측됐지만
-  GPT-4.1은 이 task에서 표본 사이 output 다양성 자체를 보이지 않아, 어떤 `n`·
-  threshold 설정으로도 개선이 나타나지 않았다(§5.7) — 이는 "GPT-4.1이 본질적으로
-  결정적"이라는 모델 자체에 대한 주장이 아니라, **이번에 평가한 프롬프트·sampling
-  설정 아래에서 관측된 실증적 사실**로 한정해 서술해야 한다.
+  GPT-4.1-mini/GPT-4.1은 이 task에서 표본 사이 output 다양성 자체를 보이지 않아,
+  어떤 `n`·threshold 설정으로도 개선이 나타나지 않았다(§5.7/§5.7.1) — 이는 "4.1
+  세대는 본질적으로 결정적"이라는 모델 자체에 대한 주장이 아니라, **이번에 평가한
+  프롬프트·sampling 설정 아래에서 관측된 실증적 사실**로 한정해 서술해야 한다.
 
 **말할 수 없는 것 (이번 데이터로 지지되지 않음 — 명시적으로 주장하지 말 것):**
 
@@ -684,9 +817,12 @@ Arm A(1회 재구성) 대비 아무런 안전성 개선을 만들어내지 못�
   동작은 `n≈10–15`에서 온다는 특성화만 있을 뿐).
 - threshold `0.8`이 **최적** 기준값이라는 주장 — §5.6/§5.5에서 `0.8`은 기존에 재사용
   해온 고정값을 유지할 근거로 확인됐을 뿐, 이 grid에서 새로 도출·선택한 값이 아니다.
-- 이 효과가 **모든 모델**에서 유지된다는 주장 — GPT-4.1에서는 근본적으로 다른 결과
-  (완전한 무효과)가 관측됐다(§5.7). "모델에 따라 효과가 있을 수도, 완전히 없을
-  수도 있다"까지만 말할 수 있다.
+- 이 효과가 **모든 모델**에서 유지된다는 주장 — GPT-4.1-mini/GPT-4.1에서는 근본적으로
+  다른 결과(완전한 무효과)가 관측됐다(§5.7/§5.7.1). "모델에 따라 효과가 있을 수도,
+  완전히 없을 수도 있다"까지만 말할 수 있다.
+- GPT-4.1-mini/GPT-4.1이 함께 flat한 것이 **"규모(scale)"가 아니라 "family"때문**
+  이라고 확정하는 주장 — 3개 모델은 두 가설을 구분하는 최소 control일 뿐, 원인을
+  확정하기엔 부족하다(§5.7.1, §9.4).
 - Phase 3C의 **정확한 수치**(5/49→1/49)가 독립적으로 재현된다는 주장 — §5.5의 재현
   실험은 **방향은 일관되게 재현**했지만 정확한 수치는 replicate마다(2/9, 0/9, 3/9)
   달랐다.
@@ -739,6 +875,12 @@ Arm A(1회 재구성) 대비 아무런 안전성 개선을 만들어내지 못�
 차이가 `condition_violation`의 5개 표본에 집중되어 있어, 표본이 작은 하위 집합에서의
 비율을 전면에 내세우는 것은 과장으로 읽힐 수 있기 때문이다.
 
+**이 문장의 "5/49 → 1/49"는 Arm B와 Arm C만 비교한 것이다 — Arm A를 포함한 전체
+비교는 Figure 1(c)/§5.2 표 그대로 A=4/49, B=5/49, C=1/49다.** 이 한 문장 결론이
+B→C의 메커니즘적 개선(같은 반복 샘플링 위에서 facet 단위 규칙이 무엇을 더 하는가)을
+말하기 위한 것이라 A를 의도적으로 생략했지만, 실험 전체를 요약하는 표/그림에서는
+항상 A까지 셋 다 표기한다(§5.2) — 숫자가 자리마다 달라 보이지 않도록.
+
 **추가 주의(§5.4/§5.5)**: 이 문장의 "reduced"는 §5.2/§5.3(Phase 3C 원래 단일 run,
 Arm B/C가 서로 다른 20개 표본을 사용)의 **관찰된 차이**를 서술한다. §5.5에서 표본을
 공유하도록 고친 재실행(`run1`/`run2`/`run3`)은 방향은 일관되게 재현했지만(Arm C의
@@ -759,8 +901,12 @@ Arm B/C가 서로 다른 20개 표본을 사용)의 **관찰된 차이**를 서�
 
 이 문장은 §8의 첫 헤드라인(위)을 **대체하는 것이 아니라 조건을 명시한다** — 첫
 헤드라인은 GPT-4o-mini에서 관찰된 개선을 서술하고, 이 문장은 그 개선이 언제
-사라지는지(GPT-4.1의 `confident_semantic_misread`, §5.7/§5.8 Case 3)를 명시적인
-실증 사례로 뒷받침한다.
+사라지는지(GPT-4.1-mini/GPT-4.1의 `confident_semantic_misread`, §5.7.1/§5.8 Case 3)
+를 명시적인 실증 사례로 뒷받침한다.
+
+**가장 짧은 한 줄 요약 (§5.7.1, 3개 모델 비교 후 확정)**: *"Repeated sampling
+behavior is model-dependent."* — 어느 모델이 더 나은가가 아니라, 이 방어 자체가
+모델의 output 다양성에 의존한다는 것이 메시지다.
 
 ---
 
@@ -795,12 +941,15 @@ Phase 3D(§5.5–5.8)로 재현성 재실행, sampling-count/threshold trade-off
 재현"과 "전체 benchmark 결과의 재현"은 범위가 다르다는 점을 §5.5에서 명시했다 —
 5-task 전체를 표본-공유 설계로 다시 도는 것은 아직 하지 않았다.
 
-### 9.4 모델 3종 이상 비교
+### 9.4 모델 4종 이상 비교, 또는 "규모 vs. family" 원인 확정
 
-§5.7에서 교차 모델 검증은 GPT-4o-mini/GPT-4.1의 명확한 하나의 대조로 의도적으로
-닫혔다("추가 모델 계획 없음"). 더 많은 모델(다른 제공사 포함)을 추가하는 것은 이
-결론을 무디게 만들 수 있다는 판단 아래 보류됐다 — 필요성이 새로 생기면 별도로
-결정한다.
+§5.7.1에서 교차 모델 검증은 GPT-4o-mini/GPT-4.1-mini/GPT-4.1 3종으로 의도적으로
+닫혔다. 이 3종은 "규모(mini vs. full)"와 "family(4o 세대 vs. 4.1 세대)"를 구분하는
+최소 control이었고, 관측된 패턴(4.1-mini와 4.1이 함께 flat)은 family 가설과 일치하는
+정도까지만 보여준다 — 어느 쪽이 근본 원인인지 확정하려면 다른 provider/세대의
+모델이 최소 하나 더 필요하다. 더 많은 모델(다른 제공사 포함)을 추가하는 것은
+"모델 의존적이다"라는 이 메시지를 더 날카롭게 하기보다 흐릴 수 있다는 판단 아래
+보류됐다 — 필요성이 새로 생기면 별도로 결정한다.
 
 ---
 
