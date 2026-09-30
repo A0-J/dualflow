@@ -117,12 +117,31 @@ class LLMResponse:
     """model 호출 1회의 결과 + 계측 metadata.
 
     `text` 외 필드는 실험 회계(LLM calls/task, token usage, latency)용이며
-    모든 adapter가 이를 보고하는 건 아니므로 기본값은 `None`이다."""
+    모든 adapter가 이를 보고하는 건 아니므로 기본값은 `None`이다.
+
+    `model`/`temperature`/`top_p` (2026-09-30 추가, Phase 3D cross-model
+    협의 중 발견된 문제에 대응 — docs/experiments/agent_connected_eval.md
+    §29 참고): entropy 기반 반복 샘플링을 핵심 측정치로 쓰는 실험에서는
+    sampling parameter가 "구현 세부사항"이 아니라 통제해야 할 독립변수다.
+    실제로 어떤 model snapshot이 서빙했는지(`response.model`, 요청한
+    이름과 다를 수 있음), 어떤 temperature/top_p로 샘플링됐는지를 매 호출
+    기록해서, 나중에 "그때 정말 통제된 조건이었는가"를 사후에 감사할 수
+    있게 한다. 전부 `None` 기본값 — 기존 필드처럼 모든 adapter가 채울
+    필요는 없다."""
 
     text: str
     input_tokens: int | None = None
     output_tokens: int | None = None
     latency_ms: float | None = None
+    model: str | None = None
+    temperature: float | None = None
+    top_p: float | None = None
+    cached_input_tokens: int | None = None
+    """`usage.input_tokens_details.cached_tokens`(2026-09-30 추가) — OpenAI
+    prompt caching이 실제로 적용됐는지(반복되는 동일 prefix가 할인
+    요율로 처리됐는지)를 매 호출마다 기록해서, 나중에 비용 재구성할 때
+    글자 수로 추정하지 않고 API가 실제로 보고한 값을 그대로 쓸 수 있게
+    한다."""
 
 
 class LLMClient(Protocol):
@@ -147,11 +166,25 @@ class OpenAILLMClient:
     같은 client/adapter 인스턴스를 여러 Agent(PrincipalAgent, DelegateAgent,
     SemanticVerifierAgent, AuthorityVerifierAgent)가 공유해도 된다 — 독립성은
     "같은 adapter를 쓰느냐"가 아니라 "별도 API invocation, 별도 instructions,
-    별도 input/context, 상대 verifier의 verdict 비공개"로 확보한다."""
+    별도 input/context, 상대 verifier의 verdict 비공개"로 확보한다.
 
-    def __init__(self, client, model: str):
+    `temperature`/`top_p`(2026-09-30 추가): 이전에는 API 기본값에 맡기고
+    코드에서 전혀 지정하지 않았다 — cross-model 비교(Phase 3D, docs/
+    experiments/agent_connected_eval.md §29)를 설계하다가, entropy 기반
+    반복 샘플링을 핵심 측정치로 쓰는 실험에서는 이게 "구현 세부사항"이
+    아니라 통제해야 할 독립변수라는 지적을 받아 명시적으로 노출시켰다.
+    기본값(`1.0`/`1.0`)은 OpenAI API 자체의 기존 기본값과 같다 — 그러니
+    이 필드를 그냥 안 건드리면 이전까지의 모든 real-API 실행과 byte-
+    identical한 sampling 조건을 유지한다. 실제로 어떤 model snapshot이
+    응답했는지(`response.model` — 요청한 이름과 다를 수 있다, 예:
+    `"gpt-4.1"` 요청 → `"gpt-4.1-2025-04-14"` 응답)도 매 호출마다
+    `LLMResponse.model`에 기록한다."""
+
+    def __init__(self, client, model: str, *, temperature: float = 1.0, top_p: float = 1.0):
         self.client = client
         self.model = model
+        self.temperature = temperature
+        self.top_p = top_p
 
     def generate(self, *, instructions: str, input_text: str) -> LLMResponse:
         start = time.monotonic()
@@ -159,16 +192,26 @@ class OpenAILLMClient:
             model=self.model,
             instructions=instructions,
             input=input_text,
+            temperature=self.temperature,
+            top_p=self.top_p,
         )
         latency_ms = (time.monotonic() - start) * 1000.0
 
         usage = getattr(response, "usage", None)
         input_tokens = getattr(usage, "input_tokens", None) if usage is not None else None
         output_tokens = getattr(usage, "output_tokens", None) if usage is not None else None
+        input_tokens_details = (getattr(usage, "input_tokens_details", None)
+                                if usage is not None else None)
+        cached_input_tokens = (getattr(input_tokens_details, "cached_tokens", None)
+                               if input_tokens_details is not None else None)
 
         return LLMResponse(
             text=response.output_text,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             latency_ms=latency_ms,
+            model=getattr(response, "model", None),
+            temperature=self.temperature,
+            top_p=self.top_p,
+            cached_input_tokens=cached_input_tokens,
         )

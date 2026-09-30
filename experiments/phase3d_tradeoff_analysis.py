@@ -29,22 +29,21 @@ from phase3d_analysis import (  # noqa: E402
     _majority, load_rows,
 )
 from dualflow.framework import EXECUTE, REJECT  # noqa: E402
-from dualflow.semantic import Interpretation  # noqa: E402
 
 TASKS = ("confident_semantic_misread", "condition_violation")
 NS = (1, 3, 5, 10, 15, 20)
 THRESHOLDS = (0.4, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.2)
 
 
+def _ideal_dict(row: dict) -> dict:
+    return {"action": row["ideal_action"], "resource": row["ideal_resource"],
+           "scope": row["ideal_scope"], "condition": row["ideal_condition"]}
+
+
 def _eval(row: dict, n: int, threshold: float):
     interps = [_interp_from_response(r) for r in row["restate_responses"][:n]]
-    delegate_interp = Interpretation(
-        row["delegate_final_interpretation"]["action"],
-        row["delegate_final_interpretation"]["resource"],
-        row["delegate_final_interpretation"]["scope"],
-        frozenset(row["delegate_final_interpretation"]["condition"]))
-    ideal = Interpretation(row["ideal_action"], row["ideal_resource"], row["ideal_scope"],
-                          frozenset(row["ideal_condition"]))
+    delegate_interp = _interp_from_response(row["delegate_final_interpretation"])
+    ideal = _interp_from_response(_ideal_dict(row))
     delegate_wrong = delegate_interp != ideal
 
     majority = _majority(interps)
@@ -98,11 +97,7 @@ def flip_tracking(rows: list[dict]) -> None:
     print("\n### Flip tracking (n=20, threshold sweep) -- Arm C decision per episode ###")
     for row in rows:
         interps20 = [_interp_from_response(r) for r in row["restate_responses"]]
-        delegate_interp = Interpretation(
-            row["delegate_final_interpretation"]["action"],
-            row["delegate_final_interpretation"]["resource"],
-            row["delegate_final_interpretation"]["scope"],
-            frozenset(row["delegate_final_interpretation"]["condition"]))
+        delegate_interp = _interp_from_response(row["delegate_final_interpretation"])
         majority = _majority(interps20)
         mismatched_facets = [f for f in _ALL_FACETS
                              if _facet_value(majority, f) != _facet_value(delegate_interp, f)]
@@ -131,11 +126,7 @@ def entropy_vs_n(rows: list[dict]) -> None:
                    and r["run_id"] == run_id), None)
         if row is None:
             continue
-        delegate_interp = Interpretation(
-            row["delegate_final_interpretation"]["action"],
-            row["delegate_final_interpretation"]["resource"],
-            row["delegate_final_interpretation"]["scope"],
-            frozenset(row["delegate_final_interpretation"]["condition"]))
+        delegate_interp = _interp_from_response(row["delegate_final_interpretation"])
         line = f"  {rep}/{task}/run{run_id}: "
         for n in NS:
             interps = [_interp_from_response(r) for r in row["restate_responses"][:n]]

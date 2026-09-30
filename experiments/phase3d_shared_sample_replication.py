@@ -102,9 +102,16 @@ def collect_one_episode(principal: PrincipalAgent, task, frozen_row: dict, n: in
     for _ in range(n):
         intent = principal.restate_intent(goal=task.goal, context=task.context)
         interp = intent.intended_action
+        resp = intent.response
         responses.append({
             "action": interp.action, "resource": interp.resource, "scope": interp.scope,
             "condition": sorted(interp.condition), "raw_text": intent.raw_text,
+            # 2026-09-30 추가 -- 글자 수로 토큰/비용을 추정하지 않고, API가
+            # 실제로 보고한 usage/model/sampling parameter를 매 호출
+            # 그대로 기록한다(§29 cost/billing 불일치 논의 참고).
+            "served_model": resp.model, "temperature": resp.temperature, "top_p": resp.top_p,
+            "input_tokens": resp.input_tokens, "output_tokens": resp.output_tokens,
+            "cached_input_tokens": resp.cached_input_tokens,
         })
 
     return {
@@ -140,11 +147,14 @@ def main(argv: list[str] | None = None) -> int:
                        "stored in every row so replicates are never conflated")
     p.add_argument("--model", default=DEFAULT_MODEL)
     p.add_argument("--n", type=int, default=DEFAULT_N)
+    p.add_argument("--episodes-per-task", type=int, default=None,
+                   help="limit to the first K frozen episodes/task (default: all 20) -- "
+                        "for a small validation pass before a full run")
     p.add_argument("--output", required=True)
     p.add_argument("--budget-only", action="store_true")
     args = p.parse_args(argv)
 
-    episodes_by_task = {name: _load_frozen_episodes(args.frozen_input, name)
+    episodes_by_task = {name: _load_frozen_episodes(args.frozen_input, name)[:args.episodes_per_task]
                         for name in TARGET_TASK_NAMES}
     n_episodes = sum(len(v) for v in episodes_by_task.values())
     total_calls = n_episodes * args.n

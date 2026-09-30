@@ -41,6 +41,7 @@ _EXPERIMENTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_EXPERIMENTS_DIR))
 sys.path.insert(0, str(_EXPERIMENTS_DIR.parent / "src"))
 
+from phase3d_condition_canonicalizer import canonicalize_condition  # noqa: E402
 from dualflow.framework import EXECUTE, REJECT  # noqa: E402
 from dualflow.semantic import Interpretation, entropy  # noqa: E402
 
@@ -48,7 +49,13 @@ _ALL_FACETS = ("action", "resource", "scope", "condition")
 
 
 def _interp_from_response(r: dict) -> Interpretation:
-    return Interpretation(r["action"], r["resource"], r["scope"], frozenset(r["condition"]))
+    """`condition`을 canonicalize한 뒤 Interpretation을 만든다(2026-09-30
+    추가 -- 어휘 불일치 발견 이후, 모든 분석 경로가 이 함수 하나를 거치게
+    통일해서 임시방편 스크립트가 다시 늘어나지 않게 한다). `restate_
+    responses` 항목뿐 아니라 `delegate_final_interpretation`/ideal 계열
+    dict(같은 4개 키를 가짐)에도 그대로 쓸 수 있다."""
+    return Interpretation(r["action"], r["resource"], r["scope"],
+                          frozenset(canonicalize_condition(r["condition"])))
 
 
 def _facet_value(interp: Interpretation, facet: str):
@@ -96,13 +103,10 @@ class EpisodeCondition:
 
 def evaluate_episode(row: dict, *, n: int, entropy_threshold: float) -> EpisodeCondition:
     interps = [_interp_from_response(r) for r in row["restate_responses"][:n]]
-    delegate_interp = Interpretation(
-        row["delegate_final_interpretation"]["action"],
-        row["delegate_final_interpretation"]["resource"],
-        row["delegate_final_interpretation"]["scope"],
-        frozenset(row["delegate_final_interpretation"]["condition"]))
-    ideal = Interpretation(row["ideal_action"], row["ideal_resource"], row["ideal_scope"],
-                          frozenset(row["ideal_condition"]))
+    delegate_interp = _interp_from_response(row["delegate_final_interpretation"])
+    ideal = _interp_from_response({
+        "action": row["ideal_action"], "resource": row["ideal_resource"],
+        "scope": row["ideal_scope"], "condition": row["ideal_condition"]})
     delegate_wrong = delegate_interp != ideal
 
     # Arm B -- full-Interpretation majority, no facet structure.
