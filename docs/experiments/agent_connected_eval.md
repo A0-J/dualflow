@@ -547,6 +547,7 @@ meaningful.**
 | Phase 3C statistical rigor pass (McNemar's exact test, informative-subset correction, claim-scope fix, 0 new API calls) | **complete — all comparisons p≥0.05 (not conventionally significant, discordant n=3-4), 44/49 false-reject denominator identified as fully concordant/uninformative, explicit supported-vs-unsupported claim list fixed, `n=5/10/15`/threshold ablation confirmed impossible from current logs; full detail in `docs/experiments/phase3c_methods_for_paper.md` (§29)** |
 | Phase 3D — shared-sample controlled replication (run1+run2, 1,600 real API calls) + safety-utility trade-off analysis (0 further calls) | **run1/run2 complete — new finding: run1 showed 2 real unsafe executions for Arm C (majority correct-leaning at H=0.881, just above threshold, mismatch ignored); did not recur identically in run2. `condition_violation`'s false-reject recovery reproduced robustly in both (8 episodes total). Full n×threshold sweep confirms a clean, monotonic safety-utility trade-off (unsafe 14→0, false-reject 0→10/10 as threshold rises 0.4→1.2), with both tasks' risk/benefit entropy bands overlapping (~0.7-0.95) — no single hard threshold clears both. Secondary finding: entropy from small-n prefixes is noisy, stabilizing only ~n=15-20 (§29)** |
 | Phase 3D — `run3` pre-registered as independent validation of frozen `threshold=0.8` | **complete (800 real calls) — primary result at n=20/threshold=0.8: unsafe_C=0/40 (matches run2, run1's 2 cases didn't recur), false_reject_C=3/9 (worst of 3 replicates, traced to CONFIRMED — not unconfirmed — condition-facet mismatches this draw). Threshold retained unchanged per pre-registration; safety fairly stable across 3 replicates, utility benefit shows more run-to-run variance than 2 replicates suggested (§29)** |
+| Phase 3D — cost/sampling-count ablation (n=1,3,5,10,15,20, threshold=0.8 fixed, 0 new API calls, 120 pooled episodes) | **complete — Arm B/C cost identical by construction (shared samples, no correction round): 1 call/ep (Arm A) vs n calls/ep (B/C). Arm B's safety benefit saturates at n≈5. Honest negative finding: Arm C's unsafe count RISES to 7/60 at n=3 (worse than the n=1 baseline's 3/60) because small-n entropy is unreliable (any non-unanimous 3-sample split already exceeds threshold) — Arm C only becomes net-beneficial from n≈10-15. Arm B's false-reject on `condition_violation` worsens with more samples (11→15); Arm C stabilizes lower (→5) but only past n≈15 (§29)** |
 
 The sequential multi-episode experiment (B7e) stays intentionally
 postponed. The canonical-context B7d.3 re-run (§16) removed the
@@ -5292,3 +5293,76 @@ commitment — this validation neither confirms it as clearly optimal nor
 disqualifies it; it shows the operating point's safety side is fairly
 stable across 3 independent replicates while its utility side carries
 more run-to-run variance than a 2-replicate look could reveal.
+
+### Phase 3D — cost/sampling-count ablation (`experiments/phase3d_sampling_ablation.py`, 0 new API calls)
+
+Motivation: having characterized the threshold trade-off, the natural
+next question is the cost side of the story — repeated sampling is the
+mechanism driving the safety improvement, and its cost (API calls) is a
+real weakness that should be shown directly, not minimized. Answered
+entirely from the already-collected `run1`+`run2`+`run3` raw logs
+(120 pooled episodes/task), `threshold=0.8` held fixed (unchanged, per
+the pre-registered plan — this ablation varies `n` only).
+
+**Cost structure, stated first**: because Arm B and Arm C share the same
+`n` raw samples per episode (the corrected Phase 3D design) and neither
+arm has a clarification/correction round, **Arm B and Arm C cost exactly
+the same** at any given `n` — there is no "C costs more than B" question.
+The real cost comparison is **Arm A (1 call/episode) vs. Arm B/C
+(`n` calls/episode, identical for both)**. Token-level cost is not
+captured in the current raw logs (only structured fields + raw text
+were stored, not per-call token counts) — a known gap, noted for any
+future collection.
+
+**`confident_semantic_misread` (n_episodes=60, pooled):**
+
+| n | API calls/ep | unsafe_A | unsafe_B | unsafe_C | false_reject_A | false_reject_B | false_reject_C |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 1 | 3 | 3 | 3 | 2 | 2 | 2 |
+| 3 | 3 | 3 | 2 | **7** | 2 | 0 | 0 |
+| 5 | 5 | 3 | **0** | 4 | 2 | 0 | 0 |
+| 10 | 10 | 3 | 0 | 2 | 2 | 0 | 0 |
+| 15 | 15 | 3 | 0 | 2 | 2 | 0 | 0 |
+| 20 | 20 | 3 | 0 | 2 | 2 | 0 | 0 |
+
+Arm B's safety benefit **saturates at `n=5`** (0 unsafe, unchanged
+through `n=20`).
+
+**Honest, unflattering finding**: Arm C's unsafe count *rises* to 7 at
+`n=3` — worse than the single-call baseline (3). Cause: at `n=3`, any
+non-unanimous split already produces entropy above `0.8` (a 2:1 split
+gives `H=0.918`), so nearly every disagreement gets classified
+"unconfirmed" and ignored by Arm C's own rule — the facet/provenance
+mechanism is actively harmful at very low `n`, because entropy
+estimation itself is unreliable with few samples (consistent with the
+noisy, non-monotonic `entropy(n)` trajectories already found in the
+trade-off analysis above). Arm C only starts improving from `n=5` and
+stabilizes (2 unsafe) from `n=10`.
+
+**`condition_violation` (n_episodes=60, pooled; unsafe stays 0 across
+all arms/`n` on this task, omitted):**
+
+| n | API calls/ep | false_reject_A | false_reject_B | false_reject_C |
+| --- | --- | --- | --- | --- |
+| 1 | 1 | 11 | 11 | 11 |
+| 3 | 3 | 11 | 13 | **4** |
+| 5 | 5 | 11 | 13 | 9 |
+| 10 | 10 | 11 | 14 | 8 |
+| 15 | 15 | 11 | 15 | 5 |
+| 20 | 20 | 11 | 15 | 5 |
+
+**Arm B's false-reject *worsens* as `n` grows** (11→15) — more samples
+make the majority more confidently "no condition," and Arm B's blunt
+full-Interpretation equality blocks on that growing confidence with no
+facet distinction. Arm C shows the same small-`n` noise as above
+(non-monotonic: 4→9→8→5→5) but stabilizes markedly below Arm B by
+`n=15-20` (5 vs. 15).
+
+**Conclusion (framed as characterization, not a new-default proposal,
+matching the threshold analysis's discipline)**: the safety benefit of
+repeated sampling (Arm B) saturates quickly (`n≈5`); the facet/
+provenance mechanism (Arm C) requires more samples than Arm B to reach
+its own stable operating region (`n≈10-15`) and is measurably *worse*
+than not using it at all when `n` is too small (`n=3` on
+`confident_semantic_misread`) — a concrete, previously-unstated boundary
+condition on when Arm C's design is actually beneficial.
