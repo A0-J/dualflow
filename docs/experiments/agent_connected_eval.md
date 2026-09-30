@@ -5607,20 +5607,38 @@ cell** — all 6 `n` values × all 10 threshold values, no exception.
    direction: `0/0` at every `n` and threshold — no utility problem
    exists here for this model once the vocabulary mismatch is corrected.
 
-3. **The cross-model comparison's value is not matching numbers — it is
-   showing when the mechanism's effectiveness is model/task-contingent.**
-   Repeated-sampling-based semantic verification is not a
-   universally-effective safety mechanism; its effectiveness depends on
-   whether the underlying model exhibits genuine cross-call stochastic
-   diversity for the specific ambiguity in question. When it does
-   (GPT-4o-mini, both tasks; GPT-4.1, `condition_violation`), the
-   established saturation/trade-off curves apply. When it does not
-   (GPT-4.1, `confident_semantic_misread`), no amount of sampling or
-   threshold tuning changes the outcome — the model's own confident,
-   uniform bias becomes an unmitigated, structurally invisible risk to
-   this entire class of defense.
+3. **Corrected framing (per instruction — more precise than the
+   original wording of this point)**: `condition_violation`'s `0/0`
+   result for GPT-4.1 should **not** be described as "the established
+   trade-off curve applied here too" — once the vocabulary mismatch was
+   corrected, no failure case was observed for this model on this task
+   at all, so there was no defense benefit to measure in the first
+   place. The genuinely important result is `confident_semantic_
+   misread`: there, near-zero empirical entropy fully neutralizes
+   *both* repeated sampling and entropy-threshold adjustment
+   simultaneously — that is the real, load-bearing finding of this
+   cross-model pass.
 
-**Exact framing, as committed before running this** (§29 above):
+**Headline sentence (per instruction, replacing the earlier draft of
+this conclusion):**
+
+> Repeated sampling is effective only when the underlying model exposes
+> exploitable output diversity. When a model consistently converges to
+> the same incorrect interpretation, increasing the sample count or
+> adjusting the entropy threshold cannot recover the intended
+> semantics.
+
+**What this means for the limitation section**: DualFlow's semantic
+defense is effective precisely when ambiguity is observable as
+output-level uncertainty. Under shared confident misinterpretation, the
+entropy signal itself disappears — and this is no longer only a
+theoretical possibility (as it was when first flagged from Phase 2C
+Final's data): it is now an **empirically observed boundary case**,
+reproduced identically across an entire 60-cell `n`×`threshold` grid on
+a real, current model (GPT-4.1).
+
+**Exact framing for the raw numbers, as committed before running this**
+(§29 above):
 
 > Under the evaluated delegation prompts and sampling configuration,
 > GPT-4.1 exhibited near-zero empirical action entropy on
@@ -5628,9 +5646,13 @@ cell** — all 6 `n` values × all 10 threshold values, no exception.
 > and entropy threshold (0.4–1.2) — repeated-sampling-based semantic
 > verification provided no measurable safety benefit in this specific
 > regime, regardless of configuration. On `condition_violation`, once
-> the condition-facet vocabulary mismatch was corrected, GPT-4.1 showed
-> no false-rejection problem at any setting.
+> the condition-facet vocabulary mismatch was corrected, no failure case
+> was observed for this model at any setting.
 
 **Cross-model validation (Model Generalization) is closed on this
-result.** Next: per the earlier-agreed order, model diversification
-work ends here; runtime integration case study, then paper writing.
+result** — no further models planned; the message is sharper with this
+one clean contrast than it would be with more models added. Per
+instruction, this becomes a subsection within the paper's Evaluation
+section, not its own major section. Next: a small (2-3 case) runtime
+case study — end-to-end traces through the actual delegation runtime,
+not another large-scale measurement — then paper writing.
