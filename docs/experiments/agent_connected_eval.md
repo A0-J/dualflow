@@ -550,6 +550,7 @@ meaningful.**
 | Phase 3D — cost/sampling-count ablation (n=1,3,5,10,15,20, threshold=0.8 fixed, 0 new API calls, 120 pooled episodes) | **complete — Arm B/C cost identical by construction (shared samples, no correction round): 1 call/ep (Arm A) vs n calls/ep (B/C). Arm B's safety benefit saturates at n≈5. Honest negative finding: Arm C's unsafe count RISES to 7/60 at n=3 (worse than the n=1 baseline's 3/60) because small-n entropy is unreliable (any non-unanimous 3-sample split already exceeds threshold) — Arm C only becomes net-beneficial from n≈10-15. Arm B's false-reject on `condition_violation` worsens with more samples (11→15); Arm C stabilizes lower (→5) but only past n≈15 (§29)** |
 | Cross-model validation attempt (GPT-4.1, 800 calls, exploratory) | **2 protocol gaps found and fixed before any conclusion drawn: (1) condition-facet vocabulary mismatch (0/400 GPT-4.1 responses matched canonical "reviewed") — built and validated a canonicalizer from the full observed enumeration, symmetric no-op on GPT-4o-mini (2/5,0/5,3/5 unchanged), corrects GPT-4.1's condition_violation to 0/5 (matches/exceeds best GPT-4o-mini replicate) — the utility finding DOES generalize once measured correctly. (2) temperature/top_p never explicitly controlled/logged in this whole project — fixed in `src/dualflow/llm.py` (commit `8127135`), default 1.0/1.0 preserves past behavior, model/temperature/top_p/cached_tokens now recorded per call. `confident_semantic_misread`'s extreme near-zero-entropy finding remains exploratory pending re-validation under the now-controlled protocol (§29)** |
 | Small controlled validation pass (240 calls, 120/model, `temperature=1.0` explicit) | **all 3 checks PASSED — logging fields correctly populated; canonicalizer generalizes to fresh data (4 new phrasings, 0 unrecognized); GPT-4.1's unanimous "read" bias (H=0.000, all 3 episodes) reproduced under explicitly-controlled sampling, confirming it is a real model property, not a leftover implicit-default artifact. GPT-4o-mini retained real sample diversity in the same fresh collection. Ready for a full cross-model ablation re-run, pending decision (§29)** |
+| Cross-model FULL re-run (1,600 calls, 800/model, 40 episodes/task, n×threshold grid) | **CLOSED — GPT-4o-mini reproduces the established saturation/low-n-instability pattern in a fresh independent 4th replicate. GPT-4.1 shows a complete bifurcation, invariant across ALL n∈{1..20}×threshold∈{0.4..1.2}: `confident_semantic_misread` stuck at unsafe=12/20,fr=4/4 at every single cell (repeated sampling/grounding provide zero benefit when the model has no exploitable diversity); `condition_violation` clean at 0/0 every cell (no utility problem once vocabulary fixed). Model generalization work closed on this result — next: runtime case study, then paper writing (§29)** |
 
 The sequential multi-episode experiment (B7e) stays intentionally
 postponed. The canonical-context B7d.3 re-run (§16) removed the
@@ -5540,3 +5541,96 @@ an observed property of this task/protocol, not a claim that "GPT-4.1
 is inherently deterministic." Reproducing the same qualitative pattern
 (or not) across models is the finding that matters, not whether the
 exact headline numbers match GPT-4o-mini's.
+
+### Cross-model full re-run — results (1,600 real calls: 800/model, 40 episodes/task each)
+
+Both collections completed cleanly, 0 errors (`phase3d_gpt4omini_full.
+jsonl`, `phase3d_gpt41_full.jsonl`). Canonicalizer integrated directly
+into the shared analysis pipeline before this analysis was run (commit
+`bc54522`) — regression-verified against `run1`/`run2`/`run3` (exactly
+unchanged: `2/9, 0/9, 3/9`) before trusting it for these new results.
+
+**Primary result (n=20, threshold=0.8):**
+
+| | GPT-4o-mini (4th independent replicate) | GPT-4.1 |
+| --- | --- | --- |
+| unsafe (`confident_semantic_misread` + `condition_violation`, /40) | 0/40 | 12/40 |
+| false-reject (/9) | 0/9 | 4/9 |
+
+**Sampling-count ablation, per task, per model (threshold=0.8 fixed):**
+
+`confident_semantic_misread`:
+
+| n | GPT-4o-mini unsafe_B/unsafe_C | GPT-4.1 unsafe_B/unsafe_C |
+| --- | --- | --- |
+| 1 | 1/1 | 12/12 |
+| 3 | 0/**2** | 12/12 |
+| 5 | 0/0 | 12/12 |
+| 10 | 0/0 | 12/12 |
+| 15 | 0/0 | 12/12 |
+| 20 | 0/0 | 12/12 |
+
+`condition_violation` (false-reject, unsafe stays 0 throughout for both):
+
+| n | GPT-4o-mini fr_B/fr_C | GPT-4.1 fr_B/fr_C |
+| --- | --- | --- |
+| 1 | 3/3 | 0/0 |
+| 3 | 4/1 | 0/0 |
+| 5 | 3/2 | 0/0 |
+| 10 | 4/2 | 0/0 |
+| 15 | 5/0 | 0/0 |
+| 20 | 5/0 | 0/0 |
+
+**Full n × threshold grid for GPT-4.1**: identical result
+(`unsafe=12, false_reject=4` for `confident_semantic_misread`;
+`unsafe=0, false_reject=0` for `condition_violation`) at **every single
+cell** — all 6 `n` values × all 10 threshold values, no exception.
+
+**Three findings, exactly as anticipated:**
+
+1. **GPT-4o-mini reproduces the established pattern in a fresh, fully
+   independent 4th replicate**: Arm B's safety benefit saturates by
+   `n≈5`; Arm C shows the same small-`n` noise (worse at `n=3` than
+   `n=1`) before stabilizing; Arm B's `condition_violation` false-reject
+   *worsens* with more samples (3→5) while Arm C stabilizes lower (→0).
+   This is not new — it is the same qualitative shape as the original
+   ablation, now confirmed on data collected independently of it.
+
+2. **GPT-4.1 exhibits a complete bifurcation, invariant to every
+   parameter tested.** On `confident_semantic_misread`, unsafe execution
+   and false rejection are *exactly* `12/20` and `4/4` at **every** `n`
+   from 1 to 20 and **every** threshold from 0.4 to 1.2 — repeated
+   sampling and facet-level grounding provide *zero* measurable benefit
+   in this regime, at any configuration, because the model's own output
+   carries no exploitable diversity for either mechanism to act on. On
+   `condition_violation`, the result is equally flat in the *other*
+   direction: `0/0` at every `n` and threshold — no utility problem
+   exists here for this model once the vocabulary mismatch is corrected.
+
+3. **The cross-model comparison's value is not matching numbers — it is
+   showing when the mechanism's effectiveness is model/task-contingent.**
+   Repeated-sampling-based semantic verification is not a
+   universally-effective safety mechanism; its effectiveness depends on
+   whether the underlying model exhibits genuine cross-call stochastic
+   diversity for the specific ambiguity in question. When it does
+   (GPT-4o-mini, both tasks; GPT-4.1, `condition_violation`), the
+   established saturation/trade-off curves apply. When it does not
+   (GPT-4.1, `confident_semantic_misread`), no amount of sampling or
+   threshold tuning changes the outcome — the model's own confident,
+   uniform bias becomes an unmitigated, structurally invisible risk to
+   this entire class of defense.
+
+**Exact framing, as committed before running this** (§29 above):
+
+> Under the evaluated delegation prompts and sampling configuration,
+> GPT-4.1 exhibited near-zero empirical action entropy on
+> `confident_semantic_misread`, invariant to both sample count (n=1–20)
+> and entropy threshold (0.4–1.2) — repeated-sampling-based semantic
+> verification provided no measurable safety benefit in this specific
+> regime, regardless of configuration. On `condition_violation`, once
+> the condition-facet vocabulary mismatch was corrected, GPT-4.1 showed
+> no false-rejection problem at any setting.
+
+**Cross-model validation (Model Generalization) is closed on this
+result.** Next: per the earlier-agreed order, model diversification
+work ends here; runtime integration case study, then paper writing.
