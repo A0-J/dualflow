@@ -56,13 +56,15 @@ def _save_csv(stem: str, rows: list[dict]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Figure 0 -- Phase 2C Final per-task breakdown (the motivating problem
-# statement -- reuses phase3c_full.jsonl's `arm_a` field, which IS the
-# original, unmodified Phase 2C Final decision for all 7 tasks, §2.3 of
-# the methods doc: Arm A costs 0 new API calls because it's the frozen
-# Phase 2C Final record copied forward, not recomputed).
+# Figure 1 -- Failure localization (Phase 2C Final) + mitigation (Phase 3C),
+# merged into one 3-panel figure (2026-10, per instruction -- Arm A in
+# panel (b)/(c) IS the same frozen Phase 2C Final decision shown per-task
+# in panel (a), §2.3: not two independent experiments, so one figure with
+# a "where did it fail -> how was it fixed" reading order, not two).
+# Panel (a) reuses phase3c_full.jsonl's `arm_a` field (frozen Phase 2C
+# Final decision, 0 new API calls, copied forward not recomputed).
 # ---------------------------------------------------------------------------
-def figure_0_phase2c_final_breakdown():
+def figure_1_failure_localization_and_mitigation():
     rows = _load_jsonl(_DATA_DIR / "phase3c_full.jsonl")
     by_task: dict[str, list[dict]] = {}
     for r in rows:
@@ -71,38 +73,10 @@ def figure_0_phase2c_final_breakdown():
     task_order = ["narrow_scope_ok", "confident_semantic_misread", "vague_persistent",
                  "silent_misread", "condition_violation", "over_privileged_delete",
                  "sensitive_escalation"]
-    unsafe_counts = [sum(1 for r in by_task[t] if r["arm_a"]["unsafe"]) for t in task_order]
+    unsafe_by_task = [sum(1 for r in by_task[t] if r["arm_a"]["unsafe"]) for t in task_order]
     n_per_task = [len(by_task[t]) for t in task_order]
-    colors = ["#C44E52" if u > 0 else "#888888" for u in unsafe_counts]
 
-    fig, ax = plt.subplots(figsize=(9, 4.5))
-    bars = ax.bar(range(len(task_order)), unsafe_counts, color=colors)
-    ax.set_xticks(range(len(task_order)))
-    ax.set_xticklabels(task_order, rotation=30, ha="right", fontsize=8)
-    ax.set_ylabel("Unsafe execution (count, /20)")
-    ax.set_title("Phase 2C Final: unsafe execution by task (140 episodes, 7 tasks x 20, frozen)")
-    for i, (u, n) in enumerate(zip(unsafe_counts, n_per_task)):
-        ax.text(i, u + 0.1, f"{u}/{n}", ha="center", fontsize=9)
-    ax.grid(alpha=0.3, axis="y")
-    fig.tight_layout()
-    out = _FIGURES_DIR / "fig0_phase2c_final_breakdown.png"
-    fig.savefig(out, dpi=150)
-    plt.close(fig)
-    print(f"saved {out}")
-
-    _save_csv("fig0_phase2c_final_breakdown", [
-        {"task": t, "unsafe_execution": u, "n_episodes": n}
-        for t, u, n in zip(task_order, unsafe_counts, n_per_task)
-    ])
-
-
-# ---------------------------------------------------------------------------
-# Figure 1 -- Phase 3C headline: Arm A/B/C safety + utility
-# ---------------------------------------------------------------------------
-def figure_1_phase3c_headline():
-    rows = _load_jsonl(_DATA_DIR / "phase3c_full.jsonl")
     scored = [r for r in rows if r["ideal_action"] is not None]
-
     unsafe = {arm: sum(1 for r in scored if r[f"arm_{arm}"]["unsafe"]) for arm in "abc"}
     n_scored = len(scored)
 
@@ -118,31 +92,48 @@ def figure_1_phase3c_headline():
                     for arm in "abc"}
     n_correct_auth = len(correct_auth)
 
-    fig, axes = plt.subplots(1, 2, figsize=(9, 4))
     arms = ["A\n(Current)", "B\n(Repeated-\nRestate)", "C\n(Grounded)"]
-    colors = [COLORS["A"], COLORS["B"], COLORS["C"]]
+    arm_colors = [COLORS["A"], COLORS["B"], COLORS["C"]]
+    task_colors = ["#C44E52" if u > 0 else "#888888" for u in unsafe_by_task]
 
-    axes[0].bar(arms, [unsafe[a] for a in "abc"], color=colors)
-    axes[0].set_title(f"Unsafe execution (n={n_scored})")
-    axes[0].set_ylabel("count")
+    fig, axes = plt.subplots(1, 3, figsize=(13, 4.2), gridspec_kw={"width_ratios": [1.6, 1, 1]})
+
+    ax = axes[0]
+    ax.bar(range(len(task_order)), unsafe_by_task, color=task_colors)
+    ax.set_xticks(range(len(task_order)))
+    ax.set_xticklabels(task_order, rotation=35, ha="right", fontsize=7)
+    ax.set_ylabel("Unsafe execution (count, /20)")
+    ax.set_title("(a) Phase 2C Final: failure localization\n(7 tasks x 20, frozen)", fontsize=10)
+    for i, (u, n) in enumerate(zip(unsafe_by_task, n_per_task)):
+        ax.text(i, u + 0.1, f"{u}/{n}", ha="center", fontsize=8)
+    ax.grid(alpha=0.3, axis="y")
+
+    axes[1].bar(arms, [unsafe[a] for a in "abc"], color=arm_colors)
+    axes[1].set_title(f"(b) Unsafe execution\n(Phase 3C, n={n_scored})", fontsize=10)
+    axes[1].set_ylabel("count")
     for i, a in enumerate("abc"):
-        axes[0].text(i, unsafe[a] + 0.1, str(unsafe[a]), ha="center")
+        axes[1].text(i, unsafe[a] + 0.1, str(unsafe[a]), ha="center")
 
-    axes[1].bar(arms, [false_reject[a] for a in "abc"], color=colors)
-    axes[1].set_title(f"False rejection (n={n_correct_auth})")
+    axes[2].bar(arms, [false_reject[a] for a in "abc"], color=arm_colors)
+    axes[2].set_title(f"(c) False rejection\n(Phase 3C, n={n_correct_auth})", fontsize=10)
     for i, a in enumerate("abc"):
-        axes[1].text(i, false_reject[a] + 0.1, str(false_reject[a]), ha="center")
+        axes[2].text(i, false_reject[a] + 0.1, str(false_reject[a]), ha="center")
 
-    fig.suptitle("Phase 3C: Current vs. Repeated-Restate vs. Grounded (frozen result)")
+    fig.suptitle("Figure 1: Failure localization and mitigation")
     fig.tight_layout()
-    out = _FIGURES_DIR / "fig1_phase3c_headline.png"
+    out = _FIGURES_DIR / "fig1_failure_localization_and_mitigation.png"
     fig.savefig(out, dpi=150)
     plt.close(fig)
     print(f"saved {out}")
 
-    _save_csv("fig1_phase3c_headline", [
-        {"arm": arm, "unsafe_execution": unsafe[a], "n_scored": n_scored,
-         "false_rejection": false_reject[a], "n_correct_authorized": n_correct_auth}
+    _save_csv("fig1_failure_localization_and_mitigation", [
+        {"panel": "a_phase2c_final_by_task", "key": t, "unsafe_execution": u, "n_episodes": n,
+         "false_rejection": "", "n_correct_authorized": ""}
+        for t, u, n in zip(task_order, unsafe_by_task, n_per_task)
+    ] + [
+        {"panel": "bc_phase3c_by_arm", "key": arm, "unsafe_execution": unsafe[a],
+         "n_episodes": n_scored, "false_rejection": false_reject[a],
+         "n_correct_authorized": n_correct_auth}
         for arm, a in zip(["A (Current)", "B (Repeated-Restate)", "C (Grounded)"], "abc")
     ])
 
@@ -261,24 +252,41 @@ def figure_3_threshold_frontier():
 
 
 # ---------------------------------------------------------------------------
-# Figure 4 -- cross-model bifurcation
+# Figure 4 -- cross-model generalization (3 models, 2026-10 addition of
+# GPT-4.1-mini as the family/scale control between GPT-4o-mini and
+# GPT-4.1 -- see phase3c_methods_for_paper.md §5.7). Message: repeated
+# sampling behavior is model-dependent, NOT "which model is better."
 # ---------------------------------------------------------------------------
-def figure_4_cross_model_bifurcation():
-    gpt4o = _load_jsonl(_DATA_DIR / "phase3d_gpt4omini_full.jsonl")
-    gpt41 = _load_jsonl(_DATA_DIR / "phase3d_gpt41_full.jsonl")
+_MODEL_FILES = [
+    ("GPT-4o-mini", "phase3d_gpt4omini_full.jsonl", COLORS["B"], "o-", 7),
+    # GPT-4.1-mini and GPT-4.1 overlap exactly (both flat at unsafe=12/20,
+    # every n) -- dashed + larger hollow marker (plotted first, underneath)
+    # vs. solid + smaller filled marker (plotted last, on top), so both
+    # stay visible instead of one hiding the other; the overlap itself is
+    # the finding, not a plotting artifact.
+    ("GPT-4.1-mini", "phase3d_gpt41mini_full.jsonl", "#DD8452", "^--", 14),
+    ("GPT-4.1", "phase3d_gpt41_full.jsonl", "#C44E52", "s-", 7),
+]
 
+
+def figure_4_cross_model_generalization():
     def unsafe_curve(rows):
         trows = [r for r in rows if r["task_id"] == "confident_semantic_misread"]
         return [sum(evaluate_episode(r, n=n, entropy_threshold=0.8).arm_c_decision == "EXECUTE"
                     and evaluate_episode(r, n=n, entropy_threshold=0.8).delegate_wrong
                     for r in trows) for n in NS]
 
-    y_gpt4o = unsafe_curve(gpt4o)
-    y_gpt41 = unsafe_curve(gpt41)
+    curves = {}
+    for label, filename, color, style, markersize in _MODEL_FILES:
+        rows = _load_jsonl(_DATA_DIR / filename)
+        curves[label] = unsafe_curve(rows)
 
-    fig, ax = plt.subplots(figsize=(6.5, 4.5))
-    ax.plot(NS, y_gpt4o, "o-", color=COLORS["B"], label="GPT-4o-mini")
-    ax.plot(NS, y_gpt41, "s-", color="#C44E52", label="GPT-4.1")
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    for label, _, color, style, markersize in _MODEL_FILES:
+        markerfacecolor = "none" if "--" in style else color
+        ax.plot(NS, curves[label], style, color=color, label=label,
+               markersize=markersize, markerfacecolor=markerfacecolor,
+               markeredgewidth=2 if "--" in style else 1)
     ax.set_xlabel("n (repeated samples)")
     ax.set_ylabel("Unsafe execution (count, /20)")
     ax.set_title("confident_semantic_misread: Arm C, cross-model (threshold=0.8)")
@@ -293,18 +301,18 @@ def figure_4_cross_model_bifurcation():
     print(f"saved {out}")
 
     _save_csv("fig4_cross_model_bifurcation", [
-        {"n": n, "unsafe_execution_gpt4o_mini": yb, "unsafe_execution_gpt41": y41}
-        for n, yb, y41 in zip(NS, y_gpt4o, y_gpt41)
+        {"n": n, **{f"unsafe_execution_{label.lower().replace('-', '_').replace('.', '')}":
+                    curves[label][i] for label, *_ in _MODEL_FILES}}
+        for i, n in enumerate(NS)
     ])
 
 
 def main() -> int:
     _FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    figure_0_phase2c_final_breakdown()
-    figure_1_phase3c_headline()
+    figure_1_failure_localization_and_mitigation()
     figure_2_sampling_ablation()
     figure_3_threshold_frontier()
-    figure_4_cross_model_bifurcation()
+    figure_4_cross_model_generalization()
     return 0
 
 

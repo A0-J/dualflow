@@ -5877,3 +5877,113 @@ run_id/error, no per-episode result content) and its full output opened
 for analysis only after the run completes, exactly matching the
 pilot/debug vs. frozen-run vs. post-hoc-analysis staging described for
 this addition.
+
+### Cross-model addition — GPT-4.1-mini (family/scale control), 800 real API calls, frozen-run discipline applied
+
+Per instruction, added as a third model specifically to separate two
+hypotheses the original 2-model (GPT-4o-mini/GPT-4.1) contrast could
+not distinguish on its own: is the GPT-4.1 flatness a **scale** effect
+(mini vs. full) or a **family** effect (4o generation vs. 4.1
+generation)? GPT-4.1-mini (4.1-generation, mini-scale) is the minimum
+control that separates them. Not a "which model is better" question —
+RQ4: *"is the benefit of repeated semantic sampling consistent across
+different LLMs?"*
+
+**Pilot/debug vs. frozen-run vs. post-hoc discipline, applied explicitly
+this time** (per instruction, generalizing the pre-registration lesson
+to mid-run behavior): design frozen before running (same 2-task/
+40-episode/shared-20-sample protocol as the existing GPT-4.1 collection,
+`--frozen-input` pointed at the recovered `experiments/data/
+phase2c_final.jsonl` so all 3 models see identical episode inputs) →
+executed with `--verbose` off (only progress/task/run_id/error printed,
+`phase3d_shared_sample_replication.py` hardened this same session to
+write each episode incrementally so integrity is checkable by line count
+alone) → completed cleanly (40/40, 0 errors) → only then opened the full
+output for analysis.
+
+**New protocol gap found post-hoc, before trusting any result** (same
+discipline as the original GPT-4.1 vocabulary discovery): GPT-4.1-mini's
+`condition` facet responses included 4/400 samples with a genuinely new
+pattern the existing canonicalizer's Rule 1 ("every element review-
+affirming") did not cover -- a two-element tuple pairing a review-
+affirming phrase with a verbatim restatement of the task's reference
+date (not a new requirement), e.g. `("date is 2026-09-23", "report is
+reviewed")`. Added a narrow Rule 2 (`phase3d_condition_canonicalizer.
+py`): strip elements matching the exact observed "date is..." pattern,
+then re-check Rule 1 on what remains; a pure date-only tuple with no
+review-affirming element stays correctly unrecognized (not silently
+dropped), and negation still blocks canonicalization first. Regression-
+verified as a true no-op before trusting: GPT-4o-mini `run1/run2/run3`
+(`2/9, 0/9, 3/9`) and GPT-4.1 (`n=1`: `3/3` unsafe, `0/0` condition
+false-reject) reproduced exactly unchanged after the Rule 2 addition.
+
+**Results (n=20, threshold=0.8):**
+
+| | GPT-4o-mini | GPT-4.1-mini | GPT-4.1 |
+| --- | --- | --- | --- |
+| unsafe (`confident_semantic_misread`+`condition_violation`, /40) | 0/40 | **12/40** | 12/40 |
+| false-reject (/9) | 0/9 | 4/9 | 4/9 |
+
+GPT-4.1-mini's full `n`-sweep on `confident_semantic_misread` is flat at
+`unsafe=12/20` from `n=1` through `n=20` -- indistinguishable from
+GPT-4.1's own flat curve, and qualitatively unlike GPT-4o-mini's
+sampling-sensitive curve (`1→2→2→3→0→0→0→0`). This is the **family**
+pattern, not the **scale** pattern the two original models alone left
+ambiguous: both 4.1-generation models (mini and full) show the same
+near-zero output diversity on this task, while the 4o-generation model
+does not. Framed carefully, per instruction: this is one observation
+from 3 models, sufficient to separate the two candidate explanations
+directionally but not to confirm the causal mechanism (a 4th
+model/provider would be needed for that -- explicitly out of scope,
+§9.4 of the methods doc).
+
+**Final cross-model headline (per instruction, message is dependency,
+not ranking):**
+
+> Repeated sampling behavior is model-dependent.
+
+Figure 4 (`docs/experiments/figures/fig4_cross_model_bifurcation.png`)
+now plots all 3 models -- GPT-4.1-mini and GPT-4.1 overlap exactly, so
+GPT-4.1-mini is drawn dashed/hollow beneath GPT-4.1's solid line so the
+overlap itself is visible rather than hidden by z-order.
+
+### Figure restructuring — Fig 0 + Fig 1 merged (per instruction, professor-relayed feedback)
+
+The standalone Phase 2C Final per-task breakdown (previously
+`fig0_phase2c_final_breakdown.png`) and the Phase 3C A/B/C headline
+(previously `fig1_phase3c_headline.png`) were merged into one 3-panel
+figure, `fig1_failure_localization_and_mitigation.png` -- (a) Phase 2C
+Final failure localization by task, (b)/(c) Phase 3C unsafe execution /
+false rejection by arm. Rationale: Arm A in panels (b)/(c) IS the same
+frozen Phase 2C Final decision shown per-task in panel (a) (§2.3 of the
+methods doc) -- these were never two independent experiments, so
+merging into one "where did it fail -> how was it fixed" figure both
+tells a cleaner story and saves a figure slot for a 5-page single-column
+paper target of 4 total figures (1: failure+mitigation, 2: sampling
+ablation, 3: threshold frontier, 4: cross-model). The old fig0/fig1
+files were removed; `generate_figures.py` now has a single
+`figure_1_failure_localization_and_mitigation()`.
+
+**Numbering consistency fix**: the methods doc's inventory previously
+summarized Phase 3C's false-rejection result as "5/49→1/49" in one
+place without also stating Arm A's 4/49 -- correct in context (that
+specific sentence deliberately compares only Arm B vs. Arm C's
+mechanism), but risked reading as inconsistent next to the full table
+(A=4/49, B=5/49, C=1/49). Added explicit cross-references in §5.2/§8 so
+every full-comparison table/figure states all three arms, while
+mechanism-specific sentences that compare only B vs. C are now
+explicitly flagged as doing so.
+
+**Also added, per instruction**: §5.1.1, a small table + 2 sentences
+covering Phase 3A (`restate_intent()` reliability diagnostic, post-hoc
+not pre-registered) and Phase 3B-R (Intent Anchor 20-episode
+validation) -- these were completely absent from the methods doc before
+this pass despite being real mechanism-evidence steps between Phase 2C
+Final and Phase 3C. Per instruction, neither gets its own figure (small
+N, diagnostic/pilot role, not the main claim).
+
+**Final paper figure count target confirmed**: 4 figures (Fig 1-4
+above), everything else (Phase 3A/3B-R, McNemar's exact test, Runtime
+Case Study, the B7a-B7e/v2/v3 mechanism-design history) as table/prose/
+appendix material, not additional figures -- per instruction, this
+matches the project's own inventory judgment.
