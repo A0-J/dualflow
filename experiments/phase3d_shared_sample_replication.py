@@ -152,6 +152,14 @@ def main(argv: list[str] | None = None) -> int:
                         "for a small validation pass before a full run")
     p.add_argument("--output", required=True)
     p.add_argument("--budget-only", action="store_true")
+    p.add_argument("--verbose", action="store_true",
+                  help="also print each episode's raw action distribution while "
+                       "collecting -- for pilot/debug runs only. For a frozen full "
+                       "run, leave this off: only integrity fields (progress/task/"
+                       "run_id/errors) are printed, so a live run cannot be used to "
+                       "eyeball results and adjust threshold/prompt/n mid-run "
+                       "(2026-09-30, per instruction -- pilot/debug vs. frozen-run "
+                       "vs. post-hoc-analysis stages must stay separate).")
     args = p.parse_args(argv)
 
     episodes_by_task = {name: _load_frozen_episodes(args.frozen_input, name)[:args.episodes_per_task]
@@ -170,26 +178,42 @@ def main(argv: list[str] | None = None) -> int:
     del api_key
     try:
         principal = PrincipalAgent(llm=build_llm_client(args.model))
-        rows = []
         completed = 0
-        for task_name, frozen_rows in episodes_by_task.items():
-            task = _find_task(task_name)
-            for frozen_row in frozen_rows:
-                completed += 1
-                print(f"\n[{completed}/{n_episodes}] task={task_name} run={frozen_row['run_id']}",
-                     flush=True)
-                row = collect_one_episode(principal, task, frozen_row, args.n)
-                row["replicate_id"] = args.replicate_id
-                rows.append(row)
-                actions = [r["action"] for r in row["restate_responses"]]
-                from collections import Counter
-                print(f"  action distribution: {dict(Counter(actions))}")
-
+        n_errors = 0
+        # Written incrementally (one line per episode, flushed immediately) rather
+        # than buffered in memory and written once at the end -- so (a) integrity
+        # can be checked live during a frozen run by just counting lines in
+        # --output, without opening/reading its content, and (b) a crash partway
+        # through an 800-call run does not lose already-completed episodes.
+        # 2026-09-30, per instruction: during a frozen full run, only integrity
+        # (progress/errors/line count) should be monitored -- never episode
+        # content -- so this loop's own prints are deliberately limited to that.
         with open(args.output, "w", encoding="utf-8") as f:
-            for row in rows:
-                f.write(json.dumps(row) + "\n")
-        print(f"\nSaved {len(rows)} episodes ({args.replicate_id}) to {args.output}")
-        return 0
+            for task_name, frozen_rows in episodes_by_task.items():
+                task = _find_task(task_name)
+                for frozen_row in frozen_rows:
+                    completed += 1
+                    print(f"[{completed}/{n_episodes}] task={task_name} "
+                         f"run={frozen_row['run_id']} ...", end=" ", flush=True)
+                    try:
+                        row = collect_one_episode(principal, task, frozen_row, args.n)
+                    except Exception as exc:  # noqa: BLE001 -- log and keep going
+                        n_errors += 1
+                        print(f"ERROR: {type(exc).__name__}: {exc}", flush=True)
+                        continue
+                    row["replicate_id"] = args.replicate_id
+                    f.write(json.dumps(row) + "\n")
+                    f.flush()
+                    print("saved", flush=True)
+                    if args.verbose:
+                        from collections import Counter
+                        actions = [r["action"] for r in row["restate_responses"]]
+                        print(f"    (verbose, pilot/debug only) action distribution: "
+                             f"{dict(Counter(actions))}")
+
+        print(f"\nDone: {completed - n_errors}/{n_episodes} episodes saved, "
+             f"{n_errors} error(s), to {args.output}")
+        return 1 if n_errors else 0
     finally:
         os.environ.pop("OPENAI_API_KEY", None)
 
