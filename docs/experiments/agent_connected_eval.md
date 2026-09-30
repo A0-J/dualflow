@@ -548,6 +548,7 @@ meaningful.**
 | Phase 3D — shared-sample controlled replication (run1+run2, 1,600 real API calls) + safety-utility trade-off analysis (0 further calls) | **run1/run2 complete — new finding: run1 showed 2 real unsafe executions for Arm C (majority correct-leaning at H=0.881, just above threshold, mismatch ignored); did not recur identically in run2. `condition_violation`'s false-reject recovery reproduced robustly in both (8 episodes total). Full n×threshold sweep confirms a clean, monotonic safety-utility trade-off (unsafe 14→0, false-reject 0→10/10 as threshold rises 0.4→1.2), with both tasks' risk/benefit entropy bands overlapping (~0.7-0.95) — no single hard threshold clears both. Secondary finding: entropy from small-n prefixes is noisy, stabilizing only ~n=15-20 (§29)** |
 | Phase 3D — `run3` pre-registered as independent validation of frozen `threshold=0.8` | **complete (800 real calls) — primary result at n=20/threshold=0.8: unsafe_C=0/40 (matches run2, run1's 2 cases didn't recur), false_reject_C=3/9 (worst of 3 replicates, traced to CONFIRMED — not unconfirmed — condition-facet mismatches this draw). Threshold retained unchanged per pre-registration; safety fairly stable across 3 replicates, utility benefit shows more run-to-run variance than 2 replicates suggested (§29)** |
 | Phase 3D — cost/sampling-count ablation (n=1,3,5,10,15,20, threshold=0.8 fixed, 0 new API calls, 120 pooled episodes) | **complete — Arm B/C cost identical by construction (shared samples, no correction round): 1 call/ep (Arm A) vs n calls/ep (B/C). Arm B's safety benefit saturates at n≈5. Honest negative finding: Arm C's unsafe count RISES to 7/60 at n=3 (worse than the n=1 baseline's 3/60) because small-n entropy is unreliable (any non-unanimous 3-sample split already exceeds threshold) — Arm C only becomes net-beneficial from n≈10-15. Arm B's false-reject on `condition_violation` worsens with more samples (11→15); Arm C stabilizes lower (→5) but only past n≈15 (§29)** |
+| Cross-model validation attempt (GPT-4.1, 800 calls, exploratory) | **2 protocol gaps found and fixed before any conclusion drawn: (1) condition-facet vocabulary mismatch (0/400 GPT-4.1 responses matched canonical "reviewed") — built and validated a canonicalizer from the full observed enumeration, symmetric no-op on GPT-4o-mini (2/5,0/5,3/5 unchanged), corrects GPT-4.1's condition_violation to 0/5 (matches/exceeds best GPT-4o-mini replicate) — the utility finding DOES generalize once measured correctly. (2) temperature/top_p never explicitly controlled/logged in this whole project — fixed in `src/dualflow/llm.py` (commit `8127135`), default 1.0/1.0 preserves past behavior, model/temperature/top_p/cached_tokens now recorded per call. `confident_semantic_misread`'s extreme near-zero-entropy finding remains exploratory pending re-validation under the now-controlled protocol (§29)** |
 
 The sequential multi-episode experiment (B7e) stays intentionally
 postponed. The canonical-context B7d.3 re-run (§16) removed the
@@ -5366,3 +5367,84 @@ its own stable operating region (`n≈10-15`) and is measurably *worse*
 than not using it at all when `n` is too small (`n=3` on
 `confident_semantic_misread`) — a concrete, previously-unstated boundary
 condition on when Arm C's design is actually beneficial.
+
+### Cross-model validation attempt (GPT-4.1) — protocol gaps found before any conclusion was drawn
+
+An exploratory single-replicate collection on `gpt-4.1` (same script,
+`--model gpt-4.1`, 800 calls, Delegate output held fixed/frozen — this
+tests whether the *Principal-side verification mechanism* generalizes
+across backbones, not whether the whole pipeline including the Delegate
+does) surfaced two real protocol gaps that had to be resolved before any
+cross-model claim could be trusted — found and fixed in this order, per
+instruction, *before* drawing any generalization conclusion:
+
+**1. Vocabulary/parsing incompatibility on the `condition` facet —
+found, diagnosed, and fixed with 0 new API calls.** GPT-4.1 paraphrases
+the `condition` facet as free text ("report has been reviewed", "report
+must be reviewed", ...) instead of echoing the single canonical token
+("reviewed") the Delegate/GPT-4o-mini reliably use — confirmed by
+enumerating every raw response: **0/400 GPT-4.1 responses matched the
+canonical form exactly.** The naive exact-string comparison therefore
+measured output *style*, not semantic (dis)agreement, making the
+initially-reported `condition_violation` numbers for GPT-4.1 invalid.
+
+Fix: `experiments/phase3d_condition_canonicalizer.py` — a
+canonicalization function built directly from the full enumeration of
+every condition value actually observed across *all* collected data
+(GPT-4o-mini's 3 replicates + GPT-4.1's 1 replicate, ~1,200 calls,
+11 distinct phrasings total, listed in the module docstring) rather than
+a blind substring guess, with an explicit negation guard (untested by
+any observed case, but verified against synthetic negated inputs so a
+future "has NOT been reviewed" is left unrecognized rather than silently
+flipped to the wrong canonical value). Applied identically to both
+models (no special-casing):
+
+| | Before canonicalization | After canonicalization |
+| --- | --- | --- |
+| GPT-4.1 `condition_violation` false-reject | 6/9 (pooled with the other task — not a valid per-task number as reported) | **0/5** |
+| GPT-4o-mini run1/run2/run3 (symmetry check) | 2/5, 0/5, 3/5 | **2/5, 0/5, 3/5 — exactly unchanged** |
+
+The symmetry check (GPT-4o-mini's numbers unchanged) confirms this is a
+true no-op correction for the model that already used the canonical
+form, not a GPT-4.1-specific adjustment. Once corrected, GPT-4.1's
+`condition_violation` utility result (0/5 false-reject) matches or
+exceeds GPT-4o-mini's best replicate — the false-reject-reduction
+finding **does** generalize to this model, once measured correctly.
+
+**2. Sampling parameters (`temperature`/`top_p`) were never explicitly
+controlled or logged** — left at whatever the OpenAI API defaults to,
+for every real-API run in this entire project up to this point. For an
+entropy-over-repeated-samples measurement, this is a real independent
+variable, not an implementation detail. Fixed in `src/dualflow/llm.py`
+(commit `8127135`): `OpenAILLMClient` now takes explicit
+`temperature`/`top_p` (default `1.0`/`1.0`, matching the API's own prior
+implicit default, so nothing about past runs' interpretation changes),
+and `LLMResponse` now records the actually-served model snapshot
+(`response.model` — confirmed by direct audit call that requesting
+`"gpt-4.1"` serves `"gpt-4.1-2025-04-14"`, not a silent substitute),
+`temperature`, `top_p`, and `cached_input_tokens` (from
+`usage.input_tokens_details.cached_tokens`) on every call.
+`experiments/phase3d_shared_sample_replication.py` now stores all of
+this per response, so future cost accounting reads real API-reported
+usage instead of estimating from character counts (a discrepancy
+surfaced independently: a ~$0.01 observed cost for the 800-call GPT-4.1
+collection did not reconcile with a character-count-based estimate of
+~$0.33–$0.92; ruled out as a code/mock artifact — no proxy override, no
+request-caching library found in the environment, and the direct audit
+call independently confirmed real, distinct API responses — most likely
+a billing-dashboard scope/timing issue rather than evidence the calls
+didn't happen; left unresolved pending the user's own usage-dashboard
+check, not blocking on it).
+
+**`confident_semantic_misread`'s extreme finding remains exploratory,
+not yet a validated cross-model claim.** The near-uniform (16-18/20
+episodes at `H=0.000`) confident bias toward "read" instead of "summarize"
+does not have a parsing/vocabulary explanation (the `action` facet uses
+a constrained vocabulary the same way across both models, and GPT-4.1's
+raw text parsed cleanly) — but per instruction, it should not be written
+up as a firm "GPT-4.1 is more confidently wrong" conclusion until it is
+re-observed under the now-fixed, explicitly-controlled sampling protocol
+(rather than the implicit-default one the original exploratory
+collection used). A small, controlled validation pass (a few episodes on
+each model, not the full 40) is the next step, per the pre-agreed
+order, before any full cross-model ablation re-run.
