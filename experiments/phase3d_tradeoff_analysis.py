@@ -16,6 +16,7 @@ change, using only the already-collected raw responses.
 
 from __future__ import annotations
 
+import csv
 import sys
 from collections import Counter
 from pathlib import Path
@@ -71,8 +72,9 @@ def _eval(row: dict, n: int, threshold: float):
     }
 
 
-def grid_by_task(rows: list[dict]) -> None:
+def grid_by_task(rows: list[dict]) -> list[dict]:
     """(a): n x threshold grid, split by task -- the core deliverable."""
+    csv_rows = []
     for task in TASKS:
         task_rows = [r for r in rows if r["task_id"] == task]
         if not task_rows:
@@ -88,13 +90,18 @@ def grid_by_task(rows: list[dict]) -> None:
                 fr_c = sum(e["false_reject_c"] for e in evals)
                 # compact cell: "U{unsafe}/F{false_reject}" for Arm C
                 line += f"  U{unsafe_c}F{fr_c} "
+                csv_rows.append({"task": task, "n": n, "threshold": th,
+                                 "n_episodes": len(task_rows),
+                                 "unsafe_C": unsafe_c, "false_reject_C": fr_c})
             print(line)
+    return csv_rows
 
 
-def flip_tracking(rows: list[dict]) -> None:
+def flip_tracking(rows: list[dict]) -> list[dict]:
     """(c): for the interesting episodes, track entropy(n) and the exact
     threshold at which Arm C's decision flips, at n=20."""
     print("\n### Flip tracking (n=20, threshold sweep) -- Arm C decision per episode ###")
+    csv_rows = []
     for row in rows:
         interps20 = [_interp_from_response(r) for r in row["restate_responses"]]
         delegate_interp = _interp_from_response(row["delegate_final_interpretation"])
@@ -113,12 +120,19 @@ def flip_tracking(rows: list[dict]) -> None:
         print(f"  {row['replicate_id']}/{row['task_id']}/run{row['run_id']:<3} "
              f"mismatched_facets={mismatched_facets} max_H={max_h:.3f}  "
              f"decisions@th={THRESHOLDS} -> {flip_str}")
+        csv_rows.append({
+            "replicate_id": row["replicate_id"], "task": row["task_id"], "run_id": row["run_id"],
+            "mismatched_facets": "|".join(mismatched_facets), "max_H": round(max_h, 3),
+            "thresholds": "|".join(str(t) for t in THRESHOLDS), "decisions": flip_str,
+        })
+    return csv_rows
 
 
-def entropy_vs_n(rows: list[dict]) -> None:
+def entropy_vs_n(rows: list[dict]) -> list[dict]:
     """Track how the entropy of the mismatched facet changes as n grows --
     for the 2 unsafe episodes and a sample of the recovered ones."""
     print("\n### Entropy(n) trajectory for key episodes (mismatched facet only) ###")
+    csv_rows = []
     targets = [("run1", "confident_semantic_misread", 3), ("run1", "confident_semantic_misread", 19),
               ("run1", "condition_violation", 4), ("run2", "condition_violation", 3)]
     for rep, task, run_id in targets:
@@ -136,7 +150,21 @@ def entropy_vs_n(rows: list[dict]) -> None:
             entropies = _facet_entropies(interps)
             h = max((entropies[f] for f in mismatched), default=0.0)
             line += f"n={n}:H={h:.3f}  "
+            csv_rows.append({"replicate_id": rep, "task": task, "run_id": run_id,
+                             "n": n, "max_H_mismatched_facet": round(h, 3)})
         print(line)
+    return csv_rows
+
+
+def _write_csv(path: Path, rows: list[dict]) -> None:
+    if not rows:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"Saved CSV: {path}")
 
 
 def main() -> int:
@@ -147,14 +175,17 @@ def main() -> int:
     import argparse
     p = argparse.ArgumentParser()
     p.add_argument("--input", action="append", required=True)
+    p.add_argument("--csv-output-dir", default=str(_EXPERIMENTS_DIR / "data"),
+                  help="directory to also save each table as CSV (default: experiments/data/)")
     args = p.parse_args()
 
     rows = load_rows(args.input)
     print(f"Loaded {len(rows)} episodes: {Counter(r['replicate_id'] for r in rows)}")
 
-    grid_by_task(rows)
-    flip_tracking(rows)
-    entropy_vs_n(rows)
+    out_dir = Path(args.csv_output_dir)
+    _write_csv(out_dir / "phase3d_tradeoff_grid.csv", grid_by_task(rows))
+    _write_csv(out_dir / "phase3d_tradeoff_flip_tracking.csv", flip_tracking(rows))
+    _write_csv(out_dir / "phase3d_tradeoff_entropy_vs_n.csv", entropy_vs_n(rows))
     return 0
 
 

@@ -20,6 +20,7 @@ identical cost for both)".
 from __future__ import annotations
 
 import argparse
+import csv
 import sys
 from pathlib import Path
 
@@ -32,6 +33,7 @@ from phase3d_analysis import evaluate_episode, load_rows  # noqa: E402
 NS = (1, 2, 3, 4, 5, 10, 15, 20)
 THRESHOLD = 0.8  # frozen, per the pre-registered plan -- not swept here
 TASKS = ("confident_semantic_misread", "condition_violation")
+_DEFAULT_CSV = _EXPERIMENTS_DIR / "data" / "phase3d_sampling_ablation.csv"
 
 
 def main() -> int:
@@ -42,11 +44,14 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--input", action="append", required=True)
+    p.add_argument("--csv-output", default=str(_DEFAULT_CSV),
+                  help=f"where to also save the table as CSV (default: {_DEFAULT_CSV})")
     args = p.parse_args()
 
     rows = load_rows(args.input)
     print(f"Loaded {len(rows)} episodes (pooled across replicates), threshold={THRESHOLD} fixed\n")
 
+    csv_rows = []
     for task in TASKS:
         trows = [r for r in rows if r["task_id"] == task]
         print(f"### {task} (n_episodes={len(trows)}) ###")
@@ -68,7 +73,20 @@ def main() -> int:
 
             print(f"{n:>3} {n:>13} {unsafe_a:>9} {unsafe_b:>9} {unsafe_c:>9} "
                  f"{fr_a:>6} {fr_b:>6} {fr_c:>6}")
+            csv_rows.append({
+                "task": task, "n": n, "api_calls_per_episode": n, "n_episodes": len(trows),
+                "unsafe_A": unsafe_a, "unsafe_B": unsafe_b, "unsafe_C": unsafe_c,
+                "false_reject_A": fr_a, "false_reject_B": fr_b, "false_reject_C": fr_c,
+            })
         print()
+
+    csv_path = Path(args.csv_output)
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(csv_rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(csv_rows)
+    print(f"Saved CSV: {csv_path}")
 
     return 0
 
