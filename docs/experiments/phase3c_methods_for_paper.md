@@ -97,6 +97,34 @@ entropy가 임계값을 넘었는지의 불리언 판정)만 저장**했고, 다
 없다.** 이는 새로 발견된 한계이며, 다음 단계(§9)에서 이 원본 데이터를 저장하도록
 로깅을 바꾸는 것이 제안돼 있다.
 
+**추가 한계(2026-10, 외부 코드 리뷰로 발견·직접 검증): 토큰 단위 실측 사용량도
+저장되지 않았다.** `experiments/intent_anchor_arms_comparison.py`(Phase 3C를 실행해
+`phase3c_full.jsonl`을 만든 원본 스크립트)의 출력에는 `"extra_calls": n`이 있는데,
+이는 **실제 `LLMResponse` 객체에서 측정한 값이 아니라 "n번 호출했을 것이다"라고
+넣은 상수**다 — 코드를 직접 확인한 결과, `sample_principal_intents()`/
+`build_intent_anchor()`는 실제 `LLMResponse`(input_tokens/output_tokens/model 포함)를
+`CandidateDistribution.responses`에 모아두지만, 원본 스크립트는 이를 출력 row에
+기록하지 않고 버렸다. **이것이 API 호출 자체가 가짜라는 뜻은 아니다** — 호출
+경로(`sample_principal_intents()` → `principal.restate_intent()` →
+`LLMClient.generate()` → `openai.OpenAI().responses.create()`)는 실제로 연결돼
+있음을 코드로 직접 추적해 확인했다. 다만 현재 frozen 데이터만으로는 "실제로 몇
+토큰이 쓰였는지, 어떤 모델이 응답했는지"를 **독립적으로(API 재호출 없이) 검증할
+수 없다** — Phase 3D(`phase3d_shared_sample_replication.py`)는 이미 이 문제를
+고쳐서 호출마다 `served_model`/`temperature`/`top_p`/`input_tokens`/`output_tokens`/
+`cached_input_tokens`를 전부 기록한다.
+
+이 문제를 고친 재사용 가능한 버전 `experiments/phase3c.py`를 추가했다 — 원본
+`intent_anchor_arms_comparison.py`는 (frozen `phase3c_full.jsonl`의 정확한
+provenance이므로) 그대로 보존하고 수정하지 않는다. 새 스크립트는 (i) 실제
+`LLMResponse`에서 측정한 토큰/모델 사용량을 기록하고, (ii) 실험 자체 정의는
+원본과 동일하게 유지한다(Arm B/C가 각자 독립적으로 20개 표본을 뽑는 원래 Phase 3C
+설계 그대로 — Phase 3D의 공유-표본 수정을 소급 적용하지 않음), (iii) 다른 실험
+스크립트(`agent_smoke.py`, `runtime_e2e_real.py`)에 대한 import 의존성을 제거했다.
+`--budget-only`로 실제 frozen 데이터 대상 검증 완료: `episodes=140 active=100
+expected_new_calls=4000` — 원본과 정확히 동일한 예산. 아직 실행하지 않음(실험
+freeze 상태 유지, 신규 API 호출 0회) — 재현성 확보 및 향후(석사논문 단계) 재실행
+대비용으로 추가해둔 것이다.
+
 ---
 
 ## 3. 세 가지 Arm(조건)의 정확한 정의

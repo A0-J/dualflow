@@ -6041,3 +6041,41 @@ order, Phase 3A/3B-R/McNemar as small table/prose] -> Discussion/
 Limitations/Conclusion), not Runtime Integration Option B -- that is
 explicitly deferred to a future master's-thesis expansion, not this
 paper.
+
+### Phase 3C script audit (external review, relayed) — extra_calls was assumed, not measured; cleaned-up reproducibility script added
+
+An external code review of `intent_anchor_arms_comparison.py` (the script
+that produced the frozen `phase3c_full.jsonl`) was relayed and verified
+directly against this repo before changing anything:
+
+- Confirmed real: `sample_principal_intents()`/`build_intent_anchor()` do
+  call the real API in a loop (`principal.restate_intent()` ->
+  `LLMClient.generate()` -> `openai.OpenAI().responses.create()`, traced
+  directly), and the real `LLMResponse` objects ARE collected into
+  `CandidateDistribution.responses`.
+- Confirmed a real gap: the original script's output row writes
+  `"extra_calls": n` -- a hardcoded assumed count, not a measurement
+  derived from those collected `LLMResponse` objects (which it discards
+  without logging). So Phase 3C's frozen data cannot be independently
+  token/model-audited after the fact, unlike Phase 3D's (which already
+  logs `served_model`/`temperature`/`top_p`/`input_tokens`/`output_tokens`/
+  `cached_input_tokens` per call).
+- All of the reviewer's proposed replacement script's API calls (`OpenAI
+  LLMClient.__init__`, `PrincipalAgent(llm=...)`, `sample_principal_
+  intents`/`build_intent_anchor`/`check_compatibility` signatures,
+  `agent_bench_tasks.TASKS`/`EXPECTED_OUTCOMES`, `dualflow.framework.
+  EXECUTE/REJECT`) were checked field-by-field against the current
+  codebase before accepting -- all matched with 0 changes needed to the
+  reviewer's logic. Added as `experiments/phase3c.py` (original
+  `intent_anchor_arms_comparison.py` kept untouched as frozen-data
+  provenance), with the project's standard API-key-file
+  read-once/clear-in-finally handling added (the reviewer's version read
+  the key but didn't set/clear `OPENAI_API_KEY`).
+- `--budget-only` verified against the real frozen `phase2c_final.jsonl`:
+  `episodes=140 active=100 expected_new_calls=4000` -- exactly matches
+  the original Phase 3C budget. Not run -- 0 new API calls spent on this;
+  kept as a reproducibility artifact for a future re-run (e.g. at
+  master's-thesis stage), consistent with the experiment-freeze decision.
+- Documented in `phase3c_methods_for_paper.md` §2.5 as an added logging
+  limitation (does not change any frozen Phase 3C number -- the API
+  calls happened, they just weren't independently token-auditable).
