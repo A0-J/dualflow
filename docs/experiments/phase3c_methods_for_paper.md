@@ -97,6 +97,34 @@ entropy가 임계값을 넘었는지의 불리언 판정)만 저장**했고, 다
 없다.** 이는 새로 발견된 한계이며, 다음 단계(§9)에서 이 원본 데이터를 저장하도록
 로깅을 바꾸는 것이 제안돼 있다.
 
+**추가 한계(2026-10, 외부 코드 리뷰로 발견·직접 검증): 토큰 단위 실측 사용량도
+저장되지 않았다.** `experiments/intent_anchor_arms_comparison.py`(Phase 3C를 실행해
+`phase3c_full.jsonl`을 만든 원본 스크립트)의 출력에는 `"extra_calls": n`이 있는데,
+이는 **실제 `LLMResponse` 객체에서 측정한 값이 아니라 "n번 호출했을 것이다"라고
+넣은 상수**다 — 코드를 직접 확인한 결과, `sample_principal_intents()`/
+`build_intent_anchor()`는 실제 `LLMResponse`(input_tokens/output_tokens/model 포함)를
+`CandidateDistribution.responses`에 모아두지만, 원본 스크립트는 이를 출력 row에
+기록하지 않고 버렸다. **이것이 API 호출 자체가 가짜라는 뜻은 아니다** — 호출
+경로(`sample_principal_intents()` → `principal.restate_intent()` →
+`LLMClient.generate()` → `openai.OpenAI().responses.create()`)는 실제로 연결돼
+있음을 코드로 직접 추적해 확인했다. 다만 현재 frozen 데이터만으로는 "실제로 몇
+토큰이 쓰였는지, 어떤 모델이 응답했는지"를 **독립적으로(API 재호출 없이) 검증할
+수 없다** — Phase 3D(`phase3d_shared_sample_replication.py`)는 이미 이 문제를
+고쳐서 호출마다 `served_model`/`temperature`/`top_p`/`input_tokens`/`output_tokens`/
+`cached_input_tokens`를 전부 기록한다.
+
+이 문제를 고친 재사용 가능한 버전 `experiments/phase3c.py`를 추가했다 — 원본
+`intent_anchor_arms_comparison.py`는 (frozen `phase3c_full.jsonl`의 정확한
+provenance이므로) 그대로 보존하고 수정하지 않는다. 새 스크립트는 (i) 실제
+`LLMResponse`에서 측정한 토큰/모델 사용량을 기록하고, (ii) 실험 자체 정의는
+원본과 동일하게 유지한다(Arm B/C가 각자 독립적으로 20개 표본을 뽑는 원래 Phase 3C
+설계 그대로 — Phase 3D의 공유-표본 수정을 소급 적용하지 않음), (iii) 다른 실험
+스크립트(`agent_smoke.py`, `runtime_e2e_real.py`)에 대한 import 의존성을 제거했다.
+`--budget-only`로 실제 frozen 데이터 대상 검증 완료: `episodes=140 active=100
+expected_new_calls=4000` — 원본과 정확히 동일한 예산. 아직 실행하지 않음(실험
+freeze 상태 유지, 신규 API 호출 0회) — 재현성 확보 및 향후(석사논문 단계) 재실행
+대비용으로 추가해둔 것이다.
+
 ---
 
 ## 3. 세 가지 Arm(조건)의 정확한 정의
@@ -857,6 +885,30 @@ RQ1–3의 "Yes"는 **"기반 모델이 반복 시행 사이에 탐지 가능한
 그대로 작동한 사례이며, "Semantic Flow 하나가 완벽한 탐지기라서 안전한 것이 아니라,
 서로 다른 실패 유형을 서로 다른 층이 보완하기 때문에 안전하다"는 이 프레임워크의
 핵심 주장과 정확히 일치한다.
+
+**정정(2026-10, 논문 초안 작성 중 재검증하다 발견)**: 위 "16건" 분해는 **불완전했다**
+— `phase3c_full.jsonl`을 직접 재계산한 결과, `delegate_wrong`(51건) 중 Arm C 자신의
+semantic match가 "불일치 없음"으로 판정한(즉 자체적으로 못 잡은) episode는 16건이
+아니라 **36건**이었다. 원래 텍스트는 그중 `condition_violation`(15건)과
+`confident_semantic_misread`(1건)만 설명하고, **`sensitive_escalation`의 20건을
+누락**했다 — 이 task는 애초에 Authority가 `no_grant`로 항상 차단하는 task라 이
+논의에서 "당연한 경우"로 암묵적으로 제외됐던 것으로 보이지만, 명시적으로 그렇게
+쓰지 않아 숫자가 안 맞게 남아 있었다. **"17/51→16/51→15/51"이라는 탐지율 수치
+자체는 재계산해도 정확히 동일**(frozen Phase 3C 결과, 변경 없음) — 틀린 것은 그
+아래 "16건"의 분해 설명뿐이다. 정확한 전체 분해(36건, 전부 최종적으로
+안전(REJECT)했음을 직접 재확인):
+
+| 분류 | 건수 | task | 막은 층 |
+|---|---|---|---|
+| Authority가 no_grant로 차단 | 20 | `sensitive_escalation` | Authority Flow (애초에 권한 자체가 없음 — Arm 무관) |
+| Authority가 조건 누락으로 차단 | 15 | `condition_violation` | Authority Flow (필수 조건 누락 하드 리젝트) |
+| 별도 Semantic Verifier가 차단 | 1 | `confident_semantic_misread` | Semantic Verifier (Arm C의 facet anchor와는 별개 검증) |
+| **합계** | **36** | | |
+
+이 정정된 분해가 오히려 defense-in-depth 주장을 **더 강하게** 뒷받침한다 — Arm C가
+자체적으로 못 잡은 36건 중 20건(sensitive_escalation)은 애초에 Arm이 무엇이든
+Authority가 무조건 차단하는, semantic 검증과 완전히 무관한 사례였다는 게 이번에
+명시적으로 드러났기 때문이다.
 
 ---
 
