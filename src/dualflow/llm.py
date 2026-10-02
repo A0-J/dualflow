@@ -23,6 +23,7 @@ Model-facing 인터페이스. 이 파일은 서로 다른 추상화 레벨의 �
 
 from __future__ import annotations
 
+import hashlib
 import time
 from dataclasses import dataclass
 from typing import Protocol, Sequence
@@ -142,6 +143,16 @@ class LLMResponse:
     요율로 처리됐는지)를 매 호출마다 기록해서, 나중에 비용 재구성할 때
     글자 수로 추정하지 않고 API가 실제로 보고한 값을 그대로 쓸 수 있게
     한다."""
+    requested_model: str | None = None
+    """호출자가 요청한 모델 이름(`self.model`) — `model`(위)은 실제로
+    서빙한 snapshot이라 둘이 다를 수 있다(2026-10 추가, Experiment Plan
+    v2 리뷰에서 지적 — 지금까지는 요청 이름 자체를 응답 객체에 기록하지
+    않아서, 서빙된 모델만 보고 원래 뭘 요청했는지는 호출부 코드를 따로
+    봐야 알 수 있었다)."""
+    prompt_hash: str | None = None
+    """`instructions + input_text`의 결정론적 해시(sha256 앞 16자) — 같은
+    프롬프트가 재사용됐는지, 혹은 (의도치 않게) 실행 중간에 바뀌었는지를
+    사후에 감사할 수 있게 한다(2026-10 추가, Experiment Plan v2)."""
 
 
 class LLMClient(Protocol):
@@ -205,6 +216,8 @@ class OpenAILLMClient:
         cached_input_tokens = (getattr(input_tokens_details, "cached_tokens", None)
                                if input_tokens_details is not None else None)
 
+        prompt_hash = hashlib.sha256(f"{instructions}\n{input_text}".encode("utf-8")).hexdigest()[:16]
+
         return LLMResponse(
             text=response.output_text,
             input_tokens=input_tokens,
@@ -214,4 +227,6 @@ class OpenAILLMClient:
             temperature=self.temperature,
             top_p=self.top_p,
             cached_input_tokens=cached_input_tokens,
+            requested_model=self.model,
+            prompt_hash=prompt_hash,
         )

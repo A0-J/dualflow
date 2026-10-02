@@ -56,6 +56,8 @@ class TestLLMResponse:
         assert r.input_tokens is None
         assert r.output_tokens is None
         assert r.latency_ms is None
+        assert r.requested_model is None
+        assert r.prompt_hash is None
 
     def test_is_frozen(self):
         r = LLMResponse(text="hi")
@@ -164,6 +166,32 @@ class TestOpenAILLMClient:
         resp = llm.generate(instructions="x", input_text="y")
 
         assert resp.model is None
+
+    def test_requested_model_recorded_independent_of_served_model(self):
+        """2026-10 추가, Experiment Plan v2 -- 요청한 모델명과 실제 서빙된
+        snapshot(.model)을 각각 따로 감사할 수 있어야 한다."""
+        fake = _FakeOpenAIClient("ok", model="gpt-4.1-2025-04-14")
+        llm = OpenAILLMClient(client=fake, model="gpt-4.1")
+
+        resp = llm.generate(instructions="x", input_text="y")
+
+        assert resp.requested_model == "gpt-4.1"
+        assert resp.model == "gpt-4.1-2025-04-14"
+
+    def test_prompt_hash_is_deterministic_and_distinguishes_prompts(self):
+        """2026-10 추가, Experiment Plan v2 -- 같은 prompt는 같은 hash,
+        다른 prompt는 다른 hash여야 실행 중간에 prompt가 바뀌었는지
+        사후 감사가 가능하다."""
+        fake = _FakeOpenAIClient("ok")
+        llm = OpenAILLMClient(client=fake, model="gpt-4o-mini")
+
+        r1 = llm.generate(instructions="a", input_text="b")
+        r2 = llm.generate(instructions="a", input_text="b")
+        r3 = llm.generate(instructions="a", input_text="different")
+
+        assert r1.prompt_hash is not None
+        assert r1.prompt_hash == r2.prompt_hash
+        assert r1.prompt_hash != r3.prompt_hash
 
     def test_no_openai_import_required(self):
         """OpenAILLMClient는 openai 패키지를 import하지 않는다 — 순수 mock으로도
