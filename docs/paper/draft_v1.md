@@ -1,14 +1,32 @@
 # DualFlow: Independent Semantic and Authority Verification for Agent-to-Agent Delegation
 
-> **Draft status**: first complete draft of the 5-page single-column paper body,
-> written to lock in the exact experiment↔claim connections established across
-> Phase 2C–3D before compressing to a professor's preferred style. Section
-> lengths below track the agreed page budget (Introduction ~0.7–0.8p, Design
-> ~1.0–1.1p, Setup ~0.5–0.6p, Evaluation ~1.7–1.9p, Discussion ~0.6–0.8p).
+> **Draft status (v2)**: first complete draft of the 5-page single-column
+> paper body, written to lock in the exact experiment↔claim connections
+> established across Phase 2C–3D before compressing to a professor's
+> preferred style. Section lengths below track the agreed page budget
+> (Introduction ~0.7–0.8p, Design ~1.0–1.1p, Setup ~0.5–0.6p, Evaluation
+> ~1.7–1.9p, Discussion ~0.6–0.8p) — §1.1 Related Work is a new addition on
+> top of that budget (not originally planned) and will likely need to be
+> shortened or folded elsewhere during the compression pass to hold 5 pages.
 > Figures are referenced by their committed paths
 > (`docs/experiments/figures/fig{1..4}_*.png`); all numbers are taken directly
-> from `docs/experiments/phase3c_methods_for_paper.md` (frozen results) with no
-> new computation. Title is a placeholder.
+> from `docs/experiments/phase3c_methods_for_paper.md` (frozen results) with
+> no new computation. **v2 changes**: fixed the threshold-direction error in
+> §4.3 (was stated backwards), clarified that the main three-arm comparison
+> (§4.1/Fig 1) used independently-drawn B/C samples while the shared-sample
+> design (§4.2–4.4) is a separate, later replication, removed the "roughly
+> five-fold" ratio framing (raw counts only, per the project's own
+> discipline), corrected the standalone-replay vs. full-runtime-execution
+> distinction between Arm A and Arms B/C, fixed the task list (removed a
+> fabricated 8th task, added the excluded vague-request task's note),
+> softened the "designed/engineered to elicit" framing to match this task's
+> actual post-hoc reclassification history, softened the authority
+> model-independence and GPT-4.1 "never" claims to design-level/scoped
+> statements, and added the Authority-catches-what-Semantic-misses
+> defense-in-depth paragraph (§4.1) with numbers re-verified directly against
+> the data (36 cases, not the 16 an incomplete earlier breakdown in the
+> methods doc stated — see that doc's own appended correction). Title is a
+> placeholder.
 
 ## Abstract
 
@@ -30,8 +48,9 @@ rejections compared to a naive repeated-restatement baseline. We
 characterize the resulting safety–utility trade-off across sampling count
 and confidence threshold, and show across three LLMs that this benefit is
 model-dependent: two models from the same generation exhibited no
-exploitable output diversity for the defense to act on, while the deterministic
-authority axis's guarantees held regardless of model.
+exploitable output diversity for the defense to act on, while the
+authority axis's guarantees, by design, never depend on a model call at
+all.
 
 ---
 
@@ -50,11 +69,31 @@ Principal independently restate its own intent, without seeing the
 Delegate's proposal, and check whether the two agree. We show this is not
 sufficient on its own. In a 140-episode evaluation of a production
 delegation runtime backed by real LLM agents, unsafe execution was rare
-overall (3.3%) but concentrated entirely in a single task designed to elicit
-a *confident* semantic misread — 20% of episodes there resulted in unsafe
-execution, and in every case, the Principal's own independent restatement
-had confidently agreed with the Delegate's wrong interpretation. Two
-nominally independent checks had shared the same error.
+overall (3.3%) but concentrated entirely in one task type — originally a
+verb-choice ambiguity task, on which confident, entropy-zero
+misinterpretations were repeatedly observed in practice and the task was
+reclassified accordingly (`confident_semantic_misread`) — where 20% of
+episodes resulted in unsafe execution, and in every case the Principal's
+own independent restatement had confidently agreed with the Delegate's
+wrong interpretation. Two nominally independent checks had shared the same
+error.
+
+### 1.1 Related Work
+
+Semantic entropy — disagreement among repeated model samples, measured over
+meaning rather than surface wording — has been shown to predict factual
+error at the level of individual generations (Kuhn, Gal & Farquhar, ICLR
+2023; Farquhar et al., *Nature*, 2024). We apply the same underlying signal
+to a different question: not "is this one generation likely wrong," but
+"does a second, independent agent's repeated reconstruction of intent agree
+with what a first agent proposed to do." Work on tool-using and multi-agent
+LLM systems has separately studied giving agents bounded capabilities and
+studied the correctness of their task interpretations, but typically treats
+capability/permission checking and semantic-intent checking as the same
+concern or does not evaluate them as independent axes under real, repeated
+LLM sampling; DualFlow's contribution here is to keep them structurally
+separate and show, empirically, where each alone fails and together
+succeeds.
 
 This paper makes four contributions. (1) We empirically demonstrate this
 failure mode — confidently-shared misinterpretation defeating naive
@@ -64,13 +103,13 @@ controlled three-arm comparison: repeating the restatement and voting, and
 repeating the restatement but grounding agreement at the level of individual
 semantic facets with provenance (a facet only counts as evidence if the
 Principal was itself consistent about it). The latter removes the observed
-unsafe executions while reducing unnecessary rejections roughly five-fold
-relative to the former. (3) We characterize the resulting safety–utility
+unsafe executions while reducing unnecessary rejections compared with the
+former (1/49 vs. 5/49). (3) We characterize the resulting safety–utility
 trade-off across sampling count and confidence threshold, including a
 previously unreported small-sample failure mode. (4) We show, across three
 LLMs, that the semantic defense's benefit is model-dependent — a boundary
-condition that a deterministic, LLM-independent authority check does not
-share.
+condition that a deterministic authority check, whose final decision never
+depends on a model call, does not share.
 
 ---
 
@@ -138,25 +177,40 @@ compare three mechanisms for it, identical in every other respect:
 
 ## 3. Experimental Setup
 
-**Runtime.** All results use the production delegation runtime with real
-Principal, Delegate, Semantic Verification, and Authority Verification
-agents backed by the OpenAI API — no simulated agents or hand-specified
-probability distributions.
+**Runtime.** Every agent (Principal, Delegate, Semantic Verifier, Authority
+Verifier) is real, backed by the OpenAI API — no simulated agents or
+hand-specified probability distributions anywhere in this paper. Arm A's
+episodes are single end-to-end executions of the production delegation
+runtime. Arms B and C reuse that same frozen execution's Delegate output,
+Semantic/Authority verdicts, and ground truth, and recompute only the
+Principal-side mechanism being compared (Section 2) by calling the
+Principal's restatement step directly *n* additional times per episode —
+this isolates the one variable under test, but it means B/C's numbers come
+from a standalone re-evaluation layered on the runtime's frozen record,
+not from *n* additional full runtime executions. A separate, smaller
+runtime case study (Section 5) does trace full episodes end-to-end,
+including this mechanism, through the actual runtime.
 
-**Benchmark.** Seven delegation tasks, 20 independently sampled episodes
-each: an unambiguous clear delegation; a narrow-but-safe scope; a task
-engineered to elicit a *confident* semantic misread; a persistently vague
-request; a silent-misread task; a request missing a required authorization
-condition; an over-privileged deletion request; and a sensitive-escalation
-request — together spanning both semantic-ambiguity and authority-boundary
-failure modes.
+**Benchmark.** Seven delegation tasks, 20 episodes each (140 total): a
+narrow-but-safe scope; the confident-misread task described in Section 1;
+a persistently vague request; a silent-misread task; a request missing a
+required authorization condition; an over-privileged deletion request; and
+a sensitive-escalation request — together spanning both semantic-ambiguity
+and authority-boundary failure modes. The vague-request task has no single
+well-defined ideal action by construction and is excluded from the unsafe/
+false-rejection metrics throughout (120 of 140 episodes scored).
 
 **Controls.** Across Arms A/B/C, the Delegate's output, the Semantic
 Verifier's judgment, the Authority verdict, and the fusion order are held
-identical (drawn from one frozen collection); only the Principal-side
-mechanism (Section 2) varies. When repeated sampling is used, Arms B and C
-consume the *same* drawn set of *n* restatements per episode, so their
-comparison reflects only the aggregation rule, not sampling variance.
+identical; only the Principal-side mechanism (Section 2) varies. In the
+main three-arm comparison (Section 4.1), Arms B and C each draw their own
+independent set of *n* restatements per episode — a confound we identify
+and explicitly flag, since any difference between B and C there could
+in principle reflect sampling variance as well as the aggregation-rule
+difference. A follow-up replication (feeding Sections 4.2–4.4) corrects
+this: Arms B and C there consume the *same* drawn set of *n* restatements
+per episode, isolating the aggregation rule alone; its results reproduce
+the same qualitative direction as the main comparison.
 
 **Sampling and threshold.** *n*\=20 restatements per episode where repeated
 sampling applies; entropy confidence threshold 0.8, a value already in use
@@ -188,10 +242,9 @@ previously-reported result, for every model, unchanged.
 
 Figure 1(a) shows unsafe execution by task in the frozen 140-episode
 evaluation: 0/20 in six of seven tasks, and 4/20 (20%) concentrated
-entirely in the task designed to elicit a confident semantic misread. In
-all four cases, the Principal's single independent restatement had
-confidently agreed with the Delegate's wrong interpretation — two
-nominally independent checks sharing one error.
+entirely in the confident-misread task. In all four cases, the Principal's
+single independent restatement had confidently agreed with the Delegate's
+wrong interpretation — two nominally independent checks sharing one error.
 
 Figure 1(b)/(c) shows the controlled three-arm comparison this motivated:
 unsafe execution 4/120 (Arm A) → 0/120 (Arm B) → 0/120 (Arm C); false
@@ -200,8 +253,10 @@ rejection, among authorized-and-correct episodes, 4/49 (A) → 5/49 (B) →
 executions but is overly conservative — any single facet disagreement
 blocks execution regardless of how confident the Principal actually was —
 and false rejections rise slightly. Facet-level, provenance-aware grounding
-(C) preserves the safety gain while reducing false rejections roughly
-five-fold relative to naive repeated restatement.
+(C) preserves the safety gain while reducing false rejections compared
+with naive repeated restatement (1/49 vs. 5/49, concentrated in 5 of the 49
+episodes where the three arms actually disagree; Section 4.1's significance
+test below treats this accordingly).
 
 Because all three arms are applied to the same episodes, we assess
 significance with McNemar's exact test on the paired, discordant outcomes.
@@ -212,6 +267,20 @@ disagree is too small (3–4) for this test to have power. Every discordant
 case, without exception, favored the repeated-verification arms; we report
 this as a consistent directional finding, not a statistically significant
 one.
+
+This safety result also illustrates why DualFlow verifies semantics and
+authority independently rather than relying on either alone. Scoring how
+often Arm C's *own* facet check actually flags the 51 episodes where the
+Delegate was in fact wrong gives a detection rate of 15/51 — lower than
+Arm A's naive 17/51 — which could misleadingly suggest Arm C is a worse
+detector. It is not: of the 36 wrong episodes Arm C's own check does not
+flag, 20 are a task whose authority grant never covers the requested action
+at all, independent of any semantic judgment; 15 are a task with a missing
+required condition, caught by a hard authority rule; and the remaining 1 is
+caught by a separately-invoked semantic check outside Arm C's own facet
+mechanism. All 36 are rejected safely regardless. No single layer in
+DualFlow needs to be a complete detector, because the fusion rule lets the
+others catch what any one misses.
 
 ### 4.2 How many samples are needed (Figure 2)
 
@@ -231,13 +300,16 @@ stabilizes markedly below it once *n* is large enough.
 ### 4.3 Sensitivity of the frozen threshold (Figure 3)
 
 At the deployed *n*\=20, sweeping the confidence threshold shows a
-monotonic safety–utility trade-off: lower thresholds reduce unsafe
-executions but increase false rejections, and vice versa. The frozen
-operating threshold (0.8) sits just before false rejections begin climbing
-steeply, while already capturing most of the achievable safety
-improvement. We present this as a sensitivity analysis justifying
-retention of an existing default, not as a post hoc search that produced
-it.
+monotonic safety–utility trade-off: a *stricter* (lower) threshold demands
+very low disagreement before trusting a facet as confirmed, so fewer
+disagreements are blocked and unsafe execution rises; a *more lenient*
+(higher) threshold confirms facets more readily, blocking more
+disagreements and reducing unsafe execution, at the cost of rising false
+rejections. The frozen operating threshold (0.8) sits just before false
+rejections begin climbing steeply, while already capturing most of the
+achievable safety improvement. We present this as a sensitivity analysis
+justifying retention of an existing default, not as a post hoc search
+that produced it.
 
 ### 4.4 Cross-model generalization (Figure 4)
 
@@ -246,7 +318,8 @@ GPT-4.1-mini and GPT-4.1, under an identical protocol and identical
 episode inputs, shows a sharp contrast: GPT-4o-mini's unsafe-execution
 curve is sensitive to *n* as above, while both GPT-4.1-mini and GPT-4.1
 are completely flat — 12/20 unsafe executions at *every* value of *n* from
-1 to 20 — because these models never exhibit the sample-to-sample
+1 to 20 — because, under the evaluated delegation prompts and sampling
+configuration, these models did not exhibit the sample-to-sample
 disagreement this defense depends on detecting. **Repeated sampling
 behavior is model-dependent.** That two different scales of the same model
 generation (mini and full) show identical flat behavior while a
@@ -271,11 +344,15 @@ summarize these as supporting evidence rather than separate figures.
 
 Two implications follow from separating semantic and authority
 verification into independent axes. First, the authority axis is a
-deterministic, model-independent floor: because the final authority
-decision is never delegated to a model (only a bounded, re-verified
-negotiation for one recoverable violation type), its guarantees do not
-depend on which model backs the system — unlike the semantic axis.
-Second, the semantic axis's repeated-sampling defense is only as effective
+deterministic floor *by design*: because the final authority decision is
+never delegated to a model (only a bounded, re-verified negotiation for
+one recoverable violation type), its guarantees do not depend on which
+model proposes an action. We did not independently re-run the authority
+check itself across the three models in Section 4.4 — its verdicts there
+were carried over unchanged from the primary collection — so this is a
+structural property of the design, not a claim we separately validated
+empirically per model. Second, the semantic axis's repeated-sampling
+defense is only as effective
 as the underlying model's willingness to disagree with itself across
 repeated queries; when a model converges confidently and consistently on
 one interpretation, as both 4.1-generation models did here, no amount of

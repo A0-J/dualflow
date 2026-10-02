@@ -858,6 +858,30 @@ RQ1–3의 "Yes"는 **"기반 모델이 반복 시행 사이에 탐지 가능한
 서로 다른 실패 유형을 서로 다른 층이 보완하기 때문에 안전하다"는 이 프레임워크의
 핵심 주장과 정확히 일치한다.
 
+**정정(2026-10, 논문 초안 작성 중 재검증하다 발견)**: 위 "16건" 분해는 **불완전했다**
+— `phase3c_full.jsonl`을 직접 재계산한 결과, `delegate_wrong`(51건) 중 Arm C 자신의
+semantic match가 "불일치 없음"으로 판정한(즉 자체적으로 못 잡은) episode는 16건이
+아니라 **36건**이었다. 원래 텍스트는 그중 `condition_violation`(15건)과
+`confident_semantic_misread`(1건)만 설명하고, **`sensitive_escalation`의 20건을
+누락**했다 — 이 task는 애초에 Authority가 `no_grant`로 항상 차단하는 task라 이
+논의에서 "당연한 경우"로 암묵적으로 제외됐던 것으로 보이지만, 명시적으로 그렇게
+쓰지 않아 숫자가 안 맞게 남아 있었다. **"17/51→16/51→15/51"이라는 탐지율 수치
+자체는 재계산해도 정확히 동일**(frozen Phase 3C 결과, 변경 없음) — 틀린 것은 그
+아래 "16건"의 분해 설명뿐이다. 정확한 전체 분해(36건, 전부 최종적으로
+안전(REJECT)했음을 직접 재확인):
+
+| 분류 | 건수 | task | 막은 층 |
+|---|---|---|---|
+| Authority가 no_grant로 차단 | 20 | `sensitive_escalation` | Authority Flow (애초에 권한 자체가 없음 — Arm 무관) |
+| Authority가 조건 누락으로 차단 | 15 | `condition_violation` | Authority Flow (필수 조건 누락 하드 리젝트) |
+| 별도 Semantic Verifier가 차단 | 1 | `confident_semantic_misread` | Semantic Verifier (Arm C의 facet anchor와는 별개 검증) |
+| **합계** | **36** | | |
+
+이 정정된 분해가 오히려 defense-in-depth 주장을 **더 강하게** 뒷받침한다 — Arm C가
+자체적으로 못 잡은 36건 중 20건(sensitive_escalation)은 애초에 Arm이 무엇이든
+Authority가 무조건 차단하는, semantic 검증과 완전히 무관한 사례였다는 게 이번에
+명시적으로 드러났기 때문이다.
+
 ---
 
 ## 8. 한 문장 결론 (Headline Result)
